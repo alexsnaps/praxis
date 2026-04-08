@@ -18,8 +18,7 @@ fn hop_by_hop_headers_stripped_before_upstream() {
     let yaml = simple_proxy_yaml(proxy_port, backend_port);
     let config = Config::from_yaml(&yaml).unwrap();
     let addr = start_proxy(&config);
-    let request = format!(
-        "GET / HTTP/1.1\r\n\
+    let request = "GET / HTTP/1.1\r\n\
          Host: localhost\r\n\
          Connection: keep-alive, X-Secret\r\n\
          Keep-Alive: timeout=300\r\n\
@@ -27,8 +26,7 @@ fn hop_by_hop_headers_stripped_before_upstream() {
          X-Secret: should-be-stripped\r\n\
          X-Safe: should-remain\r\n\
          Accept: text/html\r\n\
-         \r\n"
-    );
+         \r\n".to_string();
     let raw = http_send(&addr, &request);
     let body = parse_body(&raw);
     let body_lower = body.to_lowercase();
@@ -57,14 +55,12 @@ fn hop_by_hop_preserves_all_end_to_end_headers() {
     let yaml = simple_proxy_yaml(proxy_port, backend_port);
     let config = Config::from_yaml(&yaml).unwrap();
     let addr = start_proxy(&config);
-    let request = format!(
-        "GET / HTTP/1.1\r\n\
+    let request = "GET / HTTP/1.1\r\n\
          Host: example.com\r\n\
          Accept: application/json\r\n\
          Authorization: Bearer token123\r\n\
          X-Request-ID: abc-def\r\n\
-         \r\n"
-    );
+         \r\n".to_string();
     let raw = http_send(&addr, &request);
     let body = parse_body(&raw);
     let body_lower = body.to_lowercase();
@@ -101,11 +97,9 @@ filter_chains:
     );
     let config = Config::from_yaml(&yaml).unwrap();
     let addr = start_proxy(&config);
-    let request = format!(
-        "GET / HTTP/1.1\r\n\
+    let request = "GET / HTTP/1.1\r\n\
          Host: example.com\r\n\
-         \r\n"
-    );
+         \r\n".to_string();
     let raw = http_send(&addr, &request);
     let body = parse_body(&raw);
     let body_lower = body.to_lowercase();
@@ -152,12 +146,10 @@ filter_chains:
     let config = Config::from_yaml(&yaml).unwrap();
     let addr = start_proxy(&config);
 
-    let request = format!(
-        "GET / HTTP/1.1\r\n\
+    let request = "GET / HTTP/1.1\r\n\
          Host: localhost\r\n\
          X-Forwarded-For: 1.1.1.1\r\n\
-         \r\n"
-    );
+         \r\n".to_string();
     let raw = http_send(&addr, &request);
     let body = parse_body(&raw);
 
@@ -179,12 +171,10 @@ fn hop_by_hop_headers_stripped_from_response() {
     let yaml = simple_proxy_yaml(proxy_port, backend_port);
     let config = Config::from_yaml(&yaml).unwrap();
     let addr = start_proxy(&config);
-    let request = format!(
-        "GET / HTTP/1.1\r\n\
+    let request = "GET / HTTP/1.1\r\n\
          Host: localhost\r\n\
          Connection: close\r\n\
-         \r\n"
-    );
+         \r\n".to_string();
     let raw = http_send(&addr, &request);
 
     assert!(
@@ -216,12 +206,10 @@ fn hop_by_hop_response_preserves_end_to_end_headers() {
     let yaml = simple_proxy_yaml(proxy_port, backend_port);
     let config = Config::from_yaml(&yaml).unwrap();
     let addr = start_proxy(&config);
-    let request = format!(
-        "GET / HTTP/1.1\r\n\
+    let request = "GET / HTTP/1.1\r\n\
          Host: localhost\r\n\
          Connection: close\r\n\
-         \r\n"
-    );
+         \r\n".to_string();
     let raw = http_send(&addr, &request);
 
     assert!(

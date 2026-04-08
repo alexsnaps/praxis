@@ -129,7 +129,7 @@ impl HttpFilter for CountingFilter {
     }
 }
 
-/// A filter that appends its name to a shared log during on_response.
+/// A filter that appends its name to a shared log during `on_response`.
 struct LoggingFilter {
     label: &'static str,
     log: Arc<std::sync::Mutex<Vec<&'static str>>>,
@@ -262,7 +262,7 @@ async fn execute_request_propagates_errors() {
 fn when_path(prefix: &str) -> praxis_core::config::Condition {
     praxis_core::config::Condition::When(praxis_core::config::ConditionMatch {
         path: None,
-        path_prefix: Some(prefix.to_string()),
+        path_prefix: Some(prefix.to_owned()),
         methods: None,
         headers: None,
     })
@@ -271,7 +271,7 @@ fn when_path(prefix: &str) -> praxis_core::config::Condition {
 fn unless_path(prefix: &str) -> praxis_core::config::Condition {
     praxis_core::config::Condition::Unless(praxis_core::config::ConditionMatch {
         path: None,
-        path_prefix: Some(prefix.to_string()),
+        path_prefix: Some(prefix.to_owned()),
         methods: None,
         headers: None,
     })
@@ -520,7 +520,7 @@ impl HttpFilter for BodyUppercaseFilter {
         _end_of_stream: bool,
     ) -> Result<FilterAction, FilterError> {
         if let Some(b) = body {
-            let upper: Vec<u8> = b.iter().map(|c| c.to_ascii_uppercase()).collect();
+            let upper: Vec<u8> = b.iter().map(u8::to_ascii_uppercase).collect();
             *b = Bytes::from(upper);
         }
 
@@ -551,11 +551,10 @@ impl HttpFilter for BodyRejectFilter {
         body: &mut Option<Bytes>,
         _end_of_stream: bool,
     ) -> Result<FilterAction, FilterError> {
-        if let Some(b) = body {
-            if b.windows(6).any(|w| w == b"REJECT") {
+        if let Some(b) = body
+            && b.windows(6).any(|w| w == b"REJECT") {
                 return Ok(FilterAction::Reject(crate::Rejection::status(400)));
             }
-        }
 
         Ok(FilterAction::Continue)
     }
@@ -594,7 +593,7 @@ impl HttpFilter for ResponseBodyInspectorFilter {
     }
 }
 
-/// A filter that declares StreamBuffer mode and returns Release
+/// A filter that declares `StreamBuffer` mode and returns Release
 /// after seeing a marker in the body.
 struct StreamBufferReleaseFilter {
     marker: &'static [u8],
@@ -624,11 +623,10 @@ impl HttpFilter for StreamBufferReleaseFilter {
         body: &mut Option<Bytes>,
         _end_of_stream: bool,
     ) -> Result<FilterAction, FilterError> {
-        if let Some(b) = body {
-            if b.windows(self.marker.len()).any(|w| w == self.marker) {
+        if let Some(b) = body
+            && b.windows(self.marker.len()).any(|w| w == self.marker) {
                 return Ok(FilterAction::Release);
             }
-        }
         Ok(FilterAction::Continue)
     }
 }

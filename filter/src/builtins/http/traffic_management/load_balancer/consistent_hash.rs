@@ -62,7 +62,7 @@ mod tests {
 
     #[test]
     fn same_key_same_endpoint() {
-        let ch = ConsistentHash::new(vec!["10.0.0.1:80".to_string(), "10.0.0.2:80".to_string()], None);
+        let ch = ConsistentHash::new(vec!["10.0.0.1:80".to_owned(), "10.0.0.2:80".to_owned()], None);
         let req = crate::test_utils::make_request(http::Method::GET, "/stable-path");
         let ctx = crate::test_utils::make_filter_context(&req);
 
@@ -73,7 +73,7 @@ mod tests {
 
     #[test]
     fn different_keys_select_different_endpoints() {
-        let ch = ConsistentHash::new(vec!["10.0.0.1:80".to_string(), "10.0.0.2:80".to_string()], None);
+        let ch = ConsistentHash::new(vec!["10.0.0.1:80".to_owned(), "10.0.0.2:80".to_owned()], None);
         let req_a = crate::test_utils::make_request(http::Method::GET, "/path-a");
         let ctx_a = crate::test_utils::make_filter_context(&req_a);
         let req_b = crate::test_utils::make_request(http::Method::GET, "/path-b");
@@ -90,7 +90,7 @@ mod tests {
     #[test]
     fn header_based_hashing_different_values_route_differently() {
         let endpoints: Vec<String> = (0..10).map(|i| format!("10.0.0.{i}:80")).collect();
-        let ch = ConsistentHash::new(endpoints, Some("X-User-Id".to_string()));
+        let ch = ConsistentHash::new(endpoints, Some("X-User-Id".to_owned()));
         let req_a = make_request_with_header("/same", "X-User-Id", "user-alice");
         let ctx_a = crate::test_utils::make_filter_context(&req_a);
         let req_b = make_request_with_header("/same", "X-User-Id", "user-bob");
@@ -102,8 +102,8 @@ mod tests {
 
     #[test]
     fn header_based_hashing_same_value_same_endpoint() {
-        let endpoints = vec!["10.0.0.1:80".to_string(), "10.0.0.2:80".to_string()];
-        let ch = ConsistentHash::new(endpoints, Some("X-User-Id".to_string()));
+        let endpoints = vec!["10.0.0.1:80".to_owned(), "10.0.0.2:80".to_owned()];
+        let ch = ConsistentHash::new(endpoints, Some("X-User-Id".to_owned()));
         let req_a = make_request_with_header("/a", "X-User-Id", "user-42");
         let ctx_a = crate::test_utils::make_filter_context(&req_a);
         let req_b = make_request_with_header("/b", "X-User-Id", "user-42");
@@ -117,8 +117,8 @@ mod tests {
 
     #[test]
     fn missing_header_falls_back_to_uri_path() {
-        let endpoints = vec!["10.0.0.1:80".to_string(), "10.0.0.2:80".to_string()];
-        let ch = ConsistentHash::new(endpoints.clone(), Some("X-User-Id".to_string()));
+        let endpoints = vec!["10.0.0.1:80".to_owned(), "10.0.0.2:80".to_owned()];
+        let ch = ConsistentHash::new(endpoints.clone(), Some("X-User-Id".to_owned()));
         let ch_path = ConsistentHash::new(endpoints, None);
         let req = crate::test_utils::make_request(http::Method::GET, "/fallback-path");
         let ctx = crate::test_utils::make_filter_context(&req);
@@ -154,7 +154,7 @@ mod tests {
     fn add_endpoint_redistribution() {
         let original: Vec<String> = (0..3).map(|i| format!("10.0.0.{i}:80")).collect();
         let mut expanded = original.clone();
-        expanded.push("10.0.0.3:80".to_string());
+        expanded.push("10.0.0.3:80".to_owned());
 
         let ch_original = ConsistentHash::new(original.clone(), None);
         let ch_expanded = ConsistentHash::new(expanded, None);
@@ -220,7 +220,7 @@ mod tests {
                 stable_count += 1;
             }
 
-            if reduced.contains(&after.to_string()) {
+            if reduced.contains(&after.to_owned()) {
                 moved_to_valid += 1;
             }
         }
@@ -241,10 +241,10 @@ mod tests {
     #[test]
     fn weight_stability() {
         let endpoints = vec![
-            "10.0.0.1:80".to_string(),
-            "10.0.0.1:80".to_string(),
-            "10.0.0.1:80".to_string(),
-            "10.0.0.2:80".to_string(),
+            "10.0.0.1:80".to_owned(),
+            "10.0.0.1:80".to_owned(),
+            "10.0.0.1:80".to_owned(),
+            "10.0.0.2:80".to_owned(),
         ];
         let ch = ConsistentHash::new(endpoints.clone(), None);
 
@@ -286,11 +286,11 @@ mod tests {
     #[test]
     fn weight_stability_selection_unchanged_across_calls() {
         let endpoints = vec![
-            "10.0.0.1:80".to_string(),
-            "10.0.0.1:80".to_string(),
-            "10.0.0.2:80".to_string(),
-            "10.0.0.2:80".to_string(),
-            "10.0.0.3:80".to_string(),
+            "10.0.0.1:80".to_owned(),
+            "10.0.0.1:80".to_owned(),
+            "10.0.0.2:80".to_owned(),
+            "10.0.0.2:80".to_owned(),
+            "10.0.0.3:80".to_owned(),
         ];
         let ch = ConsistentHash::new(endpoints, None);
 

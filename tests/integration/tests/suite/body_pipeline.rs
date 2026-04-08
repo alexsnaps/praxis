@@ -1,5 +1,5 @@
 //! Integration tests for multi-filter body pipelines exercising
-//! Stream, Buffer, and StreamBuffer modes.
+//! Stream, Buffer, and `StreamBuffer` modes.
 //!
 //! Each listener runs a pipeline of three body filters to verify
 //! correct chaining, mode aggregation, routing, and payload
@@ -512,7 +512,7 @@ impl HttpFilter for StreamUppercaseFilter {
         _end_of_stream: bool,
     ) -> Result<FilterAction, FilterError> {
         if let Some(b) = body {
-            let upper: Vec<u8> = b.iter().map(|c| c.to_ascii_uppercase()).collect();
+            let upper: Vec<u8> = b.iter().map(u8::to_ascii_uppercase).collect();
             *b = Bytes::from(upper);
         }
         Ok(FilterAction::Continue)
@@ -577,11 +577,10 @@ impl HttpFilter for StreamRejectBlockedFilter {
         body: &mut Option<Bytes>,
         _end_of_stream: bool,
     ) -> Result<FilterAction, FilterError> {
-        if let Some(b) = body {
-            if b.windows(7).any(|w| w == b"BLOCKED") {
+        if let Some(b) = body
+            && b.windows(7).any(|w| w == b"BLOCKED") {
                 return Ok(FilterAction::Reject(Rejection::status(403)));
             }
-        }
         Ok(FilterAction::Continue)
     }
 }
@@ -617,11 +616,10 @@ impl HttpFilter for BufferRejectBlockedFilter {
         body: &mut Option<Bytes>,
         _end_of_stream: bool,
     ) -> Result<FilterAction, FilterError> {
-        if let Some(b) = body {
-            if b.windows(7).any(|w| w == b"BLOCKED") {
+        if let Some(b) = body
+            && b.windows(7).any(|w| w == b"BLOCKED") {
                 return Ok(FilterAction::Reject(Rejection::status(403)));
             }
-        }
         Ok(FilterAction::Continue)
     }
 }
@@ -654,7 +652,7 @@ impl HttpFilter for BufferUppercaseFilter {
         _end_of_stream: bool,
     ) -> Result<FilterAction, FilterError> {
         if let Some(b) = body {
-            let upper: Vec<u8> = b.iter().map(|c| c.to_ascii_uppercase()).collect();
+            let upper: Vec<u8> = b.iter().map(u8::to_ascii_uppercase).collect();
             *b = Bytes::from(upper);
         }
         Ok(FilterAction::Continue)

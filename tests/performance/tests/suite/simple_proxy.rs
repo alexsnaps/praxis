@@ -2,7 +2,7 @@
 //!
 //! Measures baseline proxy performance with a minimal config:
 //! one listener, one catch-all route, one backend. No extra
-//! filters beyond the implicit router and load_balancer.
+//! filters beyond the implicit router and `load_balancer`.
 
 use praxis_core::config::Config;
 use praxis_test_utils::{free_port, start_backend, start_proxy};

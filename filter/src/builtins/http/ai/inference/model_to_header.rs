@@ -203,7 +203,7 @@ mod tests {
         assert_eq!(ctx.extra_request_headers.len(), 1, "should add exactly one header");
         assert_eq!(
             ctx.extra_request_headers[0],
-            ("X-Model".to_string(), "gpt-4".to_string()),
+            ("X-Model".to_owned(), "gpt-4".to_owned()),
             "model value should be promoted to X-Model header"
         );
     }
@@ -226,7 +226,7 @@ mod tests {
         );
         assert_eq!(
             ctx.extra_request_headers[0],
-            ("X-AI-Model".to_string(), "claude-3".to_string()),
+            ("X-AI-Model".to_owned(), "claude-3".to_owned()),
             "model should be promoted to custom header name"
         );
     }

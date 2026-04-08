@@ -84,9 +84,9 @@ mod tests {
     #[test]
     fn selects_min() {
         let lc = LeastConnections::new(vec![
-            "10.0.0.1:80".to_string(),
-            "10.0.0.2:80".to_string(),
-            "10.0.0.3:80".to_string(),
+            "10.0.0.1:80".to_owned(),
+            "10.0.0.2:80".to_owned(),
+            "10.0.0.3:80".to_owned(),
         ]);
 
         assert_eq!(
@@ -101,7 +101,7 @@ mod tests {
 
     #[test]
     fn release_does_not_underflow() {
-        let lc = LeastConnections::new(vec!["10.0.0.1:80".to_string()]);
+        let lc = LeastConnections::new(vec!["10.0.0.1:80".to_owned()]);
 
         lc.release("10.0.0.1:80");
         assert_eq!(
@@ -113,7 +113,7 @@ mod tests {
 
     #[test]
     fn release_unknown_addr_is_noop() {
-        let lc = LeastConnections::new(vec!["10.0.0.1:80".to_string()]);
+        let lc = LeastConnections::new(vec!["10.0.0.1:80".to_owned()]);
 
         lc.release("10.0.0.99:80");
     }

@@ -22,8 +22,8 @@ use praxis_filter::{FilterRegistry, HttpFilter, Response};
 // Test Utilities
 // -----------------------------------------------------------------------------
 
-/// Generate a YAML config for the header filter with `n` request_add
-/// and `n` response_set entries.
+/// Generate a YAML config for the header filter with `n` `request_add`
+/// and `n` `response_set` entries.
 fn header_filter_yaml(n: usize) -> String {
     let mut yaml = String::from("request_add:\n");
     for i in 0..n {

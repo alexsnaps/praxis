@@ -456,7 +456,7 @@ fn trusted_proxy_host_reflects_actual_host_header() {
 // Test Utilities
 // -----------------------------------------------------------------------------
 
-/// Build proxy YAML with forwarded_headers filter.
+/// Build proxy YAML with `forwarded_headers` filter.
 fn fwd_yaml(proxy_port: u16, backend_port: u16, trusted: &[&str]) -> String {
     let trusted_yaml = if trusted.is_empty() {
         String::new()
@@ -496,7 +496,7 @@ fn body_header(body: &str, name: &str) -> Option<String> {
     body.lines().find_map(|line| {
         let (k, v) = line.split_once(':')?;
         if k.trim().to_lowercase() == lower {
-            Some(v.trim().to_string())
+            Some(v.trim().to_owned())
         } else {
             None
         }

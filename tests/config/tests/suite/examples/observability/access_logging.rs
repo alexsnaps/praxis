@@ -31,7 +31,7 @@ fn access_logging() {
     assert_eq!(parse_status(&raw), 200, "request with X-Request-Id should return 200");
     assert_eq!(
         parse_header(&raw, "x-request-id"),
-        Some("trace-abc".to_string()),
+        Some("trace-abc".to_owned()),
         "proxy should echo back the X-Request-Id"
     );
 }

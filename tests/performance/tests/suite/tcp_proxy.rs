@@ -135,7 +135,7 @@ fn run_tcp_benchmark(
         tcp_echo_roundtrip(addr, message);
     }
 
-    let addr_owned = addr.to_string();
+    let addr_owned = addr.to_owned();
     let message = Arc::new(message.to_vec());
     let per_thread = total_requests / concurrency;
     let remainder = total_requests % concurrency;

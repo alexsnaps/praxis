@@ -2,7 +2,7 @@
 //!
 //! Runs all h2spec tests in strict mode.
 //!
-//! JUnit XML report is written to `target/praxis-conformance-tests/h2spec.xml`.
+//! `JUnit` XML report is written to `target/praxis-conformance-tests/h2spec.xml`.
 //!
 //! [h2spec]: https://github.com/summerwind/h2spec
 

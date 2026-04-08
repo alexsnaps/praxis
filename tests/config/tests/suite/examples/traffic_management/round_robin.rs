@@ -39,9 +39,9 @@ fn round_robin() {
         assert_eq!(*count, 10, "expected exactly 10 for backend {backend}, got {count}");
     }
 
-    let cycle: Vec<&str> = sequence[..3].iter().map(|s| s.as_str()).collect();
+    let cycle: Vec<&str> = sequence[..3].iter().map(std::string::String::as_str).collect();
     for chunk in sequence.chunks(3).skip(1) {
-        let got: Vec<&str> = chunk.iter().map(|s| s.as_str()).collect();
+        let got: Vec<&str> = chunk.iter().map(std::string::String::as_str).collect();
         assert_eq!(got, cycle, "round-robin should repeat the same cycle order");
     }
 }

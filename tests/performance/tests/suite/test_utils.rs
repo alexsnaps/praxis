@@ -46,7 +46,7 @@ impl BenchConfig {
     /// Create a config with the given label and default parameters.
     pub(crate) fn new(label: &str) -> Self {
         Self {
-            label: label.to_string(),
+            label: label.to_owned(),
             total_requests: DEFAULT_TOTAL,
             concurrency: DEFAULT_CONCURRENCY,
             warmup: DEFAULT_WARMUP,
@@ -100,7 +100,7 @@ pub(crate) fn run_benchmark<F>(config: &BenchConfig, addr: &str, make_request: F
 where
     F: Fn(&str) -> (u16, String) + Send + Sync + 'static,
 {
-    let addr_owned = addr.to_string();
+    let addr_owned = addr.to_owned();
     for _ in 0..config.warmup {
         make_request(&addr_owned);
     }
@@ -157,8 +157,8 @@ where
 
 /// Convenience: run a POST benchmark with a fixed path and body.
 pub(crate) fn run_benchmark_with_body(config: &BenchConfig, addr: &str, path: &str, body: &str) -> BenchResult {
-    let path = path.to_string();
-    let body = body.to_string();
+    let path = path.to_owned();
+    let body = body.to_owned();
     run_benchmark(config, addr, move |a| http_post(a, &path, &body))
 }
 
@@ -231,6 +231,6 @@ pub(crate) fn report_results(result: &BenchResult) {
 
 /// Run a GET benchmark against a given path.
 pub(crate) fn run_get_benchmark(config: &BenchConfig, addr: &str, path: &str) -> BenchResult {
-    let path = path.to_string();
+    let path = path.to_owned();
     run_benchmark(config, addr, move |a| http_get(a, &path, None))
 }

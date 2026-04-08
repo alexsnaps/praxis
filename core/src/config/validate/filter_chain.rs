@@ -122,7 +122,7 @@ filter_chains:
       - filter: request_id
 "#;
         let err = Config::from_yaml(yaml).unwrap_err();
-        assert!(err.to_string().contains("unknown filter chain"), "got: {}", err);
+        assert!(err.to_string().contains("unknown filter chain"), "got: {err}");
     }
 
     #[test]

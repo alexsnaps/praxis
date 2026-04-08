@@ -12,7 +12,7 @@ use crate::common::{free_port, http_send, parse_body, parse_header, parse_status
 // YAML Builder For ACL-Denied Proxy
 // -----------------------------------------------------------------------------
 
-/// Generate proxy YAML that denies all traffic via ip_acl.
+/// Generate proxy YAML that denies all traffic via `ip_acl`.
 fn deny_all_yaml(proxy_port: u16, backend_port: u16) -> String {
     format!(
         r#"

@@ -123,7 +123,7 @@ fn bench_production_pipeline_mixed() {
         use std::sync::atomic::{AtomicU64, Ordering};
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        if n % 2 == 0 {
+        if n.is_multiple_of(2) {
             praxis_test_utils::http_get(a, "/api/users", None)
         } else {
             praxis_test_utils::http_post(a, "/api/data", &pb)

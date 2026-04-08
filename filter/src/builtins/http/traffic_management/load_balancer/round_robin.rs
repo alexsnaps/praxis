@@ -45,7 +45,7 @@ mod tests {
 
     #[test]
     fn single_endpoint() {
-        let rr = RoundRobin::new(vec!["127.0.0.1:8080".to_string()]);
+        let rr = RoundRobin::new(vec!["127.0.0.1:8080".to_owned()]);
         assert_eq!(rr.select(), "127.0.0.1:8080", "select #1 should return sole endpoint");
         assert_eq!(rr.select(), "127.0.0.1:8080", "select #2 should return sole endpoint");
         assert_eq!(rr.select(), "127.0.0.1:8080", "select #3 should return sole endpoint");
@@ -54,9 +54,9 @@ mod tests {
     #[test]
     fn full_cycle_ordering() {
         let rr = RoundRobin::new(vec![
-            "127.0.0.1:8080".to_string(),
-            "127.0.0.1:8081".to_string(),
-            "127.0.0.1:8082".to_string(),
+            "127.0.0.1:8080".to_owned(),
+            "127.0.0.1:8081".to_owned(),
+            "127.0.0.1:8082".to_owned(),
         ]);
         assert_eq!(rr.select(), "127.0.0.1:8080", "cycle 1: first endpoint");
         assert_eq!(rr.select(), "127.0.0.1:8081", "cycle 1: second endpoint");

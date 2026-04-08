@@ -95,7 +95,7 @@ fn very_long_uri_handled() {
     let config = Config::from_yaml(&yaml).unwrap();
     let addr = start_proxy(&config);
 
-    let long_path = "/".to_string() + &"a".repeat(8000);
+    let long_path = "/".to_owned() + &"a".repeat(8000);
     let request = format!("GET {long_path} HTTP/1.1\r\nHost: localhost\r\n\r\n");
     let raw = http_send(&addr, &request);
     let status = parse_status(&raw);
@@ -138,7 +138,7 @@ fn many_headers_handled() {
     let config = Config::from_yaml(&yaml).unwrap();
     let addr = start_proxy(&config);
 
-    let mut request = "GET / HTTP/1.1\r\nHost: localhost\r\n".to_string();
+    let mut request = "GET / HTTP/1.1\r\nHost: localhost\r\n".to_owned();
     for i in 0..200 {
         request.push_str(&format!("X-Header-{i}: value-{i}\r\n"));
     }

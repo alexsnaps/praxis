@@ -116,7 +116,7 @@ fn combined_request_headers_not_leaked_to_client() {
 // Test Utilities
 // -----------------------------------------------------------------------------
 
-/// Generate proxy YAML with forwarded_headers filter only.
+/// Generate proxy YAML with `forwarded_headers` filter only.
 fn fwd_only_yaml(proxy_port: u16, backend_port: u16) -> String {
     format!(
         r#"
@@ -171,7 +171,7 @@ filter_chains:
     )
 }
 
-/// Generate proxy YAML with request_id filter only.
+/// Generate proxy YAML with `request_id` filter only.
 fn request_id_yaml(proxy_port: u16, backend_port: u16) -> String {
     format!(
         r#"
@@ -238,7 +238,6 @@ fn response_has_header(raw: &str, name: &str) -> bool {
     let lower = name.to_lowercase();
     headers_part.lines().any(|line| {
         line.split_once(':')
-            .map(|(k, _)| k.trim().to_lowercase() == lower)
-            .unwrap_or(false)
+            .is_some_and(|(k, _)| k.trim().to_lowercase() == lower)
     })
 }

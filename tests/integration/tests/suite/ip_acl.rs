@@ -147,7 +147,7 @@ filter_chains:
     assert_eq!(parse_status(&raw), 200, "allowed request should return 200");
     assert_eq!(
         parse_header(&raw, "x-acl-status"),
-        Some("passed".to_string()),
+        Some("passed".to_owned()),
         "allowed request should have response header from headers filter"
     );
 }

@@ -234,7 +234,7 @@ mod tests {
     /// Build a single-mapping filter for testing.
     fn make_filter(field: &str, header: &str) -> JsonBodyFieldFilter {
         JsonBodyFieldFilter {
-            mappings: vec![(field.to_string(), header.to_string())],
+            mappings: vec![(field.to_owned(), header.to_owned())],
         }
     }
 
@@ -376,12 +376,12 @@ mod tests {
         assert_eq!(ctx.extra_request_headers.len(), 2, "should add two headers");
         assert_eq!(
             ctx.extra_request_headers[0],
-            ("X-Model".to_string(), "gpt-4".to_string()),
+            ("X-Model".to_owned(), "gpt-4".to_owned()),
             "first mapping should extract model"
         );
         assert_eq!(
             ctx.extra_request_headers[1],
-            ("X-User-Id".to_string(), "u-42".to_string()),
+            ("X-User-Id".to_owned(), "u-42".to_owned()),
             "second mapping should extract user_id"
         );
     }
@@ -404,7 +404,7 @@ mod tests {
         assert_eq!(ctx.extra_request_headers.len(), 1, "should add only matched header");
         assert_eq!(
             ctx.extra_request_headers[0],
-            ("X-Model".to_string(), "gpt-4".to_string()),
+            ("X-Model".to_owned(), "gpt-4".to_owned()),
             "only model should be extracted"
         );
     }
@@ -490,7 +490,7 @@ mod tests {
         assert_eq!(ctx.extra_request_headers.len(), 1, "should add exactly one header");
         assert_eq!(
             ctx.extra_request_headers[0],
-            ("X-User-Id".to_string(), "abc-123".to_string()),
+            ("X-User-Id".to_owned(), "abc-123".to_owned()),
             "promoted header should match field value"
         );
     }
@@ -536,7 +536,7 @@ mod tests {
         assert_eq!(ctx.extra_request_headers.len(), 1, "should add exactly one header");
         assert_eq!(
             ctx.extra_request_headers[0],
-            ("X-Count".to_string(), "42".to_string()),
+            ("X-Count".to_owned(), "42".to_owned()),
             "numeric value should be stringified"
         );
     }

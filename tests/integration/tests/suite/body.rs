@@ -228,11 +228,10 @@ impl HttpFilter for ResponseBodyRejectFilter {
         body: &mut Option<Bytes>,
         _end_of_stream: bool,
     ) -> Result<FilterAction, FilterError> {
-        if let Some(b) = body {
-            if b.windows(9).any(|w| w == b"FORBIDDEN") {
+        if let Some(b) = body
+            && b.windows(9).any(|w| w == b"FORBIDDEN") {
                 return Ok(FilterAction::Reject(Rejection::status(502)));
             }
-        }
 
         Ok(FilterAction::Continue)
     }
@@ -281,7 +280,7 @@ impl HttpFilter for BodyUppercaseFilter {
         _end_of_stream: bool,
     ) -> Result<FilterAction, FilterError> {
         if let Some(b) = body {
-            let upper: Vec<u8> = b.iter().map(|c| c.to_ascii_uppercase()).collect();
+            let upper: Vec<u8> = b.iter().map(u8::to_ascii_uppercase).collect();
             *b = Bytes::from(upper);
         }
 
@@ -343,11 +342,10 @@ impl HttpFilter for BodyRejectFilter {
         body: &mut Option<Bytes>,
         _end_of_stream: bool,
     ) -> Result<FilterAction, FilterError> {
-        if let Some(b) = body {
-            if b.windows(9).any(|w| w == b"FORBIDDEN") {
+        if let Some(b) = body
+            && b.windows(9).any(|w| w == b"FORBIDDEN") {
                 return Ok(FilterAction::Reject(Rejection::status(403)));
             }
-        }
 
         Ok(FilterAction::Continue)
     }
@@ -379,7 +377,7 @@ impl HttpFilter for AsyncBodyFilter {
         tokio::task::yield_now().await;
 
         if let Some(b) = body {
-            let upper: Vec<u8> = b.iter().map(|c| c.to_ascii_uppercase()).collect();
+            let upper: Vec<u8> = b.iter().map(u8::to_ascii_uppercase).collect();
             *b = Bytes::from(upper);
         }
 
@@ -411,7 +409,7 @@ impl HttpFilter for ResponseBodyUppercaseFilter {
         _end_of_stream: bool,
     ) -> Result<FilterAction, FilterError> {
         if let Some(b) = body {
-            let upper: Vec<u8> = b.iter().map(|c| c.to_ascii_uppercase()).collect();
+            let upper: Vec<u8> = b.iter().map(u8::to_ascii_uppercase).collect();
             *b = Bytes::from(upper);
         }
 

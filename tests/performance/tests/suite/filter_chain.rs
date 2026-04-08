@@ -14,8 +14,8 @@ use crate::test_utils::{BenchConfig, assert_performance, report_results, run_get
 // YAML Generator
 // -----------------------------------------------------------------------------
 
-/// Build a filter_chains YAML with `num_header_filters` headers
-/// filters between request_id and router+lb.
+/// Build a `filter_chains` YAML with `num_header_filters` headers
+/// filters between `request_id` and router+lb.
 fn multi_filter_yaml(proxy_port: u16, backend_port: u16, num_header_filters: usize) -> String {
     let mut headers_block = String::new();
     for i in 0..num_header_filters {

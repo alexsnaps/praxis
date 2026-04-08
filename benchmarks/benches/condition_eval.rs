@@ -26,7 +26,7 @@ fn make_request(method: Method, path: &str, headers: HeaderMap) -> Request {
 fn when_path(prefix: &str) -> Condition {
     Condition::When(ConditionMatch {
         path: None,
-        path_prefix: Some(prefix.to_string()),
+        path_prefix: Some(prefix.to_owned()),
         methods: None,
         headers: None,
     })
@@ -37,7 +37,7 @@ fn when_methods(methods: &[&str]) -> Condition {
     Condition::When(ConditionMatch {
         path: None,
         path_prefix: None,
-        methods: Some(methods.iter().map(|s| s.to_string()).collect()),
+        methods: Some(methods.iter().map(std::string::ToString::to_string).collect()),
         headers: None,
     })
 }
@@ -57,7 +57,7 @@ fn when_headers(pairs: &[(&str, &str)]) -> Condition {
 fn unless_path(prefix: &str) -> Condition {
     Condition::Unless(ConditionMatch {
         path: None,
-        path_prefix: Some(prefix.to_string()),
+        path_prefix: Some(prefix.to_owned()),
         methods: None,
         headers: None,
     })

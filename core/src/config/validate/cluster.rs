@@ -227,7 +227,7 @@ clusters:
             load_balancer_strategy: Default::default(),
             read_timeout_ms: None,
             total_connection_timeout_ms: None,
-            upstream_sni: Some("".into()),
+            upstream_sni: Some(String::new()),
             upstream_tls: true,
             write_timeout_ms: None,
         }];

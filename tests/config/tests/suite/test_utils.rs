@@ -22,8 +22,7 @@ routes:
 clusters:
   - name: backend
     endpoints: ["127.0.0.1:3000"]
-"#
-    .to_string()
+"#.to_owned()
 }
 
 /// Valid config using named filter chains instead of legacy routes/clusters.
@@ -45,6 +44,5 @@ filter_chains:
         clusters:
           - name: backend
             endpoints: ["127.0.0.1:3000"]
-"#
-    .to_string()
+"#.to_owned()
 }

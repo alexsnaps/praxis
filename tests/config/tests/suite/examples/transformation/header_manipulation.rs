@@ -24,12 +24,12 @@ fn header_manipulation() {
     );
     assert_eq!(
         parse_header(&raw, "x-powered-by"),
-        Some("praxis".to_string()),
+        Some("praxis".to_owned()),
         "X-Powered-By header should be set to 'praxis'"
     );
     assert_eq!(
         parse_header(&raw, "x-frame-options"),
-        Some("DENY".to_string()),
+        Some("DENY".to_owned()),
         "X-Frame-Options header should be set to 'DENY'"
     );
 }

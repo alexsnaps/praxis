@@ -366,8 +366,8 @@ mod tests {
     /// Build a header-contains rule for testing.
     fn header_contains(name: &str, needle: &str) -> CompiledRule {
         CompiledRule {
-            target: RuleTarget::Header(name.to_string()),
-            matcher: RuleMatcher::Contains(needle.to_string()),
+            target: RuleTarget::Header(name.to_owned()),
+            matcher: RuleMatcher::Contains(needle.to_owned()),
             negate: false,
         }
     }
@@ -375,8 +375,8 @@ mod tests {
     /// Build a negated header-contains rule for testing.
     fn header_not_contains(name: &str, needle: &str) -> CompiledRule {
         CompiledRule {
-            target: RuleTarget::Header(name.to_string()),
-            matcher: RuleMatcher::Contains(needle.to_string()),
+            target: RuleTarget::Header(name.to_owned()),
+            matcher: RuleMatcher::Contains(needle.to_owned()),
             negate: true,
         }
     }
@@ -384,7 +384,7 @@ mod tests {
     /// Build a header-pattern rule for testing.
     fn header_pattern(name: &str, re: &str) -> CompiledRule {
         CompiledRule {
-            target: RuleTarget::Header(name.to_string()),
+            target: RuleTarget::Header(name.to_owned()),
             matcher: RuleMatcher::Pattern(Regex::new(re).unwrap()),
             negate: false,
         }
@@ -394,7 +394,7 @@ mod tests {
     fn body_contains(needle: &str) -> CompiledRule {
         CompiledRule {
             target: RuleTarget::Body,
-            matcher: RuleMatcher::Contains(needle.to_string()),
+            matcher: RuleMatcher::Contains(needle.to_owned()),
             negate: false,
         }
     }
@@ -403,7 +403,7 @@ mod tests {
     fn body_not_contains(needle: &str) -> CompiledRule {
         CompiledRule {
             target: RuleTarget::Body,
-            matcher: RuleMatcher::Contains(needle.to_string()),
+            matcher: RuleMatcher::Contains(needle.to_owned()),
             negate: true,
         }
     }

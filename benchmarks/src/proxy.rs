@@ -354,7 +354,7 @@ mod tests {
 
         let (cmd, args) = config.start_command();
         assert_eq!(cmd, "cargo");
-        assert!(args.contains(&"--release".to_string()));
-        assert!(args.contains(&"-c".to_string()));
+        assert!(args.contains(&"--release".to_owned()));
+        assert!(args.contains(&"-c".to_owned()));
     }
 }

@@ -206,7 +206,7 @@ mod tests {
         filter.on_request(&mut ctx).await.unwrap();
         assert_eq!(
             ctx.extra_request_headers,
-            vec![("X-Forwarded-By".to_string(), "praxis".to_string())],
+            vec![("X-Forwarded-By".to_owned(), "praxis".to_owned())],
             "request_add should populate extra request headers"
         );
     }
@@ -285,7 +285,7 @@ mod tests {
     async fn invalid_header_name_skipped_gracefully() {
         let filter = HeaderFilter {
             request_add: vec![],
-            response_add: vec![("invalid header".to_string(), "value".to_string())],
+            response_add: vec![("invalid header".to_owned(), "value".to_owned())],
             response_remove: vec![],
             response_set: vec![],
         };
@@ -305,7 +305,7 @@ mod tests {
     async fn invalid_header_value_skipped_gracefully() {
         let filter = HeaderFilter {
             request_add: vec![],
-            response_add: vec![("x-good-name".to_string(), "bad\x00value".to_string())],
+            response_add: vec![("x-good-name".to_owned(), "bad\x00value".to_owned())],
             response_remove: vec![],
             response_set: vec![],
         };
@@ -327,7 +327,7 @@ mod tests {
             request_add: vec![],
             response_add: vec![],
             response_remove: vec![],
-            response_set: vec![("bad name!".to_string(), "value".to_string())],
+            response_set: vec![("bad name!".to_owned(), "value".to_owned())],
         };
         let req = crate::test_utils::make_request(http::Method::GET, "/");
         let mut resp = make_response();

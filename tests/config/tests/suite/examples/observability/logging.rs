@@ -30,7 +30,7 @@ fn logging() {
     assert_eq!(parse_status(&raw), 200, "request with X-Request-Id should return 200");
     assert_eq!(
         parse_header(&raw, "x-request-id"),
-        Some("my-trace-42".to_string()),
+        Some("my-trace-42".to_owned()),
         "proxy should echo back X-Request-Id"
     );
 
@@ -43,7 +43,7 @@ fn logging() {
     );
     assert_eq!(
         parse_header(&raw, "x-request-id"),
-        Some("other-99".to_string()),
+        Some("other-99".to_owned()),
         "proxy should echo back different X-Request-Id"
     );
 }

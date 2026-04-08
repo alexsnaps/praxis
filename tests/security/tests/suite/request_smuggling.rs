@@ -303,7 +303,7 @@ fn negative_content_length_rejected() {
     );
 }
 
-/// Content-Length overflow (value exceeding u64::MAX) must be
+/// Content-Length overflow (value exceeding `u64::MAX`) must be
 /// rejected or cause a connection close.
 #[test]
 fn content_length_overflow_rejected() {

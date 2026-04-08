@@ -15,7 +15,7 @@ use crate::common::{
 // YAML Builder
 // -----------------------------------------------------------------------------
 
-/// Build proxy YAML with ip_acl filter before router.
+/// Build proxy YAML with `ip_acl` filter before router.
 fn acl_yaml(proxy_port: u16, backend_port: u16, allow: &[&str], deny: &[&str]) -> String {
     let allow_yaml = if allow.is_empty() {
         String::new()

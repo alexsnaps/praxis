@@ -180,7 +180,7 @@ mod tests {
     fn path_match(prefix: &str) -> ConditionMatch {
         ConditionMatch {
             path: None,
-            path_prefix: Some(prefix.to_string()),
+            path_prefix: Some(prefix.to_owned()),
             methods: None,
             headers: None,
         }
@@ -188,7 +188,7 @@ mod tests {
 
     fn exact_path_match(path: &str) -> ConditionMatch {
         ConditionMatch {
-            path: Some(path.to_string()),
+            path: Some(path.to_owned()),
             path_prefix: None,
             methods: None,
             headers: None,
@@ -199,7 +199,7 @@ mod tests {
         ConditionMatch {
             path: None,
             path_prefix: None,
-            methods: Some(methods.iter().map(|s| s.to_string()).collect()),
+            methods: Some(methods.iter().map(std::string::ToString::to_string).collect()),
             headers: None,
         }
     }
@@ -452,8 +452,8 @@ mod tests {
         let req = make_request(Method::POST, "/api/users", HeaderMap::new());
         let m = ConditionMatch {
             path: None,
-            path_prefix: Some("/api".to_string()),
-            methods: Some(vec!["POST".to_string()]),
+            path_prefix: Some("/api".to_owned()),
+            methods: Some(vec!["POST".to_owned()]),
             headers: None,
         };
         assert!(should_execute(&[when(m)], &req));
@@ -464,8 +464,8 @@ mod tests {
         let req = make_request(Method::GET, "/api/users", HeaderMap::new());
         let m = ConditionMatch {
             path: None,
-            path_prefix: Some("/api".to_string()),
-            methods: Some(vec!["POST".to_string()]),
+            path_prefix: Some("/api".to_owned()),
+            methods: Some(vec!["POST".to_owned()]),
             headers: None,
         };
         assert!(!should_execute(&[when(m)], &req));
@@ -476,8 +476,8 @@ mod tests {
         let req = make_request(Method::POST, "/health", HeaderMap::new());
         let m = ConditionMatch {
             path: None,
-            path_prefix: Some("/api".to_string()),
-            methods: Some(vec!["POST".to_string()]),
+            path_prefix: Some("/api".to_owned()),
+            methods: Some(vec!["POST".to_owned()]),
             headers: None,
         };
         assert!(!should_execute(&[when(m)], &req));
@@ -490,11 +490,11 @@ mod tests {
         let req = make_request(Method::POST, "/api/submit", headers);
 
         let mut hdr_map = HashMap::new();
-        hdr_map.insert("x-debug".to_string(), "true".to_string());
+        hdr_map.insert("x-debug".to_owned(), "true".to_owned());
         let m = ConditionMatch {
             path: None,
-            path_prefix: Some("/api".to_string()),
-            methods: Some(vec!["POST".to_string()]),
+            path_prefix: Some("/api".to_owned()),
+            methods: Some(vec!["POST".to_owned()]),
             headers: Some(hdr_map),
         };
         assert!(should_execute(&[when(m)], &req));
@@ -507,11 +507,11 @@ mod tests {
         let req = make_request(Method::POST, "/api/submit", headers);
 
         let mut hdr_map = HashMap::new();
-        hdr_map.insert("x-debug".to_string(), "true".to_string());
+        hdr_map.insert("x-debug".to_owned(), "true".to_owned());
         let m = ConditionMatch {
             path: None,
-            path_prefix: Some("/api".to_string()),
-            methods: Some(vec!["POST".to_string()]),
+            path_prefix: Some("/api".to_owned()),
+            methods: Some(vec!["POST".to_owned()]),
             headers: Some(hdr_map),
         };
         assert!(!should_execute(&[when(m)], &req));
@@ -522,8 +522,8 @@ mod tests {
         let req = make_request(Method::GET, "/healthz", HeaderMap::new());
         let m = ConditionMatch {
             path: None,
-            path_prefix: Some("/healthz".to_string()),
-            methods: Some(vec!["GET".to_string()]),
+            path_prefix: Some("/healthz".to_owned()),
+            methods: Some(vec!["GET".to_owned()]),
             headers: None,
         };
         assert!(
@@ -537,8 +537,8 @@ mod tests {
         let req = make_request(Method::POST, "/healthz", HeaderMap::new());
         let m = ConditionMatch {
             path: None,
-            path_prefix: Some("/healthz".to_string()),
-            methods: Some(vec!["GET".to_string()]),
+            path_prefix: Some("/healthz".to_owned()),
+            methods: Some(vec!["GET".to_owned()]),
             headers: None,
         };
         assert!(

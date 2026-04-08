@@ -61,7 +61,7 @@ fn stream_buffer_empty_body_succeeds() {
 // Test Utilities
 // -----------------------------------------------------------------------------
 
-/// Declares StreamBuffer with a small max_bytes for testing 413 enforcement.
+/// Declares `StreamBuffer` with a small `max_bytes` for testing 413 enforcement.
 struct TinyStreamBufferFilter {
     max_bytes: usize,
 }

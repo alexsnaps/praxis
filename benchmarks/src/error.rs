@@ -129,7 +129,7 @@ mod tests {
 
     #[test]
     fn error_trait_source_for_io() {
-        let io_err = std::io::Error::new(std::io::ErrorKind::Other, "disk full");
+        let io_err = std::io::Error::other("disk full");
         let err = BenchmarkError::Io(io_err);
         let source = std::error::Error::source(&err);
         assert!(source.is_some(), "Io variant should have a source error");

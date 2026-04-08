@@ -18,7 +18,7 @@ use crate::test_utils::{BenchConfig, assert_performance, report_results, run_ben
 // NoopBodyFilter
 // -----------------------------------------------------------------------------
 
-/// A body filter that declares ReadOnly + Stream access but
+/// A body filter that declares `ReadOnly` + Stream access but
 /// performs no transformation. Used to measure the overhead of
 /// body interception itself.
 struct NoopBodyFilter;
