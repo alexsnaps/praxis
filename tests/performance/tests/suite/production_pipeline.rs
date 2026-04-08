@@ -106,6 +106,7 @@ fn bench_production_pipeline_post() {
 }
 
 #[test]
+#[allow(clippy::print_stderr)]
 fn bench_production_pipeline_mixed() {
     let backend_port = start_echo_backend();
     let proxy_port = free_port();

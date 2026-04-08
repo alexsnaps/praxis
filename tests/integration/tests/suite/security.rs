@@ -26,7 +26,7 @@ fn hop_by_hop_headers_stripped_before_upstream() {
          X-Secret: should-be-stripped\r\n\
          X-Safe: should-remain\r\n\
          Accept: text/html\r\n\
-         \r\n".to_string();
+         \r\n".to_owned();
     let raw = http_send(&addr, &request);
     let body = parse_body(&raw);
     let body_lower = body.to_lowercase();
@@ -60,7 +60,7 @@ fn hop_by_hop_preserves_all_end_to_end_headers() {
          Accept: application/json\r\n\
          Authorization: Bearer token123\r\n\
          X-Request-ID: abc-def\r\n\
-         \r\n".to_string();
+         \r\n".to_owned();
     let raw = http_send(&addr, &request);
     let body = parse_body(&raw);
     let body_lower = body.to_lowercase();
@@ -99,7 +99,7 @@ filter_chains:
     let addr = start_proxy(&config);
     let request = "GET / HTTP/1.1\r\n\
          Host: example.com\r\n\
-         \r\n".to_string();
+         \r\n".to_owned();
     let raw = http_send(&addr, &request);
     let body = parse_body(&raw);
     let body_lower = body.to_lowercase();
@@ -149,7 +149,7 @@ filter_chains:
     let request = "GET / HTTP/1.1\r\n\
          Host: localhost\r\n\
          X-Forwarded-For: 1.1.1.1\r\n\
-         \r\n".to_string();
+         \r\n".to_owned();
     let raw = http_send(&addr, &request);
     let body = parse_body(&raw);
 
@@ -174,7 +174,7 @@ fn hop_by_hop_headers_stripped_from_response() {
     let request = "GET / HTTP/1.1\r\n\
          Host: localhost\r\n\
          Connection: close\r\n\
-         \r\n".to_string();
+         \r\n".to_owned();
     let raw = http_send(&addr, &request);
 
     assert!(
@@ -209,7 +209,7 @@ fn hop_by_hop_response_preserves_end_to_end_headers() {
     let request = "GET / HTTP/1.1\r\n\
          Host: localhost\r\n\
          Connection: close\r\n\
-         \r\n".to_string();
+         \r\n".to_owned();
     let raw = http_send(&addr, &request);
 
     assert!(

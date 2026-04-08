@@ -476,8 +476,10 @@ mod tests {
 
     #[test]
     fn first_failure_idempotent_sets_retry() {
-        let mut ctx = RequestCtx::default();
-        ctx.request_is_idempotent = true;
+        let mut ctx = RequestCtx {
+            request_is_idempotent: true,
+            ..Default::default()
+        };
         let e = handle_connect_failure(&mut ctx, make_error());
         assert!(e.retry(), "first failure should set retry flag");
         assert_eq!(ctx.retries, 1);
@@ -485,9 +487,11 @@ mod tests {
 
     #[test]
     fn max_retries_exhausted_does_not_retry() {
-        let mut ctx = RequestCtx::default();
-        ctx.request_is_idempotent = true;
-        ctx.retries = MAX_RETRIES as u32;
+        let mut ctx = RequestCtx {
+            request_is_idempotent: true,
+            retries: MAX_RETRIES as u32,
+            ..Default::default()
+        };
         let e = handle_connect_failure(&mut ctx, make_error());
         assert!(!e.retry(), "should not retry after MAX_RETRIES");
         assert_eq!(ctx.retries as usize, MAX_RETRIES);
@@ -495,8 +499,10 @@ mod tests {
 
     #[test]
     fn counter_increments_across_calls() {
-        let mut ctx = RequestCtx::default();
-        ctx.request_is_idempotent = true;
+        let mut ctx = RequestCtx {
+            request_is_idempotent: true,
+            ..Default::default()
+        };
         for expected in 1..=MAX_RETRIES {
             let _ = handle_connect_failure(&mut ctx, make_error());
             assert_eq!(ctx.retries as usize, expected);
@@ -508,8 +514,10 @@ mod tests {
 
     #[test]
     fn non_idempotent_request_never_retries() {
-        let mut ctx = RequestCtx::default();
-        ctx.request_is_idempotent = false;
+        let mut ctx = RequestCtx {
+            request_is_idempotent: false,
+            ..Default::default()
+        };
         let e = handle_connect_failure(&mut ctx, make_error());
         assert!(!e.retry());
         assert_eq!(ctx.retries, 0);
@@ -519,13 +527,15 @@ mod tests {
     async fn logging_cleanup_noop_when_response_phase_done() {
         let registry = praxis_filter::FilterRegistry::with_builtins();
         let pipeline = FilterPipeline::build(&[], &registry).unwrap();
-        let mut ctx = RequestCtx::default();
-        ctx.response_phase_done = true;
-        ctx.request_snapshot = Some(praxis_filter::Request {
-            method: http::Method::GET,
-            uri: "/".parse().unwrap(),
-            headers: http::HeaderMap::new(),
-        });
+        let mut ctx = RequestCtx {
+            response_phase_done: true,
+            request_snapshot: Some(praxis_filter::Request {
+                method: http::Method::GET,
+                uri: "/".parse().unwrap(),
+                headers: http::HeaderMap::new(),
+            }),
+            ..Default::default()
+        };
         logging_cleanup(&pipeline, &mut ctx).await;
     }
 
@@ -533,9 +543,11 @@ mod tests {
     async fn logging_cleanup_noop_when_no_snapshot() {
         let registry = praxis_filter::FilterRegistry::with_builtins();
         let pipeline = FilterPipeline::build(&[], &registry).unwrap();
-        let mut ctx = RequestCtx::default();
-        ctx.response_phase_done = false;
-        ctx.request_snapshot = None;
+        let mut ctx = RequestCtx {
+            response_phase_done: false,
+            request_snapshot: None,
+            ..Default::default()
+        };
         logging_cleanup(&pipeline, &mut ctx).await;
     }
 
@@ -543,14 +555,16 @@ mod tests {
     async fn logging_cleanup_runs_response_pipeline_when_needed() {
         let registry = praxis_filter::FilterRegistry::with_builtins();
         let pipeline = FilterPipeline::build(&[], &registry).unwrap();
-        let mut ctx = RequestCtx::default();
-        ctx.response_phase_done = false;
-        ctx.cluster = Some(Arc::from("test-cluster"));
-        ctx.request_snapshot = Some(praxis_filter::Request {
-            method: http::Method::GET,
-            uri: "/test".parse().unwrap(),
-            headers: http::HeaderMap::new(),
-        });
+        let mut ctx = RequestCtx {
+            response_phase_done: false,
+            cluster: Some(Arc::from("test-cluster")),
+            request_snapshot: Some(praxis_filter::Request {
+                method: http::Method::GET,
+                uri: "/test".parse().unwrap(),
+                headers: http::HeaderMap::new(),
+            }),
+            ..Default::default()
+        };
         logging_cleanup(&pipeline, &mut ctx).await;
         assert!(ctx.cluster.is_none(), "cluster should be taken by logging_cleanup");
         assert!(ctx.upstream.is_none(), "upstream should be taken by logging_cleanup");

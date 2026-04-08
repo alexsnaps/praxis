@@ -202,6 +202,7 @@ pub(crate) fn assert_performance(result: &BenchResult, min_throughput: f64, max_
 }
 
 /// Print a human-readable benchmark report to stderr.
+#[allow(clippy::print_stderr)]
 pub(crate) fn report_results(result: &BenchResult) {
     let throughput = result.total_requests as f64 / result.elapsed.as_secs_f64();
     let p50 = compute_percentile(&result.latencies, 50.0);

@@ -4,5 +4,6 @@ mod chunked;
 mod common;
 mod h2spec;
 mod http;
+#[allow(clippy::print_stderr)]
 mod ipv6;
 mod rfcs;

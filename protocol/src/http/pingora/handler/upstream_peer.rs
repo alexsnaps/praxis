@@ -129,8 +129,10 @@ mod tests {
 
     #[test]
     fn execute_first_call_produces_peer_and_saves_retry() {
-        let mut ctx = RequestCtx::default();
-        ctx.upstream = Some(make_upstream("127.0.0.1:8080"));
+        let mut ctx = RequestCtx {
+            upstream: Some(make_upstream("127.0.0.1:8080")),
+            ..Default::default()
+        };
         let result = execute(&mut ctx);
         assert!(result.is_ok(), "first execute should succeed");
         assert!(ctx.upstream.is_none(), "upstream should be consumed");
@@ -144,9 +146,11 @@ mod tests {
 
     #[test]
     fn execute_retry_reuses_saved_upstream() {
-        let mut ctx = RequestCtx::default();
-        ctx.upstream = None;
-        ctx.upstream_for_retry = Some(make_upstream("127.0.0.1:9090"));
+        let mut ctx = RequestCtx {
+            upstream: None,
+            upstream_for_retry: Some(make_upstream("127.0.0.1:9090")),
+            ..Default::default()
+        };
         let result = execute(&mut ctx);
         assert!(result.is_ok(), "retry execute should succeed");
         assert!(
@@ -157,9 +161,11 @@ mod tests {
 
     #[test]
     fn execute_no_upstream_no_retry_returns_error() {
-        let mut ctx = RequestCtx::default();
-        ctx.upstream = None;
-        ctx.upstream_for_retry = None;
+        let mut ctx = RequestCtx {
+            upstream: None,
+            upstream_for_retry: None,
+            ..Default::default()
+        };
         let result = execute(&mut ctx);
         assert!(result.is_err(), "execute with no upstream should return error");
         let err = result.unwrap_err().to_string();

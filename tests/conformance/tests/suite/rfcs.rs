@@ -4,9 +4,9 @@
 //! requirements. Tests are organized by RFC number and
 //! section.
 //!
-//! - [RFC 9110]: HTTP Semantics
-//! - [RFC 9112]: HTTP/1.1
-//! - [RFC 7230]: HTTP/1.1 Message Syntax (obsoleted by 9112)
+//! - [RFC 9110] HTTP Semantics
+//! - [RFC 9112] HTTP/1.1
+//! - [RFC 7230] HTTP/1.1 Message Syntax (obsoleted by 9112)
 //!
 //! [RFC 9110]: https://datatracker.ietf.org/doc/html/rfc9110
 //! [RFC 9112]: https://datatracker.ietf.org/doc/html/rfc9112

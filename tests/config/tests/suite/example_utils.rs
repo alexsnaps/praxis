@@ -7,6 +7,7 @@ use praxis_core::config::Config;
 // -----------------------------------------------------------------------------
 
 /// Load an example config YAML.
+#[allow(clippy::needless_pass_by_value)]
 pub(crate) fn load_example_config(filename: &str, listener_port: u16, port_map: HashMap<&str, u16>) -> Config {
     let path = example_config_path(filename);
     let yaml = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));

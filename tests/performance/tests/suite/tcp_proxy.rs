@@ -104,18 +104,18 @@ fn start_tcp_echo_backend() -> u16 {
 
 /// Send a message through the proxy and verify the echo.
 fn tcp_echo_roundtrip(addr: &str, message: &[u8]) -> bool {
-    let mut stream = match TcpStream::connect(addr) {
-        Ok(s) => s,
-        Err(_) => return false,
-    };
-    stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
-    if stream.write_all(message).is_err() {
-        return false;
-    }
-    let mut buf = vec![0u8; message.len()];
-    match stream.read_exact(&mut buf) {
-        Ok(()) => buf == message,
-        Err(_) => false,
+    if let Ok(mut stream) = TcpStream::connect(addr) {
+        stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
+        if stream.write_all(message).is_err() {
+            return false;
+        }
+        let mut buf = vec![0u8; message.len()];
+        match stream.read_exact(&mut buf) {
+            Ok(()) => buf == message,
+            Err(_) => false,
+        }
+    } else {
+        false
     }
 }
 

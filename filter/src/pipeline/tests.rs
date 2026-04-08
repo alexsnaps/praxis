@@ -552,9 +552,10 @@ impl HttpFilter for BodyRejectFilter {
         _end_of_stream: bool,
     ) -> Result<FilterAction, FilterError> {
         if let Some(b) = body
-            && b.windows(6).any(|w| w == b"REJECT") {
-                return Ok(FilterAction::Reject(crate::Rejection::status(400)));
-            }
+            && b.windows(6).any(|w| w == b"REJECT")
+        {
+            return Ok(FilterAction::Reject(crate::Rejection::status(400)));
+        }
 
         Ok(FilterAction::Continue)
     }
@@ -624,9 +625,10 @@ impl HttpFilter for StreamBufferReleaseFilter {
         _end_of_stream: bool,
     ) -> Result<FilterAction, FilterError> {
         if let Some(b) = body
-            && b.windows(self.marker.len()).any(|w| w == self.marker) {
-                return Ok(FilterAction::Release);
-            }
+            && b.windows(self.marker.len()).any(|w| w == self.marker)
+        {
+            return Ok(FilterAction::Release);
+        }
         Ok(FilterAction::Continue)
     }
 }
@@ -1255,9 +1257,11 @@ async fn response_header_swap_same_count_detected() {
 
 #[test]
 fn apply_body_limits_filter_stricter_than_config() {
-    let mut caps = BodyCapabilities::default();
-    caps.request_body_mode = BodyMode::Buffer { max_bytes: 500 };
-    caps.needs_request_body = true;
+    let caps = BodyCapabilities {
+        request_body_mode: BodyMode::Buffer { max_bytes: 500 },
+        needs_request_body: true,
+        ..Default::default()
+    };
     let mut pipeline = FilterPipeline {
         body_capabilities: caps,
         compression: None,
