@@ -9,13 +9,13 @@ pub mod envoy {
     pub mod service {
         pub mod common {
             #[allow(
-                warnings,
                 missing_docs,
                 unreachable_pub,
                 trivial_casts,
                 unused_qualifications,
                 clippy::all,
-                clippy::pedantic
+                clippy::pedantic,
+                reason = "generated protobuf code"
             )]
             pub mod v3 {
                 tonic::include_proto!("envoy.service.common.v3");
@@ -24,13 +24,13 @@ pub mod envoy {
 
         pub mod ext_proc {
             #[allow(
-                warnings,
                 missing_docs,
                 unreachable_pub,
                 trivial_casts,
                 unused_qualifications,
                 clippy::all,
-                clippy::pedantic
+                clippy::pedantic,
+                reason = "generated protobuf code"
             )]
             pub mod v3 {
                 tonic::include_proto!("envoy.service.ext_proc.v3");
