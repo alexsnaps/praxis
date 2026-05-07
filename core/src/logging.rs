@@ -47,6 +47,21 @@ pub fn init_tracing(config: &Config) -> Result<(), ProxyError> {
 ///
 /// Returns [`ProxyError::Config`] if any `log_overrides` entry is invalid.
 ///
+/// ```
+/// let yaml = r#"
+/// listeners:
+///   - name: test
+///     address: "127.0.0.1:8080"
+///     filter_chains: [main]
+/// filter_chains:
+///   - name: main
+///     filters:
+///       - filter: static_response
+/// "#;
+/// let config = praxis_core::config::Config::from_yaml(yaml).unwrap();
+/// praxis_core::logging::validate_log_overrides(&config).unwrap();
+/// ```
+///
 /// [`ProxyError::Config`]: crate::errors::ProxyError::Config
 pub fn validate_log_overrides(config: &Config) -> Result<(), ProxyError> {
     build_env_filter(config)?;

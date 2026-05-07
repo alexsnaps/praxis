@@ -47,6 +47,9 @@ pub struct HttpFilterContext<'a> {
     /// are cleared after branch evaluation, metadata survives
     /// for the entire request lifetime.
     ///
+    /// Keys use dot-prefix namespacing by convention
+    /// (e.g. `mcp.method`, `a2a.task_id`, `json_rpc.kind`).
+    ///
     /// [`filter_results`]: Self::filter_results
     pub filter_metadata: HashMap<String, String>,
 
@@ -144,6 +147,9 @@ impl HttpFilterContext<'_> {
     }
 
     /// Write a durable metadata value that persists across all phases.
+    ///
+    /// Keys should use dot-prefix namespacing
+    /// (e.g. `mcp.method`, `a2a.task_id`).
     pub fn set_metadata(&mut self, key: impl Into<String>, value: impl Into<String>) {
         self.filter_metadata.insert(key.into(), value.into());
     }
