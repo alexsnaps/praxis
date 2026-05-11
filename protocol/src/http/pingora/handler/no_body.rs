@@ -40,7 +40,11 @@ use crate::http::pingora::context::PingoraRequestCtx;
 /// [`HttpFilterContext`]: praxis_filter::HttpFilterContext
 /// [`ArcSwap`]: arc_swap::ArcSwap
 pub struct PingoraHttpHandlerNoBody {
-    /// Compression configuration, cached at construction.
+    /// Compression configuration snapshot for module registration.
+    ///
+    /// See [`PingoraHttpHandler::compression`] for details.
+    ///
+    /// [`PingoraHttpHandler::compression`]: super::PingoraHttpHandler
     compression: Option<CompressionConfig>,
 
     /// Per-listener connection semaphore for max connections.
@@ -137,7 +141,7 @@ impl ProxyHttp for PingoraHttpHandlerNoBody {
         if result.is_ok() {
             let client_ver = ctx.client_http_version.unwrap_or(http::Version::HTTP_11);
             via::append_response_via(upstream_response, client_ver);
-            adjust_compression(session, upstream_response, self.compression.as_ref());
+            adjust_compression(session, upstream_response, pipeline.compression_config());
         }
         result
     }

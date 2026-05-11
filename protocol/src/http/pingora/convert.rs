@@ -81,7 +81,11 @@ pub(crate) fn response_header_from_pingora(upstream: &mut pingora_http::Response
 /// ```
 ///
 /// [`Rejection`]: praxis_filter::Rejection
-#[allow(clippy::expect_used, clippy::cognitive_complexity, reason = "status codes are valid; error handling branches")]
+#[allow(
+    clippy::expect_used,
+    clippy::cognitive_complexity,
+    reason = "status codes are valid; error handling branches"
+)]
 pub(crate) async fn send_rejection(session: &mut Session, rejection: Rejection) {
     debug!(status = rejection.status, "sending rejection response");
 

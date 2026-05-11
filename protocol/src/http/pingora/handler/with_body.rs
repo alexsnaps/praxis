@@ -54,10 +54,19 @@ use crate::http::pingora::context::PingoraRequestCtx;
 /// [`BodyAccess`]: praxis_filter::BodyAccess
 /// [`ArcSwap`]: arc_swap::ArcSwap
 pub struct PingoraHttpHandler {
-    /// Compression configuration, cached at construction.
+    /// Compression configuration snapshot for module registration.
     ///
-    /// Compression module registration is one-shot in Pingora;
-    /// changing compression config requires a restart.
+    /// Used only by [`init_downstream_modules`] to register the
+    /// compression module at startup. Per-request compression
+    /// levels are read from the live pipeline via [`ArcSwap`]
+    /// so that hot-reload updates take effect immediately.
+    ///
+    /// Module registration itself is one-shot in Pingora;
+    /// adding compression to a listener that had none at
+    /// startup requires a restart.
+    ///
+    /// [`init_downstream_modules`]: Self::init_downstream_modules
+    /// [`ArcSwap`]: arc_swap::ArcSwap
     compression: Option<CompressionConfig>,
 
     /// Per-listener connection semaphore for max connections.
@@ -208,7 +217,7 @@ impl ProxyHttp for PingoraHttpHandler {
         if result.is_ok() {
             let client_ver = ctx.client_http_version.unwrap_or(http::Version::HTTP_11);
             via::append_response_via(upstream_response, client_ver);
-            adjust_compression(session, upstream_response, self.compression.as_ref());
+            adjust_compression(session, upstream_response, pipeline.compression_config());
         }
         result
     }
