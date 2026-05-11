@@ -89,6 +89,50 @@ allow_credentials: true
 }
 
 #[test]
+fn from_config_rejects_wildcard_mixed_with_other_origins() {
+    let yaml: serde_yaml::Value = serde_yaml::from_str(
+        r#"
+allow_origins: ["*", "https://example.com"]
+"#,
+    )
+    .unwrap();
+    let err = CorsFilter::from_config(&yaml).err().unwrap();
+    assert!(
+        err.to_string().contains("cannot be mixed"),
+        "wildcard mixed with other origins should fail: {err}"
+    );
+}
+
+#[test]
+fn from_config_rejects_scheme_wildcard() {
+    let yaml: serde_yaml::Value = serde_yaml::from_str(
+        r#"
+allow_origins: ["*://example.com"]
+"#,
+    )
+    .unwrap();
+    let err = CorsFilter::from_config(&yaml).err().unwrap();
+    assert!(
+        err.to_string().contains("scheme wildcard"),
+        "scheme wildcard should fail: {err}"
+    );
+}
+
+#[test]
+fn from_config_allows_lone_wildcard() {
+    let yaml: serde_yaml::Value = serde_yaml::from_str(
+        r#"
+allow_origins: ["*"]
+"#,
+    )
+    .unwrap();
+    assert!(
+        CorsFilter::from_config(&yaml).is_ok(),
+        "lone wildcard should be accepted"
+    );
+}
+
+#[test]
 fn from_config_rejects_invalid_disallowed_mode() {
     let yaml: serde_yaml::Value = serde_yaml::from_str(
         r#"

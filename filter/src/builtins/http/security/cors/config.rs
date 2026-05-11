@@ -102,14 +102,22 @@ fn validate_credentials(cfg: &CorsConfig) -> Result<(), crate::FilterError> {
 
 /// Validate wildcard subdomain patterns in `allow_origins`.
 fn validate_wildcard_origins(cfg: &CorsConfig) -> Result<(), crate::FilterError> {
+    let has_bare_wildcard = cfg.allow_origins.iter().any(|o| o == "*");
+    if has_bare_wildcard && cfg.allow_origins.len() > 1 {
+        return Err("cors: wildcard \"*\" in allow_origins cannot be mixed with other origins".into());
+    }
+
     for origin in &cfg.allow_origins {
         if origin == "*" {
             continue;
         }
-        if let Some(host) = origin.split_once("://").map(|(_, h)| h)
-            && host.contains('*')
-        {
-            validate_wildcard_pattern(host, origin)?;
+        if let Some((scheme, host)) = origin.split_once("://") {
+            if scheme == "*" {
+                return Err(format!("cors: scheme wildcard in origin \"{origin}\" is not supported").into());
+            }
+            if host.contains('*') {
+                validate_wildcard_pattern(host, origin)?;
+            }
         }
     }
     Ok(())
