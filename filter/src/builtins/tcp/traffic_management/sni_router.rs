@@ -93,7 +93,7 @@ impl SniRouterFilter {
 
     /// Resolve a hostname to an upstream address.
     fn resolve(&self, hostname: &str) -> Option<&str> {
-        let lower = hostname.to_lowercase();
+        let lower = hostname.trim_end_matches('.').to_lowercase();
 
         if let Some(upstream) = self.exact.get(&lower) {
             return Some(upstream.as_str());
@@ -221,8 +221,9 @@ fn validate_route_entry(entry: &SniRouteEntry, tables: &mut RouteTables) -> Resu
         return Err("sni_router: route entry has empty server_names list".into());
     }
 
-    for name in &entry.server_names {
-        validate_server_name(name)?;
+    for raw_name in &entry.server_names {
+        validate_server_name(raw_name)?;
+        let name = raw_name.trim_end_matches('.');
 
         if let Some(suffix) = name.strip_prefix('*') {
             let lower = suffix.to_lowercase();

@@ -71,12 +71,21 @@ pub struct Listener {
     #[serde(default)]
     pub protocol: ProtocolKind,
 
-    /// Idle timeout in milliseconds for TCP forwarding sessions.
+    /// Session timeout in milliseconds for TCP forwarding sessions.
     ///
-    /// When set, `copy_bidirectional` is wrapped in a deadline.
-    /// Connections idle longer than this are closed. Only applies
-    /// to `protocol: tcp` listeners. Defaults to 300,000 ms
+    /// When set, the entire `copy_bidirectional` call is wrapped in
+    /// a hard deadline. Active connections are terminated after this
+    /// duration regardless of whether data is in flight. Only
+    /// applies to `protocol: tcp` listeners. Defaults to 300,000 ms
     /// (5 minutes) for TCP listeners when not set.
+    ///
+    /// Note: despite the name, this is a session ceiling, not an
+    /// idle timeout. Long-lived active transfers (database sessions,
+    /// file transfers) will be killed at this deadline. Use
+    /// [`tcp_max_duration_secs`] for an explicit session cap, or
+    /// increase this value for long-lived workloads.
+    ///
+    /// [`tcp_max_duration_secs`]: Listener::tcp_max_duration_secs
     #[serde(default)]
     pub tcp_idle_timeout_ms: Option<u64>,
 

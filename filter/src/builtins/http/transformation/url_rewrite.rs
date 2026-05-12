@@ -273,6 +273,15 @@ fn compile_operations(configs: Vec<OperationConfig>) -> Result<Vec<Operation>, F
     let mut ops = Vec::with_capacity(configs.len());
     for config in configs {
         let OperationConfig::Map(map) = config;
+        if map.len() > 1 {
+            return Err(format!(
+                "url_rewrite: each operations entry must contain exactly one operation, \
+                 found {}: {:?}. Split into separate list entries to control ordering.",
+                map.len(),
+                map.keys().collect::<Vec<_>>()
+            )
+            .into());
+        }
         for (key, value) in map {
             match key.as_str() {
                 "regex_replace" => ops.push(compile_regex_replace(&value)?),
@@ -1010,8 +1019,8 @@ operations:
         );
     }
 
-    #[tokio::test]
-    async fn multiple_keys_in_one_operation_map_processed() {
+    #[test]
+    fn multiple_keys_in_one_operation_map_rejected() {
         let config = serde_yaml::from_str::<serde_yaml::Value>(
             r#"
 operations:
@@ -1022,21 +1031,12 @@ operations:
 "#,
         )
         .expect("valid yaml");
-        let filter = UrlRewriteFilter::from_config(&config).expect("valid config");
-        let req = test_utils::make_request(Method::GET, "/path?remove_me=1&keep=2");
-        let mut ctx = test_utils::make_filter_context(&req);
-
-        drop(filter.on_request(&mut ctx).await.expect("on_request ok"));
-
-        let rewritten = ctx.rewritten_path.as_deref().expect("should rewrite");
-        assert!(rewritten.contains("keep=2"), "kept param should survive: {rewritten}");
+        let result = UrlRewriteFilter::from_config(&config);
+        assert!(result.is_err(), "multi-key operation map should be rejected");
+        let err = result.err().unwrap();
         assert!(
-            !rewritten.contains("remove_me"),
-            "stripped param should be gone: {rewritten}"
-        );
-        assert!(
-            rewritten.contains("added=yes"),
-            "added param should appear: {rewritten}"
+            err.to_string().contains("exactly one operation"),
+            "error should mention single operation: {err}"
         );
     }
 

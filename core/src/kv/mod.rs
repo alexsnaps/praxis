@@ -88,7 +88,7 @@ pub enum MatchType {
 ///     fn set(&self, key: &str, value: Arc<str>) {}
 ///     fn delete(&self, key: &str) -> bool { false }
 ///     fn entries(&self) -> Vec<(Arc<str>, Arc<str>)> { vec![] }
-///     fn lookup(&self, _: &str, _: MatchType) -> Option<(Arc<str>, Arc<str>)> { None }
+///     fn lookup(&self, _: &str, _: MatchType) -> Result<Option<(Arc<str>, Arc<str>)>, String> { Ok(None) }
 ///     fn len(&self) -> usize { 0 }
 /// }
 /// ```
@@ -111,8 +111,17 @@ pub trait KvBackend: Send + Sync + Debug {
     /// Look up the first entry whose key matches `pattern`
     /// using the given [`MatchType`].
     ///
-    /// Returns the matching key and its value.
-    fn lookup(&self, pattern: &str, match_type: MatchType) -> Option<(Arc<str>, Arc<str>)>;
+    /// Returns the matching key and its value, or an error if
+    /// the pattern is invalid (e.g. malformed regex).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error string if `match_type` is [`Regex`] and
+    /// the pattern fails to compile.
+    ///
+    /// [`Regex`]: MatchType::Regex
+    #[allow(clippy::type_complexity, reason = "trait return type")]
+    fn lookup(&self, pattern: &str, match_type: MatchType) -> Result<Option<(Arc<str>, Arc<str>)>, String>;
 
     /// Number of entries in the store.
     fn len(&self) -> usize;

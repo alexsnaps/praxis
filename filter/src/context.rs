@@ -553,11 +553,11 @@ mod tests {
 
         let store = ctx.kv_stores.unwrap().get("routes").unwrap();
         assert!(
-            store.lookup("route.api", MatchType::Prefix).is_some(),
+            store.lookup("route.api", MatchType::Prefix).unwrap().is_some(),
             "prefix lookup should match route.api.v1"
         );
         assert!(
-            store.lookup(".main", MatchType::Suffix).is_some(),
+            store.lookup(".main", MatchType::Suffix).unwrap().is_some(),
             "suffix lookup should match route.web.main"
         );
     }

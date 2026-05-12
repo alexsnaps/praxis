@@ -12,6 +12,7 @@
 use std::sync::Arc;
 
 use dashmap::DashMap;
+use regex::Regex;
 
 use super::{KvBackend, MatchType};
 
@@ -39,6 +40,9 @@ use super::{KvBackend, MatchType};
 pub struct InMemoryKvBackend {
     /// Sharded concurrent hash map.
     data: DashMap<Arc<str>, Arc<str>>,
+
+    /// Cached compiled regexes for [`MatchType::Regex`] lookups.
+    regex_cache: DashMap<String, Regex>,
 }
 
 impl InMemoryKvBackend {
@@ -51,7 +55,10 @@ impl InMemoryKvBackend {
     /// assert!(store.is_empty());
     /// ```
     pub fn new() -> Self {
-        Self { data: DashMap::new() }
+        Self {
+            data: DashMap::new(),
+            regex_cache: DashMap::new(),
+        }
     }
 
     /// Create a store pre-populated from key-value pairs.
@@ -69,7 +76,27 @@ impl InMemoryKvBackend {
         for (k, v) in pairs {
             data.insert(Arc::from(k.as_str()), Arc::from(v.as_str()));
         }
-        Self { data }
+        Self {
+            data,
+            regex_cache: DashMap::new(),
+        }
+    }
+}
+
+impl InMemoryKvBackend {
+    /// Retrieve a cached compiled regex or compile and cache it.
+    ///
+    /// # Errors
+    ///
+    /// Returns the regex compilation error message if the pattern
+    /// is invalid.
+    fn get_or_compile_regex(&self, pattern: &str) -> Result<Regex, String> {
+        if let Some(entry) = self.regex_cache.get(pattern) {
+            return Ok(entry.value().clone());
+        }
+        let compiled = Regex::new(pattern).map_err(|e| format!("invalid regex pattern '{pattern}': {e}"))?;
+        self.regex_cache.entry(pattern.to_owned()).or_insert(compiled.clone());
+        Ok(compiled)
     }
 }
 
@@ -99,28 +126,28 @@ impl KvBackend for InMemoryKvBackend {
             .collect()
     }
 
-    fn lookup(&self, pattern: &str, match_type: MatchType) -> Option<(Arc<str>, Arc<str>)> {
+    fn lookup(&self, pattern: &str, match_type: MatchType) -> Result<Option<(Arc<str>, Arc<str>)>, String> {
         match match_type {
-            MatchType::Exact => self
+            MatchType::Exact => Ok(self
                 .data
                 .get(pattern)
-                .map(|e| (Arc::clone(e.key()), Arc::clone(e.value()))),
-            MatchType::Prefix => self.data.iter().find_map(|e| {
+                .map(|e| (Arc::clone(e.key()), Arc::clone(e.value())))),
+            MatchType::Prefix => Ok(self.data.iter().find_map(|e| {
                 e.key()
                     .starts_with(pattern)
                     .then(|| (Arc::clone(e.key()), Arc::clone(e.value())))
-            }),
-            MatchType::Suffix => self.data.iter().find_map(|e| {
+            })),
+            MatchType::Suffix => Ok(self.data.iter().find_map(|e| {
                 e.key()
                     .ends_with(pattern)
                     .then(|| (Arc::clone(e.key()), Arc::clone(e.value())))
-            }),
+            })),
             MatchType::Regex => {
-                let re = regex::Regex::new(pattern).ok()?;
-                self.data.iter().find_map(|e| {
+                let re = self.get_or_compile_regex(pattern)?;
+                Ok(self.data.iter().find_map(|e| {
                     re.is_match(e.key())
                         .then(|| (Arc::clone(e.key()), Arc::clone(e.value())))
-                })
+                }))
             },
         }
     }
@@ -222,7 +249,7 @@ mod tests {
         let store = InMemoryKvBackend::new();
         store.set("route.api", Arc::from("cluster_a"));
 
-        let result = store.lookup("route.api", MatchType::Exact);
+        let result = store.lookup("route.api", MatchType::Exact).unwrap();
         assert_eq!(
             result.as_ref().map(|(_, v)| v.as_ref()),
             Some("cluster_a"),
@@ -230,7 +257,7 @@ mod tests {
         );
 
         assert!(
-            store.lookup("route.ap", MatchType::Exact).is_none(),
+            store.lookup("route.ap", MatchType::Exact).unwrap().is_none(),
             "partial key should not match exact"
         );
     }
@@ -241,7 +268,7 @@ mod tests {
         store.set("route.api.users", Arc::from("users_cluster"));
         store.set("route.web.home", Arc::from("web_cluster"));
 
-        let result = store.lookup("route.api", MatchType::Prefix);
+        let result = store.lookup("route.api", MatchType::Prefix).unwrap();
         assert!(result.is_some(), "prefix lookup should find matching key");
         assert_eq!(result.unwrap().1.as_ref(), "users_cluster");
     }
@@ -252,7 +279,7 @@ mod tests {
         store.set("us-east.backend", Arc::from("east"));
         store.set("us-west.frontend", Arc::from("west"));
 
-        let result = store.lookup(".backend", MatchType::Suffix);
+        let result = store.lookup(".backend", MatchType::Suffix).unwrap();
         assert!(result.is_some(), "suffix lookup should find matching key");
         assert_eq!(result.unwrap().1.as_ref(), "east");
     }
@@ -263,18 +290,19 @@ mod tests {
         store.set("model-gpt4", Arc::from("openai"));
         store.set("model-claude", Arc::from("anthropic"));
 
-        let result = store.lookup("model-gpt\\d", MatchType::Regex);
+        let result = store.lookup("model-gpt\\d", MatchType::Regex).unwrap();
         assert!(result.is_some(), "regex lookup should find matching key");
         assert_eq!(result.unwrap().1.as_ref(), "openai");
     }
 
     #[test]
-    fn lookup_regex_invalid_pattern_returns_none() {
+    fn lookup_regex_invalid_pattern_returns_error() {
         let store = InMemoryKvBackend::new();
         store.set("key", Arc::from("val"));
+        let err = store.lookup("[invalid", MatchType::Regex).unwrap_err();
         assert!(
-            store.lookup("[invalid", MatchType::Regex).is_none(),
-            "invalid regex should return None"
+            err.contains("invalid regex"),
+            "invalid regex should return error: {err}"
         );
     }
 
@@ -282,9 +310,9 @@ mod tests {
     fn lookup_no_match_returns_none() {
         let store = InMemoryKvBackend::new();
         store.set("key", Arc::from("val"));
-        assert!(store.lookup("other", MatchType::Prefix).is_none());
-        assert!(store.lookup("other", MatchType::Suffix).is_none());
-        assert!(store.lookup("other", MatchType::Regex).is_none());
+        assert!(store.lookup("other", MatchType::Prefix).unwrap().is_none());
+        assert!(store.lookup("other", MatchType::Suffix).unwrap().is_none());
+        assert!(store.lookup("other", MatchType::Regex).unwrap().is_none());
     }
 
     #[test]
@@ -336,10 +364,10 @@ mod tests {
     #[test]
     fn lookup_exact_returns_none_on_empty_store() {
         let store = InMemoryKvBackend::new();
-        assert!(store.lookup("any", MatchType::Exact).is_none());
-        assert!(store.lookup("any", MatchType::Prefix).is_none());
-        assert!(store.lookup("any", MatchType::Suffix).is_none());
-        assert!(store.lookup("any", MatchType::Regex).is_none());
+        assert!(store.lookup("any", MatchType::Exact).unwrap().is_none());
+        assert!(store.lookup("any", MatchType::Prefix).unwrap().is_none());
+        assert!(store.lookup("any", MatchType::Suffix).unwrap().is_none());
+        assert!(store.lookup("any", MatchType::Regex).unwrap().is_none());
     }
 
     #[test]
@@ -347,7 +375,7 @@ mod tests {
         let store = InMemoryKvBackend::new();
         store.set("api.users", Arc::from("v1"));
         assert!(
-            store.lookup("users", MatchType::Prefix).is_none(),
+            store.lookup("users", MatchType::Prefix).unwrap().is_none(),
             "prefix should match start, not substring"
         );
     }
@@ -357,7 +385,7 @@ mod tests {
         let store = InMemoryKvBackend::new();
         store.set("api.users.list", Arc::from("v1"));
         assert!(
-            store.lookup("users", MatchType::Suffix).is_none(),
+            store.lookup("users", MatchType::Suffix).unwrap().is_none(),
             "suffix should match end, not substring"
         );
     }
@@ -366,7 +394,7 @@ mod tests {
     fn lookup_regex_anchored() {
         let store = InMemoryKvBackend::new();
         store.set("model-gpt4", Arc::from("openai"));
-        let result = store.lookup("^model-", MatchType::Regex);
+        let result = store.lookup("^model-", MatchType::Regex).unwrap();
         assert!(result.is_some(), "anchored regex should match");
     }
 
@@ -376,7 +404,7 @@ mod tests {
         store.set("temp", Arc::from("val"));
         store.delete("temp");
         assert!(
-            store.lookup("temp", MatchType::Exact).is_none(),
+            store.lookup("temp", MatchType::Exact).unwrap().is_none(),
             "deleted key should not match"
         );
     }
@@ -423,7 +451,7 @@ mod tests {
             .collect();
         for h in handles {
             assert!(
-                h.join().unwrap().is_some(),
+                h.join().unwrap().unwrap().is_some(),
                 "lookup should find at least one prefix match"
             );
         }
