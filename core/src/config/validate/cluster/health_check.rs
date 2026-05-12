@@ -9,6 +9,7 @@ use tracing::warn;
 
 use crate::{
     config::{Cluster, HealthCheckType, InsecureOptions},
+    connectivity::normalize_mapped_ipv4,
     errors::ProxyError,
 };
 
@@ -129,11 +130,13 @@ pub(super) fn validate_health_check_ssrf(
 
     for ep in &cluster.endpoints {
         let addr_str = ep.address();
-        let host = addr_str.rsplit_once(':').map_or(addr_str, |(h, _)| h);
+        let host = extract_host(addr_str);
 
         let Ok(ip) = host.parse::<IpAddr>() else {
             continue;
         };
+
+        let ip = normalize_mapped_ipv4(ip);
 
         if is_ssrf_sensitive(&ip) {
             if insecure_options.allow_private_health_checks {
@@ -160,6 +163,18 @@ pub(super) fn validate_health_check_ssrf(
 // -----------------------------------------------------------------------------
 // Utility Functions
 // -----------------------------------------------------------------------------
+
+/// Extract the host portion from an endpoint address string.
+///
+/// Handles bracketed IPv6 (`[::1]:80` -> `::1`) and plain
+/// `host:port` (`127.0.0.1:80` -> `127.0.0.1`).
+fn extract_host(addr: &str) -> &str {
+    if let Some(bracketed) = addr.strip_prefix('[') {
+        bracketed.split_once(']').map_or(addr, |(host, _)| host)
+    } else {
+        addr.rsplit_once(':').map_or(addr, |(h, _)| h)
+    }
+}
 
 /// Returns `true` for IP addresses that are SSRF-sensitive.
 ///
@@ -612,6 +627,87 @@ clusters:
             err.to_string().contains("passive_healthy_threshold must be >= 1"),
             "got: {err}"
         );
+    }
+
+    #[test]
+    fn is_ssrf_sensitive_flags_ipv4_mapped_loopback() {
+        let ip: std::net::IpAddr = "::ffff:127.0.0.1".parse().unwrap();
+        let normalized = crate::connectivity::normalize_mapped_ipv4(ip);
+        assert!(
+            super::is_ssrf_sensitive(&normalized),
+            "IPv4-mapped ::ffff:127.0.0.1 should be flagged after normalization"
+        );
+    }
+
+    #[test]
+    fn is_ssrf_sensitive_flags_ipv4_mapped_metadata() {
+        let ip: std::net::IpAddr = "::ffff:169.254.169.254".parse().unwrap();
+        let normalized = crate::connectivity::normalize_mapped_ipv4(ip);
+        assert!(
+            super::is_ssrf_sensitive(&normalized),
+            "IPv4-mapped ::ffff:169.254.169.254 should be flagged after normalization"
+        );
+    }
+
+    #[test]
+    fn reject_ssrf_ipv4_mapped_loopback_endpoint() {
+        let clusters = vec![Cluster {
+            health_check: Some(crate::config::HealthCheckConfig {
+                check_type: crate::config::HealthCheckType::Http,
+                expected_status: 200,
+                healthy_threshold: 2,
+                interval_ms: 5000,
+                passive_healthy_threshold: None,
+                passive_unhealthy_threshold: None,
+                path: "/health".to_owned(),
+                timeout_ms: 2000,
+                unhealthy_threshold: 3,
+            }),
+            ..Cluster::with_defaults("web", vec!["::ffff:127.0.0.1:80".into()])
+        }];
+        let err = validate_clusters(&clusters, &InsecureOptions::default()).unwrap_err();
+        assert!(
+            err.to_string().contains("sensitive address"),
+            "IPv4-mapped loopback should be rejected: {err}"
+        );
+    }
+
+    #[test]
+    fn reject_ssrf_bracketed_ipv6_loopback() {
+        let clusters = vec![Cluster {
+            health_check: Some(crate::config::HealthCheckConfig {
+                check_type: crate::config::HealthCheckType::Http,
+                expected_status: 200,
+                healthy_threshold: 2,
+                interval_ms: 5000,
+                passive_healthy_threshold: None,
+                passive_unhealthy_threshold: None,
+                path: "/health".to_owned(),
+                timeout_ms: 2000,
+                unhealthy_threshold: 3,
+            }),
+            ..Cluster::with_defaults("web", vec!["[::1]:80".into()])
+        }];
+        let err = validate_clusters(&clusters, &InsecureOptions::default()).unwrap_err();
+        assert!(
+            err.to_string().contains("sensitive address"),
+            "bracketed IPv6 loopback should be rejected: {err}"
+        );
+    }
+
+    #[test]
+    fn extract_host_plain_ipv4() {
+        assert_eq!(super::extract_host("127.0.0.1:80"), "127.0.0.1");
+    }
+
+    #[test]
+    fn extract_host_bracketed_ipv6() {
+        assert_eq!(super::extract_host("[::1]:80"), "::1");
+    }
+
+    #[test]
+    fn extract_host_bare_hostname() {
+        assert_eq!(super::extract_host("example.com"), "example.com");
     }
 
     #[test]

@@ -33,10 +33,26 @@ pub(in crate::config::validate) fn validate_listeners(listeners: &mut [Listener]
         )));
     }
 
+    validate_unique_addresses(listeners)?;
+
     for listener in listeners.iter_mut() {
         validate_single_listener(listener)?;
     }
 
+    Ok(())
+}
+
+/// Reject duplicate bind addresses across listeners.
+fn validate_unique_addresses(listeners: &[Listener]) -> Result<(), ProxyError> {
+    let mut seen = HashSet::new();
+    for listener in listeners {
+        if !seen.insert(&listener.address) {
+            return Err(ProxyError::Config(format!(
+                "duplicate listener address '{}' (listeners '{}' and another share the same address)",
+                listener.address, listener.name
+            )));
+        }
+    }
     Ok(())
 }
 
@@ -231,6 +247,29 @@ filter_chains:
 "#;
         let err = Config::from_yaml(yaml).unwrap_err();
         assert!(err.to_string().contains("duplicate listener name"));
+    }
+
+    #[test]
+    fn reject_duplicate_listener_addresses() {
+        let yaml = r#"
+listeners:
+  - name: web1
+    address: "0.0.0.0:8080"
+    filter_chains: [main]
+  - name: web2
+    address: "0.0.0.0:8080"
+    filter_chains: [main]
+filter_chains:
+  - name: main
+    filters:
+      - filter: static_response
+        status: 200
+"#;
+        let err = Config::from_yaml(yaml).unwrap_err();
+        assert!(
+            err.to_string().contains("duplicate listener address"),
+            "should reject duplicate addresses: {err}"
+        );
     }
 
     #[test]
