@@ -382,6 +382,7 @@ supports TCP-level filters too.
 | `ip_acl` | Security | HTTP |
 | `credential_injection` | Security | HTTP |
 | `json_body_field` | Payload Processing | HTTP |
+| `mcp` | Payload Processing | HTTP |
 | `compression` | Payload Processing | HTTP |
 | `cors` | Security | HTTP |
 | `csrf` | Security | HTTP |

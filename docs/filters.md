@@ -487,6 +487,7 @@ A filter can have both `conditions` (request phase) and
 | `credential_injection` | Security | HTTP | Per-cluster API key injection with client credential stripping. Literal `value` fields are redacted in `--dump` output. |
 | `json_body_field` | Payload Processing | HTTP | Extract a JSON body field and promote to header |
 | `json_rpc` | Payload Processing | HTTP | Parse JSON-RPC 2.0 envelopes and extract method/id/kind for routing |
+| `mcp` | Payload Processing | HTTP | MCP protocol classifier: extract method, tool/resource/prompt name, and session metadata for routing |
 | `compression` | Payload Processing | HTTP | Gzip, brotli, and zstd response compression |
 | `cors` | Security | HTTP | CORS preflight handling, origin validation, credential support |
 | `csrf` | Security | HTTP | Origin-based CSRF protection with gradual rollout and Sec-Fetch-Site support |
