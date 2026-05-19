@@ -97,10 +97,15 @@ proposal status is updated to `released`.
 | Status | Meaning |
 | -------- | --------- |
 | `proposed` | Under discussion, not yet accepted |
+| `blocked` | Cannot proceed; requires discussion or prerequisite work |
 | `accepted` | Approved for implementation |
 | `experimental` | Implemented, shipping as experimental |
 | `released` | Stable, fully shipped |
 | `withdrawn` | Not proceeding (includes explanation) |
 
-> **Note**: A proposal with status `withdrawn` must include a clear,
-> detailed explanation of why it was withdrawn.
+> **Note**: A proposal with status `blocked` should
+> describe what must happen for it to become unblocked.
+
+> **Note**: A proposal with status `withdrawn` must
+> include a clear, detailed explanation of why it was
+> withdrawn.
