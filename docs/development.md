@@ -65,7 +65,10 @@ Review [extensions.md] first.
 4. Add unit tests and doctests.
 5. Add an example config in the appropriate category under
    `examples/configs/`.
-6. Add an integration test in `tests/integration/`.
+6. Add a functional integration test in
+   `tests/integration/tests/suite/examples/`.
+7. Update `examples/README.md` to list any new or renamed
+   example configs.
 
 [extensions.md]:./extensions.md
 

@@ -84,7 +84,7 @@ nothing about them is guaranteed.
 
 > **Note**: In particular, updates to experimental features
 > may make breaking, backwards-incompatible changes. An
-> experimental feature may be removed at any time.thing about them is guaranteed.
+> experimental feature may be removed at any time.
 
 ### 7. Release
 
