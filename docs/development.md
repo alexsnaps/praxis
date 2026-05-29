@@ -17,6 +17,18 @@ that do not follow these conventions will be rejected.
 
 [conventions.md]:./conventions.md
 
+## Setup
+
+Install git hooks so formatting and lint errors are
+caught before they reach CI:
+
+```console
+make setup-hooks
+```
+
+The pre-commit hook verifies commit signing is
+enabled, then runs `make fmt` and `make lint`.
+
 ## Build
 
 ```console
