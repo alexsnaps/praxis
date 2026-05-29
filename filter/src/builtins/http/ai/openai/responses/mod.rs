@@ -8,7 +8,7 @@
 //! facts to configurable headers, durable metadata, and filter
 //! results for routing. Does not mutate the request body.
 
-pub(crate) mod classify;
+pub(crate) mod classifier;
 mod config;
 
 #[cfg(test)]
@@ -31,7 +31,7 @@ use bytes::Bytes;
 use tracing::{debug, trace};
 
 use self::{
-    classify::{AiRequestFormat, classify_request_body},
+    classifier::{AiRequestFormat, classify_request_body},
     config::{OnInvalidBehavior, ResponsesFormatConfig, build_config},
 };
 
@@ -177,7 +177,7 @@ fn handle_invalid_format(format: AiRequestFormat, config: &ResponsesFormatConfig
 }
 
 /// Write durable metadata that persists across all Pingora lifecycle phases.
-fn write_metadata(ctx: &mut HttpFilterContext<'_>, classified: &classify::ClassifiedRequest) {
+fn write_metadata(ctx: &mut HttpFilterContext<'_>, classified: &classifier::ClassifiedRequest) {
     let format_str = classified.format.as_str();
     ctx.set_metadata("responses_format.format", format_str);
 
@@ -211,7 +211,7 @@ fn write_metadata(ctx: &mut HttpFilterContext<'_>, classified: &classify::Classi
 /// Promote classification facts to configurable request headers.
 fn promote_headers(
     ctx: &mut HttpFilterContext<'_>,
-    classified: &classify::ClassifiedRequest,
+    classified: &classifier::ClassifiedRequest,
     config: &ResponsesFormatConfig,
 ) {
     if let Some(header) = &config.headers.format {
@@ -241,7 +241,7 @@ fn promote_headers(
 /// Promote classification facts to filter results for branch conditions.
 fn promote_filter_results(
     ctx: &mut HttpFilterContext<'_>,
-    classified: &classify::ClassifiedRequest,
+    classified: &classifier::ClassifiedRequest,
 ) -> Result<(), FilterError> {
     let results = ctx.filter_results.entry("responses_format").or_default();
 
