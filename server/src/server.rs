@@ -102,7 +102,8 @@ pub fn run_server_with_registry(config: Config, registry: FilterRegistry, config
 
     let health_shutdown = Arc::new(Mutex::new(CancellationToken::new()));
     spawn_health_check_tasks(&config, &health_registry, &health_shutdown);
-    let _watcher = spawn_watcher(config_path, config, registry, &pipelines, &health_shutdown, kv_stores);
+    let pipelines = Arc::clone(&pipelines);
+    let _watcher = spawn_watcher(config_path, config, registry, pipelines, &health_shutdown, kv_stores);
 
     info!("starting server");
     server.run()
@@ -112,7 +113,7 @@ pub fn run_server_with_registry(config: Config, registry: FilterRegistry, config
 fn register_protocols(
     server: &mut PingoraServerRuntime,
     config: &Config,
-    pipelines: &Arc<ListenerPipelines>,
+    pipelines: &ListenerPipelines,
 ) -> CertWatcherShutdowns {
     let mut all_shutdowns = Vec::new();
 
@@ -139,7 +140,7 @@ fn spawn_watcher(
     config_path: Option<PathBuf>,
     config: Config,
     registry: FilterRegistry,
-    pipelines: &Arc<ListenerPipelines>,
+    pipelines: Arc<ListenerPipelines>,
     health_shutdown: &Arc<Mutex<CancellationToken>>,
     kv_stores: praxis_core::kv::KvStoreRegistry,
 ) -> Option<std::thread::JoinHandle<()>> {
@@ -149,7 +150,7 @@ fn spawn_watcher(
         health_shutdown: Arc::clone(health_shutdown),
         initial_config: config,
         kv_stores,
-        pipelines: Arc::clone(pipelines),
+        pipelines,
         registry: Arc::new(registry),
         shutdown: CancellationToken::new(),
     });
