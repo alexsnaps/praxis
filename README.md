@@ -25,6 +25,11 @@ Full documentation index: [docs/README.md](docs/README.md)
 - [TLS](docs/operating/tls.md)
 - [Security Hardening](docs/operating/security-hardening.md)
 
+> **Note**: AI Features are developed and maintained in a separate repository.
+> If you're looking for AI-specific source, see [praxis-proxy/ai].
+
+[praxis-proxy/ai]:https://github.com/praxis-proxy/ai
+
 ## Contributing
 
 [Issues] and [pull requests] are welcome. Familiarize yourself
