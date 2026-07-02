@@ -15,8 +15,8 @@ first.
    `examples/configs/`.
 6. Add a functional integration test in
    `tests/integration/tests/suite/examples/`.
-7. Update `examples/README.md` to list any new or renamed
-   example configs.
+7. Run `cargo xtask sync-example-readme --fix` to
+   regenerate `examples/README.md`.
 
 All testing requirements from [conventions.md](conventions.md#testing)
 apply. A feature without tests and an example is not
