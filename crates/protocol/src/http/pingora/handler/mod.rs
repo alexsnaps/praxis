@@ -201,6 +201,7 @@ mod tests {
     use praxis_core::{
         connectivity::{ConnectionOptions, Upstream},
         health::{ClusterHealthEntry, EndpointHealth},
+        value::Value,
     };
     use praxis_filter::{BodyBuffer, BodyMode, RequestExtensions};
 
@@ -425,7 +426,7 @@ mod tests {
         let mut ctx = PingoraRequestCtx::default();
         ctx.response_phase_done = false;
         ctx.filter_metadata
-            .insert("json_rpc.method".to_owned(), "service/invoke".to_owned());
+            .insert("json_rpc.method".to_owned(), Value::from("service/invoke"));
         ctx.request_snapshot = Some(praxis_filter::Request {
             method: http::Method::POST,
             uri: "/api".parse().unwrap(),
@@ -433,8 +434,8 @@ mod tests {
         });
         logging_util::logging_cleanup(&pipeline, &mut ctx).await;
         assert_eq!(
-            ctx.filter_metadata.get("json_rpc.method").map(String::as_str),
-            Some("service/invoke"),
+            ctx.filter_metadata.get("json_rpc.method"),
+            Some(&Value::from("service/invoke")),
             "filter_metadata should survive logging_cleanup"
         );
     }
@@ -935,7 +936,7 @@ mod tests {
             }),
             extensions,
             attempted_endpoints: Vec::new(),
-            filter_metadata: HashMap::from([("key".to_owned(), "val".to_owned())]),
+            filter_metadata: HashMap::from([("key".to_owned(), Value::from("val"))]),
             filter_state,
             executed_branch_filters: vec![false, true, true],
             executed_filter_indices: vec![true, false],
@@ -947,7 +948,7 @@ mod tests {
         assert!(ctx.upstream.is_some(), "upstream should transfer");
         assert_eq!(ctx.upstream.as_ref().unwrap().address.as_ref(), "10.0.0.1:80");
         assert_eq!(ctx.extensions.get::<u32>(), Some(&42));
-        assert_eq!(ctx.filter_metadata.get("key").map(String::as_str), Some("val"));
+        assert_eq!(ctx.filter_metadata.get("key"), Some(&Value::from("val")));
         assert_eq!(ctx.filter_state.len(), 1, "filter_state should transfer");
         assert_eq!(
             ctx.filter_state.get(&0).and_then(|v| v.downcast_ref::<i32>()),
