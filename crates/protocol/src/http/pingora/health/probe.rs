@@ -127,11 +127,30 @@ pub(crate) async fn http_probe_with_request(
 ///     Some(503)
 /// );
 /// assert_eq!(parse_status_code("garbage"), None);
+/// assert_eq!(parse_status_code("SMTP 200 ready\r\n"), None);
+/// assert_eq!(parse_status_code("HTTP/nope 200 ready\r\n"), None);
+/// assert_eq!(parse_status_code("HTTP/1.1 0200 weird\r\n"), None);
 /// ```
 pub(crate) fn parse_status_code(response: &str) -> Option<u16> {
-    let first_line = response.lines().next()?;
-    let parts: Vec<&str> = first_line.splitn(3, ' ').collect();
-    parts.get(1)?.parse().ok()
+    let mut parts = response.lines().next()?.splitn(3, ' ');
+    // Only a well-formed HTTP status line counts (RFC 9112 §4): the version
+    // must be `HTTP/` DIGIT `.` DIGIT and the status exactly three digits.
+    // Any other greeting whose second token happens to carry the expected
+    // number must not.
+    parts.next().filter(|version| is_http_version(version))?;
+    parts
+        .next()
+        .filter(|status| status.len() == 3 && status.bytes().all(|byte| byte.is_ascii_digit()))?
+        .parse()
+        .ok()
+}
+
+/// `HTTP-version = HTTP-name "/" DIGIT "." DIGIT` (RFC 9112 §2.3).
+fn is_http_version(version: &str) -> bool {
+    matches!(
+        version.strip_prefix("HTTP/").map(str::as_bytes),
+        Some([major, b'.', minor]) if major.is_ascii_digit() && minor.is_ascii_digit()
+    )
 }
 
 // -----------------------------------------------------------------------------
@@ -367,12 +386,45 @@ mod tests {
     }
 
     #[test]
+    fn parse_status_rejects_non_http_status_lines() {
+        for line in ["SMTP 200 ready\r\n", "garbage 200 anything"] {
+            assert_eq!(
+                parse_status_code(line),
+                None,
+                "a non-HTTP greeting must not be read as status 200: {line:?}"
+            );
+        }
+    }
+
+    #[test]
     fn parse_status_http10() {
         assert_eq!(
             parse_status_code("HTTP/1.0 301 Moved Permanently\r\n"),
             Some(301),
             "should parse HTTP/1.0 status lines"
         );
+    }
+
+    #[test]
+    fn parse_status_rejects_malformed_http_version() {
+        for line in ["HTTP/nope 200 ready\r\n", "HTTP/ 200 OK\r\n", "HTTP/11 200 OK\r\n"] {
+            assert_eq!(
+                parse_status_code(line),
+                None,
+                "HTTP-version must be HTTP/ DIGIT . DIGIT (RFC 9112 §4): {line:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_status_rejects_non_three_digit_status() {
+        for line in ["HTTP/1.1 0200 weird\r\n", "HTTP/1.1 20 OK\r\n", "HTTP/1.1 2000 OK\r\n"] {
+            assert_eq!(
+                parse_status_code(line),
+                None,
+                "status-code must be exactly 3DIGIT (RFC 9112 §4): {line:?}"
+            );
+        }
     }
 
     #[tokio::test]
