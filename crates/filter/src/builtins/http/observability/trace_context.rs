@@ -218,7 +218,7 @@ impl HttpFilter for TraceContextFilter {
 }
 
 // -----------------------------------------------------------------------------
-// Request Processing Helpers
+// Request Processing Utilities
 // -----------------------------------------------------------------------------
 
 /// Build the outgoing `traceparent` value, joining an existing trace
@@ -287,7 +287,7 @@ fn strip_tracestate(ctx: &mut HttpFilterContext<'_>) {
 }
 
 // -----------------------------------------------------------------------------
-// ID Generation Helpers
+// ID Generation Utilities
 // -----------------------------------------------------------------------------
 
 /// Generate a 32-hex-char trace ID using the context's ID generator.
@@ -314,7 +314,7 @@ fn generate_span_id(ctx: &HttpFilterContext<'_>) -> String {
 }
 
 // -----------------------------------------------------------------------------
-// Validation Helpers
+// Validation Utilities
 // -----------------------------------------------------------------------------
 
 /// Split a traceparent value into its four dash-separated fields.

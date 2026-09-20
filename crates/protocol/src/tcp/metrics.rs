@@ -225,4 +225,301 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn all_close_reasons_are_distinguishable() {
+        crate::http::pingora::metrics::install_prometheus_recorder();
+        let reasons = [
+            "completed",
+            "error",
+            "shutdown",
+            "session_timeout",
+            "max_duration",
+            "sni_timeout",
+            "filter_rejection",
+            "connect_failure",
+            "peeked_write_error",
+        ];
+        for reason in reasons {
+            record_tcp_connection_duration(SharedString::const_str("all-reasons"), reason, 1.0);
+        }
+        let body = crate::http::pingora::metrics::render_prometheus().expect("recorder should render");
+        for reason in reasons {
+            let needle = format!("reason=\"{reason}\"");
+            assert!(
+                body.contains(&needle),
+                "expected `{needle}` in scrape; all close reasons must be tracked separately:\n{body}"
+            );
+        }
+    }
+
+    #[test]
+    fn connection_accepted_counter_accumulates() {
+        crate::http::pingora::metrics::install_prometheus_recorder();
+        record_tcp_connection_accepted(SharedString::const_str("counter-listener"));
+        record_tcp_connection_accepted(SharedString::const_str("counter-listener"));
+        record_tcp_connection_accepted(SharedString::const_str("counter-listener"));
+        let body = crate::http::pingora::metrics::render_prometheus().expect("recorder should render");
+        assert!(
+            body.contains("praxis_tcp_connections_total{listener=\"counter-listener\"} 3"),
+            "connection counter should sum all accepted connections:\n{body}"
+        );
+    }
+
+    #[test]
+    fn zero_bytes_transfer_is_recorded() {
+        crate::http::pingora::metrics::install_prometheus_recorder();
+        record_tcp_bytes(SharedString::const_str("zero-bytes"), 0, 0);
+        let body = crate::http::pingora::metrics::render_prometheus().expect("recorder should render");
+        assert!(
+            body.contains("praxis_tcp_bytes_received_total{listener=\"zero-bytes\"} 0"),
+            "zero received bytes should be recorded:\n{body}"
+        );
+        assert!(
+            body.contains("praxis_tcp_bytes_sent_total{listener=\"zero-bytes\"} 0"),
+            "zero sent bytes should be recorded:\n{body}"
+        );
+    }
+
+    #[test]
+    fn large_bytes_transfer_is_recorded() {
+        crate::http::pingora::metrics::install_prometheus_recorder();
+        let large = u64::MAX / 2;
+        record_tcp_bytes(SharedString::const_str("large-bytes"), large, large);
+        let body = crate::http::pingora::metrics::render_prometheus().expect("recorder should render");
+        let expected_received = format!("praxis_tcp_bytes_received_total{{listener=\"large-bytes\"}} {large}");
+        let expected_sent = format!("praxis_tcp_bytes_sent_total{{listener=\"large-bytes\"}} {large}");
+        assert!(
+            body.contains(&expected_received),
+            "large received byte count should be recorded:\n{body}"
+        );
+        assert!(
+            body.contains(&expected_sent),
+            "large sent byte count should be recorded:\n{body}"
+        );
+    }
+
+    #[test]
+    fn asymmetric_traffic_is_recorded() {
+        crate::http::pingora::metrics::install_prometheus_recorder();
+        record_tcp_bytes(SharedString::const_str("asymmetric"), 1000, 10);
+        let body = crate::http::pingora::metrics::render_prometheus().expect("recorder should render");
+        assert!(
+            body.contains("praxis_tcp_bytes_received_total{listener=\"asymmetric\"} 1000"),
+            "asymmetric traffic (upload-heavy) should record received separately:\n{body}"
+        );
+        assert!(
+            body.contains("praxis_tcp_bytes_sent_total{listener=\"asymmetric\"} 10"),
+            "asymmetric traffic (upload-heavy) should record sent separately:\n{body}"
+        );
+    }
+
+    #[test]
+    fn download_heavy_traffic_is_recorded() {
+        crate::http::pingora::metrics::install_prometheus_recorder();
+        record_tcp_bytes(SharedString::const_str("download"), 50, 5000);
+        let body = crate::http::pingora::metrics::render_prometheus().expect("recorder should render");
+        assert!(
+            body.contains("praxis_tcp_bytes_received_total{listener=\"download\"} 50"),
+            "download-heavy traffic should record received separately:\n{body}"
+        );
+        assert!(
+            body.contains("praxis_tcp_bytes_sent_total{listener=\"download\"} 5000"),
+            "download-heavy traffic should record sent separately:\n{body}"
+        );
+    }
+
+    #[test]
+    fn duration_histogram_records_various_durations() {
+        crate::http::pingora::metrics::install_prometheus_recorder();
+        record_tcp_connection_duration(SharedString::const_str("hist"), "completed", 0.001);
+        record_tcp_connection_duration(SharedString::const_str("hist"), "completed", 0.1);
+        record_tcp_connection_duration(SharedString::const_str("hist"), "completed", 1.0);
+        record_tcp_connection_duration(SharedString::const_str("hist"), "completed", 10.0);
+        let body = crate::http::pingora::metrics::render_prometheus().expect("recorder should render");
+        assert!(
+            body.contains("praxis_tcp_connection_duration_seconds"),
+            "histogram metric should be present:\n{body}"
+        );
+        assert!(
+            body.contains("listener=\"hist\""),
+            "histogram should include listener label:\n{body}"
+        );
+        assert!(
+            body.contains("reason=\"completed\""),
+            "histogram should include reason label:\n{body}"
+        );
+    }
+
+    #[test]
+    fn multiple_active_connection_guards_are_independent() {
+        crate::http::pingora::metrics::install_prometheus_recorder();
+        let guard1 = TcpActiveConnectionGuard::acquire(SharedString::const_str("multi"));
+        let guard2 = TcpActiveConnectionGuard::acquire(SharedString::const_str("multi"));
+        let guard3 = TcpActiveConnectionGuard::acquire(SharedString::const_str("multi"));
+        let held = crate::http::pingora::metrics::render_prometheus().expect("recorder should render");
+        assert!(
+            held.contains("praxis_tcp_active_connections{listener=\"multi\"} 3"),
+            "gauge should sum all held guards:\n{held}"
+        );
+        drop(guard2);
+        let after_one_drop = crate::http::pingora::metrics::render_prometheus().expect("recorder should render");
+        assert!(
+            after_one_drop.contains("praxis_tcp_active_connections{listener=\"multi\"} 2"),
+            "gauge should decrement by one after dropping one guard:\n{after_one_drop}"
+        );
+        drop(guard1);
+        drop(guard3);
+        let all_dropped = crate::http::pingora::metrics::render_prometheus().expect("recorder should render");
+        assert!(
+            all_dropped.contains("praxis_tcp_active_connections{listener=\"multi\"} 0"),
+            "gauge should return to zero after all guards drop:\n{all_dropped}"
+        );
+    }
+
+    #[test]
+    fn connection_accepted_different_listeners() {
+        crate::http::pingora::metrics::install_prometheus_recorder();
+        record_tcp_connection_accepted(SharedString::const_str("listener-a"));
+        record_tcp_connection_accepted(SharedString::const_str("listener-a"));
+        record_tcp_connection_accepted(SharedString::const_str("listener-b"));
+        let body = crate::http::pingora::metrics::render_prometheus().expect("recorder should render");
+        assert!(
+            body.contains("praxis_tcp_connections_total{listener=\"listener-a\"} 2"),
+            "listener-a should have 2 connections:\n{body}"
+        );
+        assert!(
+            body.contains("praxis_tcp_connections_total{listener=\"listener-b\"} 1"),
+            "listener-b should have 1 connection:\n{body}"
+        );
+    }
+
+    #[test]
+    fn bytes_different_listeners() {
+        crate::http::pingora::metrics::install_prometheus_recorder();
+        record_tcp_bytes(SharedString::const_str("listener-x"), 100, 200);
+        record_tcp_bytes(SharedString::const_str("listener-y"), 300, 400);
+        let body = crate::http::pingora::metrics::render_prometheus().expect("recorder should render");
+        assert!(
+            body.contains("praxis_tcp_bytes_received_total{listener=\"listener-x\"} 100"),
+            "listener-x received should be separate:\n{body}"
+        );
+        assert!(
+            body.contains("praxis_tcp_bytes_sent_total{listener=\"listener-x\"} 200"),
+            "listener-x sent should be separate:\n{body}"
+        );
+        assert!(
+            body.contains("praxis_tcp_bytes_received_total{listener=\"listener-y\"} 300"),
+            "listener-y received should be separate:\n{body}"
+        );
+        assert!(
+            body.contains("praxis_tcp_bytes_sent_total{listener=\"listener-y\"} 400"),
+            "listener-y sent should be separate:\n{body}"
+        );
+    }
+
+    #[test]
+    fn duration_different_listeners() {
+        crate::http::pingora::metrics::install_prometheus_recorder();
+        record_tcp_connection_duration(SharedString::const_str("listener-1"), "completed", 1.5);
+        record_tcp_connection_duration(SharedString::const_str("listener-2"), "error", 0.5);
+        let body = crate::http::pingora::metrics::render_prometheus().expect("recorder should render");
+        assert!(
+            body.contains("listener=\"listener-1\"") && body.contains("reason=\"completed\""),
+            "listener-1 with completed reason should be recorded:\n{body}"
+        );
+        assert!(
+            body.contains("listener=\"listener-2\"") && body.contains("reason=\"error\""),
+            "listener-2 with error reason should be recorded:\n{body}"
+        );
+    }
+
+    #[test]
+    fn guard_across_different_listeners() {
+        crate::http::pingora::metrics::install_prometheus_recorder();
+        let guard_a = TcpActiveConnectionGuard::acquire(SharedString::const_str("guard-a"));
+        let guard_b1 = TcpActiveConnectionGuard::acquire(SharedString::const_str("guard-b"));
+        let guard_b2 = TcpActiveConnectionGuard::acquire(SharedString::const_str("guard-b"));
+        let held = crate::http::pingora::metrics::render_prometheus().expect("recorder should render");
+        assert!(
+            held.contains("praxis_tcp_active_connections{listener=\"guard-a\"} 1"),
+            "guard-a should have 1 connection:\n{held}"
+        );
+        assert!(
+            held.contains("praxis_tcp_active_connections{listener=\"guard-b\"} 2"),
+            "guard-b should have 2 connections:\n{held}"
+        );
+        drop(guard_a);
+        drop(guard_b1);
+        drop(guard_b2);
+    }
+
+    #[test]
+    fn negative_duration_is_recorded() {
+        crate::http::pingora::metrics::install_prometheus_recorder();
+        record_tcp_connection_duration(SharedString::const_str("negative"), "error", -1.0);
+        let body = crate::http::pingora::metrics::render_prometheus().expect("recorder should render");
+        assert!(
+            body.contains("praxis_tcp_connection_duration_seconds"),
+            "negative duration should not panic and metric should exist:\n{body}"
+        );
+    }
+
+    #[test]
+    fn very_long_duration_is_recorded() {
+        crate::http::pingora::metrics::install_prometheus_recorder();
+        let one_week = 7.0 * 24.0 * 3600.0;
+        record_tcp_connection_duration(SharedString::const_str("week-long"), "completed", one_week);
+        let body = crate::http::pingora::metrics::render_prometheus().expect("recorder should render");
+        assert!(
+            body.contains("praxis_tcp_connection_duration_seconds"),
+            "week-long duration should be recorded:\n{body}"
+        );
+    }
+
+    #[test]
+    fn metric_names_are_correct() {
+        crate::http::pingora::metrics::install_prometheus_recorder();
+        record_tcp_connection_accepted(SharedString::const_str("check-names"));
+        record_tcp_connection_duration(SharedString::const_str("check-names"), "completed", 1.0);
+        record_tcp_bytes(SharedString::const_str("check-names"), 100, 200);
+        let _guard = TcpActiveConnectionGuard::acquire(SharedString::const_str("check-names"));
+        let body = crate::http::pingora::metrics::render_prometheus().expect("recorder should render");
+        assert!(
+            body.contains("praxis_tcp_connections_total"),
+            "connections counter metric name should be correct:\n{body}"
+        );
+        assert!(
+            body.contains("praxis_tcp_connection_duration_seconds"),
+            "duration histogram metric name should be correct:\n{body}"
+        );
+        assert!(
+            body.contains("praxis_tcp_bytes_sent_total"),
+            "bytes sent counter metric name should be correct:\n{body}"
+        );
+        assert!(
+            body.contains("praxis_tcp_bytes_received_total"),
+            "bytes received counter metric name should be correct:\n{body}"
+        );
+        assert!(
+            body.contains("praxis_tcp_active_connections"),
+            "active connections gauge metric name should be correct:\n{body}"
+        );
+    }
+
+    #[test]
+    fn listener_label_name_is_correct() {
+        crate::http::pingora::metrics::install_prometheus_recorder();
+        record_tcp_connection_accepted(SharedString::const_str("label-test"));
+        let body = crate::http::pingora::metrics::render_prometheus().expect("recorder should render");
+        assert!(body.contains("listener="), "listener label should be present:\n{body}");
+    }
+
+    #[test]
+    fn reason_label_name_is_correct() {
+        crate::http::pingora::metrics::install_prometheus_recorder();
+        record_tcp_connection_duration(SharedString::const_str("reason-label"), "completed", 1.0);
+        let body = crate::http::pingora::metrics::render_prometheus().expect("recorder should render");
+        assert!(body.contains("reason="), "reason label should be present:\n{body}");
+    }
 }

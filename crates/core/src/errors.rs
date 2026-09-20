@@ -46,7 +46,7 @@ mod tests {
 
     #[test]
     fn error_display() {
-        let e = ProxyError::Config("bad yaml".into());
-        assert_eq!(e.to_string(), "config: bad yaml", "Config error display mismatch");
+        let err = ProxyError::Config("bad yaml".into());
+        assert_eq!(err.to_string(), "config: bad yaml", "Config error display mismatch");
     }
 }

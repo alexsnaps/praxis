@@ -1,6 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Praxis Contributors
 
+//! Public request and response types for sub-request exchanges.
+//!
+//! Defines [`SubRequest`] and [`SubResponse`] for buffered exchanges,
+//! [`StreamingSubResponse`] for streaming responses, and
+//! [`SubRequestError`] for execution failures. Reserved headers
+//! (`x-praxis-*`, `x-ext-*`) are automatically stripped from
+//! outbound requests; use [`FrameworkHeaders`] to inject metadata
+//! that survives sanitization.
+
 use std::time::Duration;
 
 use bytes::Bytes;

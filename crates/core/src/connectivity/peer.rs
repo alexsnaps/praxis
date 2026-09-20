@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Praxis Contributors
 
-//! Shared [`HttpPeer`] construction helpers for TLS, SNI, and connection options.
+//! Shared [`HttpPeer`] construction utilities for TLS, SNI, and connection options.
 //!
 //! Used by both the protocol layer's upstream peer builder and the
 //! filter layer's sub-request executor to avoid duplicating TLS
@@ -183,7 +183,7 @@ fn owned_from_arc(err: &AddressResolutionError) -> AddressResolutionError {
                 std::io::Error::from_raw_os_error,
             ),
         },
-        AddressResolutionError::Empty(a) => AddressResolutionError::Empty(a.clone()),
+        AddressResolutionError::Empty(address) => AddressResolutionError::Empty(address.clone()),
         AddressResolutionError::RecentFailure { address, message } => AddressResolutionError::RecentFailure {
             address: address.clone(),
             message: message.clone(),
@@ -233,7 +233,7 @@ pub async fn resolve_addresses(address: &str) -> Result<Arc<[SocketAddr]>, Addre
         address: address.to_owned(),
         source: std::io::Error::new(std::io::ErrorKind::InvalidInput, "missing port"),
     })?;
-    let ips = resolve_host_cached(host).await.map_err(|e| readdress(e, address))?;
+    let ips = resolve_host_cached(host).await.map_err(|err| readdress(err, address))?;
     let addrs: Vec<SocketAddr> = ips.into_iter().map(|ip| SocketAddr::new(ip, port)).collect();
     Ok(Arc::from(addrs))
 }
@@ -241,7 +241,10 @@ pub async fn resolve_addresses(address: &str) -> Result<Arc<[SocketAddr]>, Addre
 /// Split `host:port`, stripping IPv6 brackets. `None` when no port is present.
 fn split_host_port(address: &str) -> Option<(&str, u16)> {
     let (host, port) = address.rsplit_once(':')?;
-    let host = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')).unwrap_or(host);
+    let host = host
+        .strip_prefix('[')
+        .and_then(|stripped| stripped.strip_suffix(']'))
+        .unwrap_or(host);
     let port = port.parse::<u16>().ok()?;
     Some((host, port))
 }
@@ -357,7 +360,7 @@ async fn owner_resolve<L: BlockingLookup>(
     if let Some(cached) = lookup_cached(&host) {
         let payload = match cached {
             Ok(arc) => Ok(arc),
-            Err(e) => Err(Arc::new(e)),
+            Err(err) => Err(Arc::new(err)),
         };
         drop(tx.send(Some(payload)));
         return;
@@ -378,13 +381,13 @@ async fn owner_resolve<L: BlockingLookup>(
         &host,
         match &outcome {
             Ok(ips) => Ok(Arc::from(ips.as_slice())),
-            Err(e) => Err(e.to_string()),
+            Err(err) => Err(err.to_string()),
         },
     );
 
     let payload = match outcome {
         Ok(ips) => Ok(Arc::<[IpAddr]>::from(ips.as_slice())),
-        Err(e) => Err(Arc::new(e)),
+        Err(err) => Err(Arc::new(err)),
     };
     drop(tx.send(Some(payload)));
 }
@@ -457,7 +460,6 @@ pub async fn resolve_address_checked(address: &str, allow_private: bool) -> Resu
 fn literal_socket_addr(address: &str) -> Option<SocketAddr> {
     address.parse::<SocketAddr>().ok()
 }
-
 
 /// Store a resolution outcome, evicting the oldest entry at capacity.
 fn insert_cached(host: &str, outcome: Result<Arc<[IpAddr]>, String>) {
@@ -592,7 +594,7 @@ pub fn ca_from_cached(cached: &praxis_tls::CachedCaCerts) -> Vec<pingora_core::u
         .iter()
         .filter_map(|der| {
             pingora_core::utils::tls::WrappedX509::parse(der.clone())
-                .inspect_err(|e| tracing::warn!("failed to parse cached CA cert: {e}"))
+                .inspect_err(|err| tracing::warn!("failed to parse cached CA cert: {err}"))
                 .ok()
         })
         .collect()
@@ -624,7 +626,7 @@ pub fn client_cert_from_cached(cached: &praxis_tls::CachedClientCert) -> pingora
 #[must_use]
 pub fn is_ip_literal(host: &str) -> bool {
     host.strip_prefix('[')
-        .and_then(|h| h.strip_suffix(']'))
+        .and_then(|stripped| stripped.strip_suffix(']'))
         .unwrap_or(host)
         .parse::<IpAddr>()
         .is_ok()
@@ -645,7 +647,7 @@ pub fn is_ip_literal(host: &str) -> bool {
 ///
 /// [RFC 6066]: https://datatracker.ietf.org/doc/html/rfc6066
 pub fn derive_sni(address: &str) -> String {
-    let host = address.rsplit_once(':').map_or(address, |(h, _)| h);
+    let host = address.rsplit_once(':').map_or(address, |(host_part, _)| host_part);
     if is_ip_literal(host) {
         tracing::debug!(
             address,
@@ -663,7 +665,13 @@ pub fn derive_sni(address: &str) -> String {
 
 #[cfg(test)]
 #[expect(clippy::allow_attributes, reason = "blanket test suppressions")]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, reason = "tests")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::min_ident_chars,
+    reason = "tests"
+)]
 mod tests {
     use super::*;
 
@@ -1043,7 +1051,7 @@ mod tests {
     }
 
     // Poll until the lookup has been entered (calls > 0), yielding cooperatively.
-    #[expect(clippy::panic, reason = "test helper panics on timeout to fail the test early")]
+    #[expect(clippy::panic, reason = "test utility panics on timeout to fail the test early")]
     async fn await_lookup_started(calls: &AtomicUsize) {
         for _ in 0..1_000 {
             if calls.load(Ordering::SeqCst) > 0 {

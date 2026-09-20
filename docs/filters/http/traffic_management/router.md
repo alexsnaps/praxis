@@ -17,15 +17,15 @@ Longest prefix wins. Routes without `host` match any host. Header restrictions u
 
 | Field | Type | Required | Description |
 |-------|------|---------|-------------|
-| `json_alias_header` | string | no | Reserved for the unimplemented JSON alias feature; has no effect. Kept so existing configs continue to parse. Any route that actually sets `json_aliases` is rejected at startup. |
-| `json_alias_max_body_bytes` | integer | no | Reserved for the unimplemented JSON alias feature; has no effect. Kept so existing configs continue to parse. Any route that actually sets `json_aliases` is rejected at startup. |
+| `json_alias_header` | string | no | Reserved for the experimental, unimplemented JSON alias feature. Only present under the `router-json-aliases` feature, and even then it has no effect: any route setting `json_aliases` is rejected at startup. Default builds do not accept this key. |
+| `json_alias_max_body_bytes` | integer | no | Reserved for the experimental, unimplemented JSON alias feature. Only present under the `router-json-aliases` feature, and even then it has no effect: any route setting `json_aliases` is rejected at startup. Default builds do not accept this key. |
 | `routes` | RouterRouteConfig[] | no | Route table entries. |
 | `routes[].path` | string | no | Exact path to match. Exactly one of `path` or `path_prefix` must be set. |
 | `routes[].path_prefix` | string | no | Path prefix to match; the longest matching prefix wins. Exactly one of `path` or `path_prefix` must be set. |
 | `routes[].cluster` | string | yes | Name of the cluster to route matched requests to. |
 | `routes[].headers` | object<string, string> | no | Request headers to match. All specified headers must be present with matching values (AND semantics, case-sensitive). |
 | `routes[].host` | string | no | Host to match. If set, the route only applies to this host. |
-| `routes[].json_aliases` | JsonAlias[] | no | Not implemented. Setting this is rejected at startup. |
+| `routes[].json_aliases` | JsonAlias[] | no | Not implemented. Setting this is rejected at startup. Only present under the experimental `router-json-aliases` feature. |
 | `routes[].json_aliases[].field` | string | yes | Request JSON field whose string value is compared with `pattern`. |
 | `routes[].json_aliases[].match` | string | yes | Exact or single-wildcard pattern for the configured field value. |
 | `routes[].json_aliases[].target` | string | no | Replacement value; omitted aliases preserve the original value. |

@@ -19,7 +19,7 @@ use std::{
 use praxis_test_utils::{GrpcBackend, GrpcBackendGuard, free_port, praxis_bin, start_grpc_backend, wait_for_tcp};
 
 // -----------------------------------------------------------------------------
-// Helpers
+// Utilities
 // -----------------------------------------------------------------------------
 
 /// Send one gRPC request through the proxy and read the whole response.

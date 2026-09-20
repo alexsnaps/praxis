@@ -27,11 +27,11 @@ pub(super) fn validate_timeouts(cluster: &Cluster) -> Result<(), ProxyError> {
                 "cluster '{name}': {field} is 0 (must be > 0)"
             )));
         }
-        if let Some(v) = value
-            && v > MAX_TIMEOUT_MS
+        if let Some(millis) = value
+            && millis > MAX_TIMEOUT_MS
         {
             return Err(ProxyError::Config(format!(
-                "cluster '{name}': {field} ({v} ms) exceeds maximum ({MAX_TIMEOUT_MS} ms / 1 hour)"
+                "cluster '{name}': {field} ({millis} ms) exceeds maximum ({MAX_TIMEOUT_MS} ms / 1 hour)"
             )));
         }
     }

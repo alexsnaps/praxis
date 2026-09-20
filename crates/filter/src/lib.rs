@@ -48,6 +48,7 @@ pub mod body;
 pub mod builtins;
 mod condition;
 mod context;
+#[cfg(feature = "chain-binding")]
 mod credentials;
 mod error_response;
 mod extensions;
@@ -71,7 +72,9 @@ pub use actions::{
     TerminalResponse,
 };
 pub use any_filter::AnyFilter;
-pub use binding::{ChainBindingContext, ChainBindingHttpFactory};
+pub use binding::ChainBindingContext;
+#[cfg(feature = "chain-binding")]
+pub use binding::ChainBindingHttpFactory;
 pub use body::{BodyAccess, BodyBuffer, BodyBufferOverflow, BodyCapabilities, BodyMode};
 #[cfg(feature = "basic-auth-filter")]
 pub use builtins::BasicAuthFilter;
@@ -90,6 +93,7 @@ pub use context::{
     HttpFilterContext, PendingHeaderResult, Request, Response, StreamTermination, StreamTerminationCause,
     SubRequestResponseMode, TrustedHeaderMutation,
 };
+#[cfg(feature = "chain-binding")]
 pub use credentials::{DeferredCredential, PendingCredentials};
 pub use error_response::{
     ErrorResponseContext, ErrorResponseFormatter, ErrorResponseFormatterHandle, FormattedErrorResponse,
@@ -444,7 +448,7 @@ mod macro_tests {
 // -----------------------------------------------------------------------------
 
 #[cfg(test)]
-/// Shared helpers for filter unit tests.
+/// Shared utilities for filter unit tests.
 #[expect(clippy::allow_attributes, reason = "blanket test suppressions")]
 #[allow(clippy::expect_used, reason = "test utilities")]
 pub(crate) mod test_utils {

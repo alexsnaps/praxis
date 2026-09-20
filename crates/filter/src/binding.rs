@@ -24,24 +24,32 @@
 //!
 //! [`ChainRef`]: praxis_core::config::ChainRef
 
+#[cfg(feature = "chain-binding")]
+use std::sync::Arc;
 use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
-    sync::Arc,
 };
 
+#[cfg(feature = "chain-binding")]
 use praxis_core::config::{
-    ChainRef, FilterEntry, InsecureOptions, validate_chain_entries_branch_chains, validate_chain_entries_cardinality,
+    ChainRef, validate_chain_entries_branch_chains, validate_chain_entries_cardinality,
     validate_chain_entries_conditions, validate_chain_entries_inline_clusters,
 };
+use praxis_core::config::{FilterEntry, InsecureOptions};
 
-use crate::{FilterError, filter::HttpFilter, pipeline::FilterPipeline, registry::FilterRegistry};
+#[cfg(feature = "chain-binding")]
+use crate::filter::HttpFilter;
+#[cfg(any(feature = "iterative-request-router", feature = "chain-binding"))]
+use crate::pipeline::FilterPipeline;
+use crate::{FilterError, registry::FilterRegistry};
 
 /// Maximum nesting depth permitted when resolving outbound chain references.
 ///
 /// Bounds inline-chain recursion (which carries no name for the cycle
 /// detector to catch) and caps how deep one outbound chain may pull in
 /// further outbound chains before the build is rejected.
+#[cfg(feature = "chain-binding")]
 pub(crate) const MAX_OUTBOUND_CHAIN_DEPTH: usize = 10;
 
 /// Factory for an application filter that binds an outbound chain at
@@ -54,6 +62,7 @@ pub(crate) const MAX_OUTBOUND_CHAIN_DEPTH: usize = 10;
 /// application state (clients, credentials providers) at registration time.
 ///
 /// [`FilterRegistry::register_chain_binding`]: crate::FilterRegistry::register_chain_binding
+#[cfg(feature = "chain-binding")]
 pub type ChainBindingHttpFactory =
     Arc<dyn Fn(&serde_yaml::Value, &ChainBindingContext<'_>) -> Result<Box<dyn HttpFilter>, FilterError> + Send + Sync>;
 
@@ -129,25 +138,60 @@ pub struct ChainBindingContext<'a> {
     registry: &'a FilterRegistry,
 
     /// Top-level named-chain lookup table.
+    #[cfg_attr(
+        not(any(feature = "iterative-request-router", feature = "chain-binding")),
+        expect(
+            dead_code,
+            reason = "read only by the gated bind_chain / build_nested_step_pipeline paths"
+        )
+    )]
     chains: &'a HashMap<&'a str, &'a [FilterEntry]>,
 
     /// Shared cycle-detection stack.
+    #[cfg_attr(
+        not(any(feature = "iterative-request-router", feature = "chain-binding")),
+        expect(
+            dead_code,
+            reason = "read only by the gated bind_chain / build_nested_step_pipeline paths"
+        )
+    )]
     stack: &'a ResolutionStack,
 
     /// Current *outbound* nesting depth: how many outbound bindings deep this
     /// context sits. Bounded by [`MAX_OUTBOUND_CHAIN_DEPTH`] and tracked
     /// independently of branch nesting — a chain-binding filter reached at any
     /// branch depth still binds at outbound depth zero.
+    #[cfg_attr(
+        not(any(feature = "iterative-request-router", feature = "chain-binding")),
+        expect(
+            dead_code,
+            reason = "read only by the gated bind_chain / build_nested_step_pipeline paths"
+        )
+    )]
     outbound_depth: usize,
 
     /// Operator's declared insecure posture, threaded so inline outbound
     /// chains are gated by the same SSRF/TLS-verify rules as top-level chains.
+    #[cfg_attr(
+        not(any(feature = "iterative-request-router", feature = "chain-binding")),
+        expect(
+            dead_code,
+            reason = "read only by the gated bind_chain / build_nested_step_pipeline paths"
+        )
+    )]
     insecure: &'a InsecureOptions,
 
     /// Build-wide count of filter instances materialized so far, shared across
     /// branch resolution and outbound binding alike. Binding an outbound chain
     /// forwards this counter rather than resetting it, so a fan-out split across
     /// binding boundaries is still bounded by one ceiling.
+    #[cfg_attr(
+        not(any(feature = "iterative-request-router", feature = "chain-binding")),
+        expect(
+            dead_code,
+            reason = "read only by the gated bind_chain / build_nested_step_pipeline paths"
+        )
+    )]
     budget: &'a Cell<usize>,
 
     /// Build-wide count of branch *definitions* seen so far, checked against the
@@ -161,6 +205,13 @@ pub struct ChainBindingContext<'a> {
     /// bindings accumulate on top of. Named outbound chains are top-level
     /// `filter_chains` the whole-config pass already counted config-wide, so they
     /// are validated but not re-accumulated here.
+    #[cfg_attr(
+        not(any(feature = "iterative-request-router", feature = "chain-binding")),
+        expect(
+            dead_code,
+            reason = "read only by the gated bind_chain / build_nested_step_pipeline paths"
+        )
+    )]
     branch_budget: &'a Cell<usize>,
 }
 
@@ -204,6 +255,7 @@ impl<'a> ChainBindingContext<'a> {
     ///
     /// [`FilterRegistry::create`]: crate::FilterRegistry
     /// [`FilterPipeline::build_with_chains`]: crate::FilterPipeline::build_with_chains
+    #[cfg(feature = "iterative-request-router")]
     pub(crate) fn with_standalone<R>(
         registry: &FilterRegistry,
         insecure: &InsecureOptions,
@@ -239,6 +291,7 @@ impl<'a> ChainBindingContext<'a> {
     ///
     /// [`bind_chain`]: Self::bind_chain
     /// [`ChainRef`]: praxis_core::config::ChainRef
+    #[cfg(feature = "iterative-request-router")]
     pub(crate) fn build_nested_step_pipeline(
         &self,
         entries: &mut [FilterEntry],
@@ -282,6 +335,7 @@ impl<'a> ChainBindingContext<'a> {
     ///
     /// Returns [`FilterError`] if the reference is unknown, forms a cycle,
     /// exceeds the maximum nesting depth, or any nested filter fails to build.
+    #[cfg(feature = "chain-binding")]
     pub fn bind_chain(&self, chain_ref: &ChainRef) -> Result<FilterPipeline, FilterError> {
         if self.outbound_depth >= MAX_OUTBOUND_CHAIN_DEPTH {
             return Err(format!("outbound chain nesting depth exceeds maximum ({MAX_OUTBOUND_CHAIN_DEPTH})").into());
@@ -335,6 +389,7 @@ impl<'a> ChainBindingContext<'a> {
     /// [`reject_terminal_filters`], so it can scan branch sub-chains too.
     ///
     /// [`reject_terminal_filters`]: Self::reject_terminal_filters
+    #[cfg(feature = "chain-binding")]
     fn validate_bound_entries(&self, name: Option<&str>, entries: &[FilterEntry]) -> Result<(), FilterError> {
         let label = name.unwrap_or("<inline>");
         // A bound chain never appears in `Config::filter_chains`, so the
@@ -379,6 +434,7 @@ impl<'a> ChainBindingContext<'a> {
     /// A filtered sub-request runs only the HTTP request phase, so a TCP-level
     /// filter builds without error but the executor never invokes it — the
     /// config silently behaves unlike what the operator wrote.
+    #[cfg(feature = "chain-binding")]
     fn reject_non_http_filters(pipeline: &FilterPipeline, name: Option<&str>) -> Result<(), FilterError> {
         let tcp_filters = pipeline.non_http_filters();
         if !tcp_filters.is_empty() {
@@ -402,6 +458,7 @@ impl<'a> ChainBindingContext<'a> {
     /// regardless of position (unlike a top-level chain, where a terminal filter
     /// is valid as the last entry). Scans branch sub-chains too, so one buried in
     /// a branch is caught at build time rather than activating at runtime.
+    #[cfg(feature = "chain-binding")]
     fn reject_terminal_filters(pipeline: &FilterPipeline, name: Option<&str>) -> Result<(), FilterError> {
         let terminal = pipeline.terminal_filters();
         if !terminal.is_empty() {
@@ -423,6 +480,7 @@ impl<'a> ChainBindingContext<'a> {
     /// Named references are looked up in the top-level `filter_chains`; inline
     /// references carry their filters directly and have no name to key cycle
     /// detection on.
+    #[cfg(feature = "chain-binding")]
     fn resolve_ref<'r>(&self, chain_ref: &'r ChainRef) -> Result<(Option<&'r str>, Vec<FilterEntry>), FilterError> {
         match chain_ref {
             ChainRef::Named(name) => {
@@ -442,6 +500,7 @@ impl<'a> ChainBindingContext<'a> {
     /// Honors the operator's declared skip posture the same way the server's
     /// `validate_pipeline` does: downgrade to warnings under
     /// `skip_pipeline_validation`, otherwise reject the build.
+    #[cfg(feature = "chain-binding")]
     fn enforce_bound_ordering(
         &self,
         pipeline: &FilterPipeline,
@@ -473,6 +532,7 @@ impl<'a> ChainBindingContext<'a> {
 // -----------------------------------------------------------------------------
 
 #[cfg(test)]
+#[cfg(feature = "chain-binding")]
 #[expect(clippy::allow_attributes, reason = "blanket test suppressions")]
 #[allow(
     clippy::unwrap_used,
@@ -1346,6 +1406,7 @@ mod tests {
     // Reject terminal filters at build time instead.
     // -------------------------------------------------------------------------
 
+    #[cfg(feature = "iterative-request-router")]
     #[test]
     #[expect(clippy::too_many_lines, reason = "inline valid-IRR YAML fixture")]
     fn outbound_chain_with_terminal_filter_rejected() {
@@ -1390,6 +1451,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "iterative-request-router")]
     #[test]
     #[expect(clippy::too_many_lines, reason = "inline valid-IRR YAML fixture nested in a branch")]
     fn outbound_chain_with_branch_nested_terminal_filter_rejected() {

@@ -181,7 +181,7 @@ impl HttpFilter for PeerIdentityTrustFilter {
 }
 
 // -----------------------------------------------------------------------------
-// Private Helpers
+// Private Utilities
 // -----------------------------------------------------------------------------
 
 /// Validate and build the trusted peer list from config.

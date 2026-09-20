@@ -78,8 +78,8 @@ impl InMemoryKvBackend {
     /// ```
     pub fn from_pairs(pairs: Vec<(String, String)>) -> Self {
         let data = DashMap::with_capacity(pairs.len());
-        for (k, v) in pairs {
-            data.insert(Arc::from(k.as_str()), Arc::from(v.as_str()));
+        for (key, value) in pairs {
+            data.insert(Arc::from(key.as_str()), Arc::from(value.as_str()));
         }
         Self {
             data,
@@ -100,7 +100,7 @@ impl InMemoryKvBackend {
         if let Some(entry) = self.regex_cache.get(pattern) {
             return Ok(entry.value().clone());
         }
-        let compiled = Regex::new(pattern).map_err(|e| format!("invalid regex pattern '{pattern}': {e}"))?;
+        let compiled = Regex::new(pattern).map_err(|err| format!("invalid regex pattern '{pattern}': {err}"))?;
         if self.regex_cache.len() < MAX_REGEX_CACHE_SIZE {
             self.regex_cache.entry(pattern.to_owned()).or_insert(compiled.clone());
         }
@@ -116,9 +116,9 @@ impl InMemoryKvBackend {
     fn min_matching<F: Fn(&str) -> bool>(&self, predicate: F) -> Option<(Arc<str>, Arc<str>)> {
         self.data
             .iter()
-            .filter(|e| predicate(e.key()))
-            .min_by(|a, b| a.key().as_ref().cmp(b.key().as_ref()))
-            .map(|e| (Arc::clone(e.key()), Arc::clone(e.value())))
+            .filter(|entry| predicate(entry.key()))
+            .min_by(|left, right| left.key().as_ref().cmp(right.key().as_ref()))
+            .map(|entry| (Arc::clone(entry.key()), Arc::clone(entry.value())))
     }
 }
 
@@ -130,7 +130,7 @@ impl Default for InMemoryKvBackend {
 
 impl KvBackend for InMemoryKvBackend {
     fn get(&self, key: &str) -> Option<Arc<str>> {
-        self.data.get(key).map(|v| Arc::clone(v.value()))
+        self.data.get(key).map(|entry| Arc::clone(entry.value()))
     }
 
     fn set(&self, key: &str, value: Arc<str>) -> bool {
@@ -156,7 +156,7 @@ impl KvBackend for InMemoryKvBackend {
     fn entries(&self) -> Vec<(Arc<str>, Arc<str>)> {
         self.data
             .iter()
-            .map(|e| (Arc::clone(e.key()), Arc::clone(e.value())))
+            .map(|entry| (Arc::clone(entry.key()), Arc::clone(entry.value())))
             .collect()
     }
 
@@ -165,12 +165,12 @@ impl KvBackend for InMemoryKvBackend {
             MatchType::Exact => Ok(self
                 .data
                 .get(pattern)
-                .map(|e| (Arc::clone(e.key()), Arc::clone(e.value())))),
-            MatchType::Prefix => Ok(self.min_matching(|k| k.starts_with(pattern))),
-            MatchType::Suffix => Ok(self.min_matching(|k| k.ends_with(pattern))),
+                .map(|entry| (Arc::clone(entry.key()), Arc::clone(entry.value())))),
+            MatchType::Prefix => Ok(self.min_matching(|key| key.starts_with(pattern))),
+            MatchType::Suffix => Ok(self.min_matching(|key| key.ends_with(pattern))),
             MatchType::Regex => {
                 let re = self.get_or_compile_regex(pattern)?;
-                Ok(self.min_matching(|k| re.is_match(k)))
+                Ok(self.min_matching(|key| re.is_match(key)))
             },
         }
     }
@@ -186,7 +186,13 @@ impl KvBackend for InMemoryKvBackend {
 
 #[cfg(test)]
 #[expect(clippy::allow_attributes, reason = "blanket test suppressions")]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, reason = "tests")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::min_ident_chars,
+    reason = "tests"
+)]
 mod tests {
     use super::*;
 

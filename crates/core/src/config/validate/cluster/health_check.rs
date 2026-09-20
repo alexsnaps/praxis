@@ -159,7 +159,7 @@ fn validate_health_check_path(path: &str, cluster_name: &str) -> Result<(), Prox
             "cluster '{cluster_name}': health_check.path must not contain percent-encoded control characters"
         )));
     }
-    if path.bytes().any(|b| b < 0x20 || b == 0x7F) {
+    if path.bytes().any(|byte| byte < 0x20 || byte == 0x7F) {
         return Err(ProxyError::Config(format!(
             "cluster '{cluster_name}': health_check.path must not contain non-printable characters"
         )));
@@ -168,8 +168,8 @@ fn validate_health_check_path(path: &str, cluster_name: &str) -> Result<(), Prox
 }
 
 /// Check for percent-encoded CR (%0d/%0D) or LF (%0a/%0A).
-fn contains_encoded_crlf(s: &str) -> bool {
-    let lower = s.to_ascii_lowercase();
+fn contains_encoded_crlf(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
     lower.contains("%0d") || lower.contains("%0a")
 }
 
@@ -252,7 +252,7 @@ pub(super) fn extract_host(addr: &str) -> &str {
     if let Some(bracketed) = addr.strip_prefix('[') {
         bracketed.split_once(']').map_or(addr, |(host, _)| host)
     } else {
-        addr.rsplit_once(':').map_or(addr, |(h, _)| h)
+        addr.rsplit_once(':').map_or(addr, |(host, _)| host)
     }
 }
 
@@ -298,63 +298,63 @@ fn try_parse_alternate_ip(host: &str) -> Option<IpAddr> {
     if host.contains('.') {
         let parts: Vec<&str> = host.split('.').collect();
         return match parts.as_slice() {
-            [a, b, c, d] => {
+            [octet1, octet2, octet3, octet4] => {
                 let octets = [
-                    parse_flexible_octet(a)?,
-                    parse_flexible_octet(b)?,
-                    parse_flexible_octet(c)?,
-                    parse_flexible_octet(d)?,
+                    parse_flexible_octet(octet1)?,
+                    parse_flexible_octet(octet2)?,
+                    parse_flexible_octet(octet3)?,
+                    parse_flexible_octet(octet4)?,
                 ];
                 Some(IpAddr::V4(Ipv4Addr::from(octets)))
             },
-            [a, b] => {
-                let hi = parse_flexible_octet(a)?;
-                let lo = parse_flexible_u32(b).filter(|&v| v <= 0x00FF_FFFF)?;
-                let n = u32::from(hi) << 24 | lo;
-                Some(IpAddr::V4(Ipv4Addr::from(n)))
+            [first, rest] => {
+                let hi = parse_flexible_octet(first)?;
+                let lo = parse_flexible_u32(rest).filter(|&value| value <= 0x00FF_FFFF)?;
+                let packed = u32::from(hi) << 24 | lo;
+                Some(IpAddr::V4(Ipv4Addr::from(packed)))
             },
-            [a, b, c] => {
-                let o1 = parse_flexible_octet(a)?;
-                let o2 = parse_flexible_octet(b)?;
-                let lo = parse_flexible_u32(c).filter(|&v| v <= 0xFFFF)?;
-                let n = u32::from(o1) << 24 | u32::from(o2) << 16 | lo;
-                Some(IpAddr::V4(Ipv4Addr::from(n)))
+            [first, second, rest] => {
+                let o1 = parse_flexible_octet(first)?;
+                let o2 = parse_flexible_octet(second)?;
+                let lo = parse_flexible_u32(rest).filter(|&value| value <= 0xFFFF)?;
+                let packed = u32::from(o1) << 24 | u32::from(o2) << 16 | lo;
+                Some(IpAddr::V4(Ipv4Addr::from(packed)))
             },
             _ => None,
         };
     }
-    let n = parse_flexible_u32(host)?;
-    Some(IpAddr::V4(Ipv4Addr::from(n)))
+    let packed = parse_flexible_u32(host)?;
+    Some(IpAddr::V4(Ipv4Addr::from(packed)))
 }
 
 /// Parse a value as decimal, octal (leading `0`), or hexadecimal
 /// (`0x`) into a `u32`.
-fn parse_flexible_u32(s: &str) -> Option<u32> {
-    if s.is_empty() {
+fn parse_flexible_u32(value: &str) -> Option<u32> {
+    if value.is_empty() {
         return None;
     }
-    if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+    if let Some(hex) = value.strip_prefix("0x").or_else(|| value.strip_prefix("0X")) {
         return u32::from_str_radix(hex, 16).ok();
     }
-    if s.len() > 1 && s.starts_with('0') && s.bytes().all(|b| b.is_ascii_digit()) {
-        return u32::from_str_radix(s, 8).ok();
+    if value.len() > 1 && value.starts_with('0') && value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return u32::from_str_radix(value, 8).ok();
     }
-    s.parse::<u32>().ok()
+    value.parse::<u32>().ok()
 }
 
 /// Parse a single octet that may use decimal, octal (leading `0`),
 /// or hexadecimal (`0x`) notation.
-fn parse_flexible_octet(s: &str) -> Option<u8> {
-    if s.is_empty() {
+fn parse_flexible_octet(value: &str) -> Option<u8> {
+    if value.is_empty() {
         return None;
     }
-    if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+    if let Some(hex) = value.strip_prefix("0x").or_else(|| value.strip_prefix("0X")) {
         return u8::from_str_radix(hex, 16).ok();
     }
-    if s.len() > 1 && s.starts_with('0') && s.bytes().all(|b| b.is_ascii_digit()) {
-        return u8::from_str_radix(s, 8).ok();
+    if value.len() > 1 && value.starts_with('0') && value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return u8::from_str_radix(value, 8).ok();
     }
-    s.parse::<u8>().ok()
+    value.parse::<u8>().ok()
 }
 
 /// Warn when a cluster terminates TLS but is health-checked with a plaintext

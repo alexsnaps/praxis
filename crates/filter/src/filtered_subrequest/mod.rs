@@ -75,16 +75,18 @@ use self::{
     transport::{build_peer, classify_transport_failure, stream_termination_cause},
 };
 pub(crate) use self::{
-    continuation::{FilteredSubrequestContinuation, SubrequestCompletion},
-    sanitize::normalize_response_status,
+    continuation::FilteredSubrequestContinuation,
     streaming::{CalloutStreamingBody, FilteredStreamingBody},
 };
+#[cfg(feature = "iterative-request-router")]
+pub(crate) use self::{continuation::SubrequestCompletion, sanitize::normalize_response_status};
+#[cfg(feature = "chain-binding")]
+use crate::credentials::{PendingCredentials, ResolvedDestination};
 use crate::{
     FilterAction, FilterError, FilterPipeline, StreamTermination, StreamTerminationCause, SubRequest,
     SubRequestResponseMode, SubResponse,
     actions::Rejection,
     context::PendingStreamChunks,
-    credentials::{PendingCredentials, ResolvedDestination},
     extensions::{RequestExtensions, SelectedClusterApplication},
     results::RetainedFilterResults,
 };
@@ -1058,6 +1060,7 @@ impl FilteredSubrequestExecutor {
                 .and_then(|value| value.to_str().ok())
                 .map(Arc::from);
             // Fall back to the transport only when no override is set.
+            #[cfg(feature = "chain-binding")]
             let logical_authority: Arc<str> = authority_override
                 .clone()
                 .unwrap_or_else(|| Arc::clone(&destination_authority));
@@ -1095,6 +1098,7 @@ impl FilteredSubrequestExecutor {
             // into a request bound for the authority each credential was issued
             // for. Injecting after sanitization keeps the credential header from
             // being stripped as hop-by-hop/framing.
+            #[cfg(feature = "chain-binding")]
             if let Some(pending) = filter_ctx.extensions.remove::<PendingCredentials>() {
                 let destination = ResolvedDestination {
                     authority: &logical_authority,
@@ -1425,8 +1429,8 @@ impl FilteredSubrequestExecutor {
             // (the guard at the top of the streaming arm), and a `SizeLimit` mode only
             // arises when no response-body filter runs — in which case nothing writes
             // `completion_body` and it stays empty. So the only mode under which a
-            // completion body can exist is `Stream`, for which the helper returns
-            // exactly `max_response_bytes`. Routing through the shared helper keeps all
+            // completion body can exist is `Stream`, for which the utility returns
+            // exactly `max_response_bytes`. Routing through the shared utility keeps all
             // three sites uniform and correct-by-construction should that guard ever
             // be relaxed to admit a tighter response mode here.
             if let Some(limit) = response_body_overflow_limit(

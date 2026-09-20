@@ -125,7 +125,7 @@ impl fmt::Debug for TelemetryConfig {
                 &self
                     .otlp_headers
                     .as_ref()
-                    .map(|h| format!("<{} header(s) redacted>", h.len())),
+                    .map(|headers| format!("<{} header(s) redacted>", headers.len())),
             )
             .field("sampling_rate", &self.sampling_rate)
             .field("service_name", &self.service_name)
@@ -152,6 +152,7 @@ impl TelemetryConfig {
     /// Returns an error if `batch_size` or `batch_interval_secs` is
     /// explicitly set to zero, `otlp_endpoint` is empty/whitespace-only,
     /// or `sampling_rate` is outside the `0.0..=1.0` range.
+    #[expect(clippy::too_many_lines, reason = "validation logic naturally verbose")]
     pub(crate) fn validate(&self) -> Result<(), String> {
         if self.batch_size == Some(0) {
             return Err("telemetry.batch_size must be > 0".to_owned());
@@ -159,7 +160,11 @@ impl TelemetryConfig {
         if self.batch_interval_secs == Some(0) {
             return Err("telemetry.batch_interval_secs must be > 0".to_owned());
         }
-        if self.otlp_endpoint.as_ref().is_some_and(|e| e.trim().is_empty()) {
+        if self
+            .otlp_endpoint
+            .as_ref()
+            .is_some_and(|endpoint| endpoint.trim().is_empty())
+        {
             return Err("telemetry.otlp_endpoint must not be empty (omit the field to disable OTLP)".to_owned());
         }
         if let Some(rate) = self.sampling_rate
@@ -169,10 +174,14 @@ impl TelemetryConfig {
                 "telemetry.sampling_rate must be between 0.0 and 1.0, got {rate}"
             ));
         }
-        if self.service_name.as_ref().is_some_and(|s| s.trim().is_empty()) {
+        if self.service_name.as_ref().is_some_and(|name| name.trim().is_empty()) {
             return Err("telemetry.service_name must not be empty when set".to_owned());
         }
-        if self.service_version.as_ref().is_some_and(|s| s.trim().is_empty()) {
+        if self
+            .service_version
+            .as_ref()
+            .is_some_and(|version| version.trim().is_empty())
+        {
             return Err("telemetry.service_version must not be empty when set".to_owned());
         }
         Ok(())
@@ -200,7 +209,7 @@ impl TelemetryConfig {
             otlp_endpoint: self.otlp_endpoint.clone().or_else(|| {
                 std::env::var(OTLP_ENDPOINT_ENV_VAR)
                     .ok()
-                    .filter(|s| !s.trim().is_empty())
+                    .filter(|endpoint| !endpoint.trim().is_empty())
             }),
             otlp_headers: self.otlp_headers.clone().or_else(parse_otlp_headers_from_env),
             sampling_rate: self.sampling_rate,
@@ -210,7 +219,7 @@ impl TelemetryConfig {
                 .or_else(|| {
                     std::env::var(OTEL_SERVICE_NAME_ENV_VAR)
                         .ok()
-                        .filter(|s| !s.trim().is_empty())
+                        .filter(|name| !name.trim().is_empty())
                 })
                 .or_else(|| extract_resource_attribute_from_env("service.name")),
             service_version: self
@@ -227,7 +236,7 @@ impl TelemetryConfig {
     /// process environment in tests is inherently racy (`env::set_var`
     /// is `unsafe` since Rust 1.66 for good reason). Instead, callers
     /// pass the "would-have-come-from-env" value as `env_endpoint` and
-    /// the helper simulates the config-then-env precedence inline.
+    /// the utility simulates the config-then-env precedence inline.
     #[cfg(test)]
     fn resolved(config_endpoint: Option<&str>, env_endpoint: Option<&str>) -> Self {
         Self {
@@ -251,7 +260,7 @@ fn extract_resource_attribute_from_env(key: &str) -> Option<String> {
     // Drop empty values (e.g. `service.version=`) so an empty env attribute
     // does not flow into the OTel Resource, matching the config-side
     // validation and the OTEL_SERVICE_NAME empty-filter in resolve().
-    extract_resource_attribute(&attrs, key).filter(|s| !s.trim().is_empty())
+    extract_resource_attribute(&attrs, key).filter(|value| !value.trim().is_empty())
 }
 
 /// Extract a single attribute value from an `OTel` resource-attributes string.
@@ -263,9 +272,9 @@ fn extract_resource_attribute(attrs: &str, target_key: &str) -> Option<String> {
     attrs
         .split(',')
         .filter_map(|pair| pair.split_once('='))
-        .find(|(k, _)| k.trim() == target_key)
-        .map(|(_, v)| v.trim().to_owned())
-        .filter(|v| !v.is_empty())
+        .find(|(key, _)| key.trim() == target_key)
+        .map(|(_, value)| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
 }
 
 // -----------------------------------------------------------------------------
@@ -281,8 +290,8 @@ fn parse_otlp_headers_from_env() -> Option<HashMap<String, String>> {
     let headers: HashMap<String, String> = raw
         .split(',')
         .filter_map(|pair| pair.split_once('='))
-        .map(|(k, v)| (percent_decode(k.trim()), percent_decode(v.trim())))
-        .filter(|(k, _)| !k.is_empty())
+        .map(|(key, value)| (percent_decode(key.trim()), percent_decode(value.trim())))
+        .filter(|(key, _)| !key.is_empty())
         .collect();
     if headers.is_empty() { None } else { Some(headers) }
 }
@@ -663,7 +672,7 @@ otlp_headers:
             resolved
                 .otlp_headers
                 .as_ref()
-                .and_then(|h| h.get("x-api-key"))
+                .and_then(|header_map| header_map.get("x-api-key"))
                 .map(String::as_str),
             Some("secret"),
             "otlp_headers should pass through resolve"

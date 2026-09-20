@@ -85,7 +85,7 @@ pub(crate) fn build_dump(
     let chains: HashMap<&str, &[_]> = config
         .filter_chains
         .iter()
-        .map(|c| (c.name.as_str(), c.filters.as_slice()))
+        .map(|chain| (chain.name.as_str(), chain.filters.as_slice()))
         .collect();
 
     Ok(EffectiveConfigDump {
@@ -95,7 +95,8 @@ pub(crate) fn build_dump(
     })
 }
 
-/// Clone a [`Config`] and redact sensitive values.
+/// Clone a [`Config`] and redact sensitive values in all filter entries,
+/// including those nested in branch chains.
 fn redact_secrets(config: &Config) -> Config {
     let mut redacted = config.clone();
     for chain in &mut redacted.filter_chains {
@@ -106,7 +107,12 @@ fn redact_secrets(config: &Config) -> Config {
     redacted
 }
 
-/// Redact sensitive values in a filter entry and nested inline branch chains.
+/// Redact sensitive values in a filter entry and recursively redact any
+/// nested inline branch chains.
+///
+/// Credential injection filters receive targeted redaction of `value` and
+/// `env_var` fields; all filter types are subject to the field-name redaction
+/// in `redact_sensitive_keys`.
 fn redact_filter_entry(entry: &mut FilterEntry) {
     if entry.filter_type == "credential_injection" {
         redact_credential_values(&mut entry.config);
@@ -253,7 +259,8 @@ const CREDENTIAL_HEADER_NAMES: &[&str] = &[
     "x-auth-token",
 ];
 
-/// Resolve all listeners into their dump representations.
+/// Resolve all listeners into their dump representations by flattening each
+/// listener's chain references into an ordered filter list.
 fn build_resolved_listeners(
     config: &Config,
     chains: &HashMap<&str, &[FilterEntry]>,
@@ -265,7 +272,8 @@ fn build_resolved_listeners(
         .collect()
 }
 
-/// Resolve a single listener's chains into a flat filter list.
+/// Resolve a single listener's chains into a flat filter list, preserving the
+/// config-declared chain order.
 fn build_resolved_listener(
     listener: &praxis_core::config::Listener,
     chains: &HashMap<&str, &[FilterEntry]>,
@@ -277,7 +285,8 @@ fn build_resolved_listener(
     })
 }
 
-/// Flatten chain references into an ordered list of resolved filters.
+/// Flatten chain references into an ordered list of resolved filters, tracking
+/// both per-chain and pipeline-global indices for each filter entry.
 fn build_resolved_filters(
     chain_names: &[String],
     chains: &HashMap<&str, &[FilterEntry]>,
@@ -764,7 +773,7 @@ filter_chains:
             assert_eq!(
                 mapping
                     .get(serde_yaml::Value::String(field.to_owned()))
-                    .and_then(|v| v.as_str()),
+                    .and_then(|val| val.as_str()),
                 Some("[REDACTED]"),
                 "{field} must be redacted"
             );
@@ -772,7 +781,7 @@ filter_chains:
         assert_eq!(
             mapping
                 .get(serde_yaml::Value::String("keep".to_owned()))
-                .and_then(|v| v.as_str()),
+                .and_then(|val| val.as_str()),
             Some("visible"),
             "non-sensitive field must not be redacted"
         );
@@ -797,7 +806,7 @@ filter_chains:
                 .as_mapping()
                 .unwrap()
                 .get(serde_yaml::Value::String("value".to_owned()))
-                .and_then(|v| v.as_str()),
+                .and_then(|val| val.as_str()),
             Some("[REDACTED]"),
             "Authorization header value must be redacted (case-insensitive match)"
         );
@@ -806,7 +815,7 @@ filter_chains:
                 .as_mapping()
                 .unwrap()
                 .get(serde_yaml::Value::String("value".to_owned()))
-                .and_then(|v| v.as_str()),
+                .and_then(|val| val.as_str()),
             Some("keep-me"),
             "non-credential header value must not be redacted"
         );
@@ -858,13 +867,16 @@ filter_chains:
     // -------------------------------------------------------------------------
 
     /// Assert a resolved filter's chain, indices, and type name.
-    fn assert_filter(f: &ResolvedFilterDump, chain: &str, chain_idx: usize, pipeline_idx: usize, filter: &str) {
-        assert_eq!(f.chain, chain, "chain mismatch for filter {filter}");
-        assert_eq!(f.chain_index, chain_idx, "chain_index mismatch for filter {filter}");
+    fn assert_filter(resolved: &ResolvedFilterDump, chain: &str, chain_idx: usize, pipeline_idx: usize, filter: &str) {
+        assert_eq!(resolved.chain, chain, "chain mismatch for filter {filter}");
         assert_eq!(
-            f.pipeline_index, pipeline_idx,
+            resolved.chain_index, chain_idx,
+            "chain_index mismatch for filter {filter}"
+        );
+        assert_eq!(
+            resolved.pipeline_index, pipeline_idx,
             "pipeline_index mismatch for filter {filter}"
         );
-        assert_eq!(f.filter, filter, "filter type mismatch");
+        assert_eq!(resolved.filter, filter, "filter type mismatch");
     }
 }

@@ -33,7 +33,7 @@ Used by `praxis-core` and `praxis-protocol`.
 
 ```text
 praxis                          Binary entry point
-├── commands                    CLI helpers (--validate, --dump modes)
+├── commands                    CLI utilities (--validate, --dump modes)
 ├── dump                        Serializable effective config output
 ├── pipelines                   Config-to-runtime filter pipeline builder
 ├── reload                      Hot config reload and atomic pipeline swap
@@ -191,7 +191,7 @@ praxis-protocol                 Protocol adapters
 │           ├── hop_by_hop           Hop-by-hop header stripping (RFC 9110)
 │           ├── no_body              Handler without body filter hooks
 │           ├── normalize            Request header normalization
-│           ├── reserved_headers     Reserved internal header helpers
+│           ├── reserved_headers     Reserved internal header utilities
 │           ├── with_body            Handler with body filter hooks
 │           ├── request_filter/      Pipeline execution on request
 │           │   ├── stream_buffer    Pre-read logic for StreamBuffer mode

@@ -47,14 +47,16 @@ fn validate_identifier(value: &str, field: &str, cluster_name: &str) -> Result<(
             "cluster '{cluster_name}': {field} {value:?} exceeds {MAX_IDENTIFIER_LEN} bytes"
         )));
     }
-    let byte_allowed = |b: u8| b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'.' | b'_' | b'-');
+    let byte_allowed =
+        |byte: u8| byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'_' | b'-');
     if !value.bytes().all(byte_allowed) {
         return Err(ProxyError::Config(format!(
             "cluster '{cluster_name}': {field} {value:?} must use only lowercase ASCII \
              letters, digits, '.', '_', or '-'"
         )));
     }
-    let alnum_boundary = |b: Option<&u8>| b.is_some_and(|&b| b.is_ascii_lowercase() || b.is_ascii_digit());
+    let alnum_boundary =
+        |maybe_byte: Option<&u8>| maybe_byte.is_some_and(|&byte| byte.is_ascii_lowercase() || byte.is_ascii_digit());
     if !alnum_boundary(value.as_bytes().first()) || !alnum_boundary(value.as_bytes().last()) {
         return Err(ProxyError::Config(format!(
             "cluster '{cluster_name}': {field} {value:?} must start and end with a letter or digit"
@@ -73,6 +75,7 @@ fn validate_identifier(value: &str, field: &str, cluster_name: &str) -> Result<(
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::panic,
+    clippy::min_ident_chars,
     reason = "tests use unwrap/expect/panic for brevity"
 )]
 mod tests {

@@ -2,6 +2,12 @@
 // Copyright (c) 2024 Praxis Contributors
 
 //! Server bootstrap: protocol registration and startup.
+//!
+//! This module owns the server lifecycle from initial config load through protocol
+//! registration to the blocking `server.run()` call. Entry points expose progressively
+//! more control: [`run_server`] uses built-in filters, [`run_server_with_registry`]
+//! lets you inject custom filters, and [`run_server_with_composition`] exposes the full
+//! composition API for downstream pipeline extensions and validators.
 
 use std::{
     path::PathBuf,
@@ -37,6 +43,20 @@ use crate::{
     },
 };
 
+// -----------------------------------------------------------------------------
+// Constants
+// -----------------------------------------------------------------------------
+
+/// How often the sub-request circuit breaker eviction loop runs.
+const CIRCUIT_EVICTION_INTERVAL: Duration = Duration::from_secs(300); // 5 min
+
+/// How long a healthy breaker must sit idle before eviction.
+const CIRCUIT_IDLE_THRESHOLD: Duration = Duration::from_secs(600); // 10 min
+
+// -----------------------------------------------------------------------------
+// Startup Security Checks
+// -----------------------------------------------------------------------------
+
 /// Root, insecure-option, and file-permission checks before the server starts.
 fn run_startup_security_checks(config: &Config) {
     #[cfg(feature = "experimental")]
@@ -49,16 +69,6 @@ fn run_startup_security_checks(config: &Config) {
     warn_insecure_key_permissions(config);
     warn_insecure_log_file_permissions(config);
 }
-
-// -----------------------------------------------------------------------------
-// Constants
-// -----------------------------------------------------------------------------
-
-/// How often the sub-request circuit breaker eviction loop runs.
-const CIRCUIT_EVICTION_INTERVAL: Duration = Duration::from_secs(300); // 5 min
-
-/// How long a healthy breaker must sit idle before eviction.
-const CIRCUIT_IDLE_THRESHOLD: Duration = Duration::from_secs(600); // 10 min
 
 // -----------------------------------------------------------------------------
 // Config Path Resolution
@@ -78,6 +88,7 @@ pub fn resolve_config_path(explicit: Option<&str>) -> Option<PathBuf> {
     if let Some(path) = explicit {
         return Some(PathBuf::from(path));
     }
+
     let default_path = PathBuf::from("praxis.yaml");
     default_path.exists().then_some(default_path)
 }
@@ -86,8 +97,11 @@ pub fn resolve_config_path(explicit: Option<&str>) -> Option<PathBuf> {
 // Server
 // -----------------------------------------------------------------------------
 
-/// Build filter pipelines using built-in and auto-discovered external filters, register
-/// protocols and run the server.
+/// Standard server entry point with built-in filters only.
+///
+/// This convenience wrapper builds pipelines from the built-in filter registry and runs the
+/// server. Use [`run_server_with_registry`] when you need custom filters beyond the built-ins,
+/// or [`run_server_with_composition`] when you need downstream pipeline extensions or validators.
 ///
 /// # Security: Root Check
 ///
@@ -200,8 +214,12 @@ pub fn run_server_with_composition(
 // Server State
 // -----------------------------------------------------------------------------
 
-/// State built during server initialization and shared with the
-/// file watcher for hot reload.
+/// State built during server initialization and shared with the file watcher for hot reload.
+///
+/// This struct holds everything the hot-reload watcher needs to rebuild pipelines and swap them
+/// atomically without restarting the server: the current pipeline set, health registries,
+/// KV/session stores (preserved across reloads so filter state survives), and the downstream
+/// composition that tells the watcher how to rebuild pipelines on each config change.
 #[cfg_attr(
     not(feature = "config-reload"),
     expect(dead_code, reason = "several fields feed only the config-reload watcher")
@@ -209,20 +227,28 @@ pub fn run_server_with_composition(
 struct ServerState {
     /// Resolved filter pipelines per listener.
     pipelines: Arc<ListenerPipelines>,
+
     /// Hot-swappable listener metadata for admin `/api/pipelines`.
     listener_meta: praxis_protocol::http::pingora::health::ListenerMetaStore,
+
     /// Hot-swappable cluster metadata for admin `/api/stats`.
     cluster_meta: praxis_protocol::http::pingora::health::ClusterMetaStore,
+
     /// KV store registry.
     kv_stores: praxis_core::kv::KvStoreRegistry,
+
     /// Session store registry, preserved across reloads.
     session_stores: Arc<praxis_filter::SessionStoreRegistry>,
+
     /// Shared sub-request client for iterative sub-requests.
     subrequest_client: praxis_core::subrequest::SubRequestClient,
+
     /// Health check cancellation token.
     health_shutdown: Arc<Mutex<CancellationToken>>,
+
     /// Runtime log-level overlay state for admin API and reload.
     log_level: Option<Arc<LogLevelState>>,
+
     /// Downstream pipeline extensions and validators, re-applied on reload.
     pipeline_composition: PipelineComposition,
 }
@@ -245,6 +271,7 @@ fn build_server_state(
 ) -> (ServerState, FilterRegistry) {
     info!("building filter pipelines");
     let kv_stores = praxis_core::kv::KvStoreRegistry::new();
+
     // Shared with the CLI --validate/--dump path (commands.rs) so both build an
     // identical connector, including the circuit breaker (issue #994).
     let subrequest_client = crate::pipelines::build_subrequest_client(config);
@@ -252,12 +279,11 @@ fn build_server_state(
     // Build the downstream registry once, from immutable server context, then
     // reuse it across reloads. The factory is synchronous and side-effect-free.
     let (registry_factory, pipeline_composition) = composition.into_parts();
-    let registry = registry_factory(&RegistryContext::new(&subrequest_client)).unwrap_or_else(|e| fatal(&e));
+    let registry = registry_factory(&RegistryContext::new(&subrequest_client)).unwrap_or_else(|err| fatal(&err));
     #[cfg(not(feature = "policy-engine"))]
     warn_policy_filter_without_feature(&registry);
 
     let session_stores = Arc::new(praxis_filter::SessionStoreRegistry::new());
-
     let pipelines = resolve_pipelines_with_composition(
         config,
         &registry,
@@ -267,7 +293,8 @@ fn build_server_state(
         &subrequest_client,
         &pipeline_composition,
     )
-    .unwrap_or_else(|e| fatal(&e));
+    .unwrap_or_else(|err| fatal(&err));
+
     let listener_meta = praxis_protocol::http::pingora::health::new_listener_meta_store(
         praxis_protocol::http::pingora::health::listener_meta_from_config(config),
     );
@@ -293,6 +320,7 @@ fn build_server_state(
         log_level,
         pipeline_composition,
     };
+
     (state, registry)
 }
 
@@ -301,6 +329,10 @@ fn build_server_state(
 // -----------------------------------------------------------------------------
 
 /// Register HTTP and TCP protocol handlers with the Pingora server.
+///
+/// Only registers the protocols actually used by the config (skips HTTP registration if no
+/// HTTP listeners exist). Returns cert watcher shutdown handles so the server can stop file
+/// watches on exit.
 fn register_protocols(
     server: &mut PingoraServerRuntime,
     config: &Config,
@@ -308,24 +340,38 @@ fn register_protocols(
 ) -> CertWatcherShutdowns {
     let mut all_shutdowns = Vec::new();
 
-    if config.listeners.iter().any(|l| l.protocol == ProtocolKind::Http) {
+    if config
+        .listeners
+        .iter()
+        .any(|listener| listener.protocol == ProtocolKind::Http)
+    {
         let shutdowns = Box::new(PingoraHttp)
             .register(server, config, pipelines)
-            .unwrap_or_else(|e| fatal(&e));
+            .unwrap_or_else(|err| fatal(&err));
         all_shutdowns.extend(shutdowns);
     }
 
-    if config.listeners.iter().any(|l| l.protocol == ProtocolKind::Tcp) {
+    if config
+        .listeners
+        .iter()
+        .any(|listener| listener.protocol == ProtocolKind::Tcp)
+    {
         let shutdowns = Box::new(PingoraTcp)
             .register(server, config, pipelines)
-            .unwrap_or_else(|e| fatal(&e));
+            .unwrap_or_else(|err| fatal(&err));
         all_shutdowns.extend(shutdowns);
     }
 
     CertWatcherShutdowns::new(all_shutdowns)
 }
 
-/// Spawn the config file watcher if a config path is available.
+/// Spawn the config file watcher for hot reload if a config path is available.
+///
+/// The watcher monitors the config file and all referenced documents (external filter configs,
+/// policy files, etc.), debounces writes, validates the new config, rebuilds pipelines, and
+/// swaps them atomically via `ArcSwap` so in-flight requests see one consistent generation.
+/// Listener topology changes and protocol switches cannot be applied dynamically and are logged
+/// as warnings.
 #[cfg(feature = "config-reload")]
 fn spawn_watcher(
     config_path: Option<PathBuf>,
@@ -338,11 +384,13 @@ fn spawn_watcher(
     // built rather than reconstructed here: building a filter to interrogate it
     // would load its document and open network connections as a side effect.
     let referenced_files = state.pipelines.referenced_files();
+
     // The startup hash must cover the same set the reload gate covers, or the first
     // event after startup would see a hash mismatch that is an artifact of the two
     // being computed differently.
-    let initial_content_hash =
-        std::fs::read_to_string(&path).map_or(0, |c| crate::watcher::composite_hash(&c, &referenced_files));
+    let initial_content_hash = std::fs::read_to_string(&path).map_or(0, |contents| {
+        crate::watcher::composite_hash(&contents, &referenced_files)
+    });
     let handle = crate::watcher::spawn_config_watcher(crate::watcher::WatcherParams {
         config_path: path,
         health_shutdown: state.health_shutdown,
@@ -360,6 +408,7 @@ fn spawn_watcher(
         log_level: state.log_level,
         pipeline_composition: state.pipeline_composition,
     });
+
     Some(handle)
 }
 
@@ -395,6 +444,7 @@ fn register_admin_endpoints(
             }),
             verbose: config.admin.verbose,
         };
+
         praxis_protocol::http::pingora::health::add_admin_endpoints_to_pingora_server_with_recorder(
             server.server_mut(),
             admin_addr,
@@ -409,11 +459,16 @@ fn register_admin_endpoints(
 // -----------------------------------------------------------------------------
 
 /// Initialize global connection and memory limits from runtime config.
+///
+/// Called before pipeline construction so limits gate the entire server lifecycle. Connection
+/// limits guard against resource exhaustion from too many concurrent clients; memory thresholds
+/// enable pressure monitoring and backpressure.
 fn init_runtime_limits(runtime: &praxis_core::config::RuntimeConfig) {
     if let Some(max) = runtime.max_connections {
         praxis_protocol::connections::init_global_limit(usize::try_from(max).unwrap_or(usize::MAX));
         info!(max_connections = max, "global connection limit enabled");
     }
+
     if let Some(threshold) = runtime.max_memory_bytes {
         praxis_core::memory::init(threshold);
         info!(
@@ -441,8 +496,8 @@ where
     std::thread::spawn(move || {
         let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
             Ok(rt) => rt,
-            Err(e) => {
-                tracing::error!(runtime = runtime_name, error = %e, "failed to start background runtime");
+            Err(err) => {
+                tracing::error!(runtime = runtime_name, error = %err, "failed to start background runtime");
                 return;
             },
         };
@@ -478,7 +533,7 @@ fn spawn_health_check_tasks(
     let clusters: Vec<praxis_core::config::Cluster> = config
         .clusters
         .iter()
-        .filter(|c| c.health_check.is_some())
+        .filter(|cluster| cluster.health_check.is_some())
         .cloned()
         .collect();
 
@@ -488,12 +543,17 @@ fn spawn_health_check_tasks(
     });
 }
 
-/// Spawn the sub-request circuit breaker idle-eviction loop on its own
-/// runtime (see [`spawn_on_dedicated_runtime`]).
+/// Spawn the sub-request circuit breaker idle-eviction loop.
+///
+/// Runs every 5 minutes and evicts breakers that have been healthy and idle for 10 minutes,
+/// preventing the breaker map from growing unbounded when sub-request targets shift over time.
+/// Runs on its own runtime since no reactor is registered at startup time
+/// (see [`spawn_on_dedicated_runtime`]).
 fn spawn_circuit_eviction_task(client: praxis_core::subrequest::SubRequestClient) {
     spawn_on_dedicated_runtime("circuit breaker eviction runtime", async move {
         let mut interval = tokio::time::interval(CIRCUIT_EVICTION_INTERVAL);
         interval.tick().await; // skip immediate first tick
+
         loop {
             interval.tick().await;
             let evicted = client.evict_idle_circuits(CIRCUIT_IDLE_THRESHOLD);

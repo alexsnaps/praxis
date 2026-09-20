@@ -140,23 +140,25 @@ impl CidrRange {
     /// let range = CidrRange::parse("192.168.0.0/16").unwrap();
     /// assert!(CidrRange::parse("10.0.0.0/33").is_err());
     /// ```
-    pub fn parse(s: &str) -> Result<Self, String> {
-        let (addr_str, len_str) = s
+    pub fn parse(cidr: &str) -> Result<Self, String> {
+        let (addr_str, len_str) = cidr
             .split_once('/')
-            .ok_or_else(|| format!("invalid CIDR: {s} (missing /)"))?;
+            .ok_or_else(|| format!("invalid CIDR: {cidr} (missing /)"))?;
 
-        let addr: IpAddr = addr_str.parse().map_err(|e| format!("invalid IP in CIDR {s}: {e}"))?;
+        let addr: IpAddr = addr_str
+            .parse()
+            .map_err(|err| format!("invalid IP in CIDR {cidr}: {err}"))?;
 
         let prefix_len: u8 = len_str
             .parse()
-            .map_err(|e| format!("invalid prefix length in {s}: {e}"))?;
+            .map_err(|err| format!("invalid prefix length in {cidr}: {err}"))?;
 
         let max = match addr {
             IpAddr::V4(_) => 32,
             IpAddr::V6(_) => 128,
         };
         if prefix_len > max {
-            return Err(format!("prefix length {prefix_len} exceeds maximum {max} for {s}"));
+            return Err(format!("prefix length {prefix_len} exceeds maximum {max} for {cidr}"));
         }
 
         Ok(Self { addr, prefix_len })
@@ -229,7 +231,7 @@ fn v4_contains_mapped_v6(net: std::net::Ipv4Addr, candidate: std::net::Ipv6Addr,
 fn v6_contains_v4(net: std::net::Ipv6Addr, candidate: std::net::Ipv4Addr, prefix_len: u8) -> bool {
     net.to_ipv4_mapped()
         .filter(|_| prefix_len >= 96)
-        .is_some_and(|mapped| v4_contains(mapped, candidate, prefix_len - 96))
+        .is_some_and(|mapped| v4_contains(mapped, candidate, prefix_len.saturating_sub(96)))
 }
 
 /// Compute a 32-bit mask for the given IPv4 prefix length.
@@ -237,7 +239,7 @@ fn v4_mask(prefix_len: u8) -> u32 {
     if prefix_len == 0 {
         0
     } else {
-        u32::MAX << (32 - prefix_len)
+        u32::MAX << 32_u8.saturating_sub(prefix_len)
     }
 }
 
@@ -246,7 +248,7 @@ fn v6_mask(prefix_len: u8) -> u128 {
     if prefix_len == 0 {
         0
     } else {
-        u128::MAX << (128 - prefix_len)
+        u128::MAX << 128_u8.saturating_sub(prefix_len)
     }
 }
 
@@ -262,6 +264,7 @@ fn v6_mask(prefix_len: u8) -> u128 {
     clippy::indexing_slicing,
     clippy::needless_raw_strings,
     clippy::needless_raw_string_hashes,
+    clippy::min_ident_chars,
     reason = "tests use unwrap/expect/indexing/raw strings for brevity"
 )]
 mod tests {

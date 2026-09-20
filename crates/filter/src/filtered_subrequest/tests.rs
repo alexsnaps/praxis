@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Praxis Contributors
 
-//! Tests for the reusable filtered sub-request executor helpers.
+//! Tests for the reusable filtered sub-request executor utilities.
 //!
 //! These exercise the transport, sanitization, header-mutation, and
-//! nested-context helpers the executor owns, independent of any particular
+//! nested-context utilities the executor owns, independent of any particular
 //! caller (the iterative request router is the only caller today).
 
 use http::HeaderMap;
@@ -375,7 +375,7 @@ fn destination_host_rejects_unencodable_address() {
 }
 
 // -----------------------------------------------------------------------------
-// Header Mutation Helpers
+// Header Mutation Utilities
 // -----------------------------------------------------------------------------
 
 #[test]
@@ -1441,6 +1441,7 @@ async fn buffered_subrequest_context_inherits_parent_session_stores() {
     );
 }
 
+#[cfg(feature = "chain-binding")]
 #[tokio::test]
 #[expect(clippy::large_futures, reason = "drives the full executor future in a test")]
 async fn subrequest_binds_credentials_to_logical_authority_not_transport() {
@@ -1597,6 +1598,7 @@ async fn subrequest_sends_logical_authority_as_host_not_transport() {
     );
 }
 
+#[cfg(feature = "chain-binding")]
 #[tokio::test]
 #[expect(clippy::large_futures, reason = "drives the full executor future in a test")]
 async fn subrequest_credential_injection_pins_host_to_credential_authority() {
@@ -1682,6 +1684,7 @@ async fn subrequest_credential_injection_pins_host_to_credential_authority() {
     );
 }
 
+#[cfg(feature = "chain-binding")]
 #[tokio::test]
 #[expect(clippy::large_futures, reason = "drives the full executor future in a test")]
 async fn subrequest_unmatched_staged_credential_preserves_custom_host() {

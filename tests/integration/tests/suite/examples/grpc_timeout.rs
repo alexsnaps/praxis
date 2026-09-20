@@ -9,7 +9,7 @@ use praxis_core::config::Config;
 use praxis_test_utils::{GrpcBackend, free_port, http_send, parse_status, start_grpc_backend, start_proxy};
 
 // -----------------------------------------------------------------------------
-// Helpers
+// Utilities
 // -----------------------------------------------------------------------------
 
 /// Build a gRPC request, optionally carrying a `grpc-timeout`.

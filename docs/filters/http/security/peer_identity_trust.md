@@ -5,6 +5,8 @@
 
 Validates that the downstream mTLS peer identity matches a configured trusted peer before allowing the request to continue.
 
+Requires Cargo feature: `spiffe`.
+
 ## Configuration Notes
 
 Requests without a verified peer identity are rejected with 403. Requests with a peer identity that does not match any trusted peer entry are also rejected with 403.

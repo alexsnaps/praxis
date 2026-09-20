@@ -404,7 +404,7 @@ impl HttpFilter for GrpcWebFilter {
 }
 
 // -----------------------------------------------------------------------------
-// Helpers
+// Utilities
 // -----------------------------------------------------------------------------
 
 /// Build the trailer map for a response that carried no gRPC status.

@@ -3,7 +3,7 @@
 
 //! Utility functions for HTTP pipeline execution.
 //!
-//! Provides the per-filter dispatch helpers called by the execution
+//! Provides the per-filter dispatch utilities called by the execution
 //! loops in [`http`]: `run_request_filter`, `run_response_filter`,
 //! and their body-phase counterparts. Also handles body byte
 //! accumulation, response condition evaluation, failure-mode

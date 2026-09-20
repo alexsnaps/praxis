@@ -50,9 +50,9 @@ const MAX_YAML_READ_BYTES: u64 = 4_194_305; // MAX_YAML_BYTES + 1
 ///
 /// [`ProxyError::Config`]: crate::errors::ProxyError::Config
 pub(crate) fn check_file_size(path: &Path) -> Result<(), ProxyError> {
-    let meta = std::fs::metadata(path).map_err(|e| {
+    let meta = std::fs::metadata(path).map_err(|err| {
         let display = path.display();
-        ProxyError::Config(format!("failed to read metadata for {display}: {e}"))
+        ProxyError::Config(format!("failed to read metadata for {display}: {err}"))
     })?;
 
     // Reject non-regular files (character devices, FIFOs, sockets,
@@ -90,16 +90,16 @@ pub(crate) fn check_file_size(path: &Path) -> Result<(), ProxyError> {
 /// [`ProxyError::Config`]: crate::errors::ProxyError::Config
 pub fn read_config_file(path: &Path) -> Result<String, ProxyError> {
     check_file_size(path)?;
-    let file = std::fs::File::open(path).map_err(|e| {
+    let file = std::fs::File::open(path).map_err(|err| {
         let display = path.display();
-        ProxyError::Config(format!("failed to read {display}: {e}"))
+        ProxyError::Config(format!("failed to read {display}: {err}"))
     })?;
     let mut content = String::new();
     file.take(MAX_YAML_READ_BYTES)
         .read_to_string(&mut content)
-        .map_err(|e| {
+        .map_err(|err| {
             let display = path.display();
-            ProxyError::Config(format!("failed to read {display}: {e}"))
+            ProxyError::Config(format!("failed to read {display}: {err}"))
         })?;
     Ok(content)
 }
@@ -165,7 +165,7 @@ fn reject_yaml_aliases(raw: &str) -> Result<(), ProxyError> {
         Some(idx) => Err(ProxyError::Config(format!(
             "YAML alias nodes (`*anchor`) are not supported (line {}); \
              they enable alias-expansion denial-of-service and are not used by any Praxis config",
-            idx + 1
+            idx.saturating_add(1)
         ))),
         None => Ok(()),
     }
@@ -180,31 +180,31 @@ fn line_contains_alias(line: &str) -> bool {
     let (mut at_boundary, mut prev_ws) = (true, true);
     let mut quote: Option<u8> = None;
     let (mut prev_star, mut escaped) = (false, false);
-    for &c in line.as_bytes() {
+    for &byte in line.as_bytes() {
         // An alias node is `*` at a node boundary followed by an
         // anchor-name character; check the char after a boundary `*`.
-        if prev_star && (c.is_ascii_alphanumeric() || c == b'_') {
+        if prev_star && (byte.is_ascii_alphanumeric() || byte == b'_') {
             return true;
         }
         prev_star = false;
-        if let Some(q) = quote {
-            let close = c == q && !escaped;
-            escaped = q == b'"' && c == b'\\' && !escaped;
-            quote = (!close).then_some(q);
+        if let Some(quote_char) = quote {
+            let close = byte == quote_char && !escaped;
+            escaped = quote_char == b'"' && byte == b'\\' && !escaped;
+            quote = (!close).then_some(quote_char);
             at_boundary = false;
         } else {
-            match c {
+            match byte {
                 // A comment only starts after whitespace (or line start);
                 // a mid-scalar `#` (e.g. `a#b`) is scalar content.
                 b'#' if prev_ws => return false,
                 // A quoted scalar only starts at a node boundary; a
                 // mid-scalar quote (e.g. `don't`) is scalar content.
-                b'\'' | b'"' if at_boundary => (quote, at_boundary) = (Some(c), false),
+                b'\'' | b'"' if at_boundary => (quote, at_boundary) = (Some(byte), false),
                 b'*' if at_boundary => prev_star = true,
-                _ => at_boundary = matches!(c, b' ' | b'\t' | b'[' | b'{' | b',' | b':' | b'-'),
+                _ => at_boundary = matches!(byte, b' ' | b'\t' | b'[' | b'{' | b',' | b':' | b'-'),
             }
         }
-        prev_ws = matches!(c, b' ' | b'\t');
+        prev_ws = matches!(byte, b' ' | b'\t');
     }
     false
 }
@@ -350,5 +350,226 @@ mod tests {
     fn alias_line_number_reported() {
         let err = reject_yaml_aliases("listeners: []\nfoo: bar\nbomb: *a\n").unwrap_err();
         assert!(err.to_string().contains("line 3"), "got: {err}");
+    }
+
+    #[test]
+    fn check_file_size_nonexistent_file() {
+        let path = Path::new("/nonexistent/path/to/file.yaml");
+        let err = check_file_size(path).unwrap_err();
+        assert!(
+            err.to_string().contains("failed to read metadata"),
+            "error should mention metadata failure, got: {err}"
+        );
+    }
+
+    #[test]
+    fn read_config_file_nonexistent() {
+        let path = Path::new("/nonexistent/path/to/file.yaml");
+        let err = read_config_file(path).unwrap_err();
+        assert!(
+            err.to_string().contains("failed to read metadata") || err.to_string().contains("failed to read"),
+            "error should mention read failure, got: {err}"
+        );
+    }
+
+    #[test]
+    fn read_config_file_oversized() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let path = dir.path().join("huge.yaml");
+        let huge_content = "x".repeat(5 * 1024 * 1024);
+        std::fs::write(&path, huge_content).expect("write huge file");
+
+        let err = read_config_file(&path).expect_err("oversized file should be rejected");
+        assert!(
+            err.to_string().contains("too large"),
+            "error should mention size limit, got: {err}"
+        );
+    }
+
+    #[test]
+    fn reject_alias_on_first_line() {
+        let err = reject_yaml_aliases("bomb: *anchor\nlisteners: []\n");
+        assert!(err.is_err(), "alias on first line should be rejected");
+        let err_msg = err.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("line 1"),
+            "error should reference line 1, got: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn reject_alias_on_last_line() {
+        let err = reject_yaml_aliases("listeners: []\nfoo: bar\nlast: *ref");
+        assert!(err.is_err(), "alias on last line should be rejected");
+    }
+
+    #[test]
+    fn reject_multiple_aliases_same_line() {
+        let err = reject_yaml_aliases("a: &a x\nb: [*a, *a, *a]\n");
+        assert!(err.is_err(), "multiple aliases on same line should be rejected");
+    }
+
+    #[test]
+    fn accept_asterisk_after_colon() {
+        reject_yaml_aliases("url: http://*\n").expect("asterisk after colon in URL should pass");
+    }
+
+    #[test]
+    fn accept_asterisk_in_bracket() {
+        reject_yaml_aliases("patterns: [*.txt, *.md]\n").expect("asterisk in array should pass");
+    }
+
+    #[test]
+    fn reject_alias_after_comma() {
+        let err = reject_yaml_aliases("a: &a x\nb: [foo, *a]\n");
+        assert!(err.is_err(), "alias after comma should be rejected");
+    }
+
+    #[test]
+    fn reject_alias_after_bracket() {
+        let err = reject_yaml_aliases("a: &a x\nb: [*a]\n");
+        assert!(err.is_err(), "alias after opening bracket should be rejected");
+    }
+
+    #[test]
+    fn reject_alias_after_brace() {
+        let err = reject_yaml_aliases("a: &a x\nb: {key: *a}\n");
+        assert!(err.is_err(), "alias after opening brace should be rejected");
+    }
+
+    #[test]
+    fn reject_alias_after_dash() {
+        let err = reject_yaml_aliases("a: &a x\nlist:\n  - *a\n");
+        assert!(err.is_err(), "alias after dash should be rejected");
+    }
+
+    #[test]
+    fn accept_single_quoted_asterisk() {
+        reject_yaml_aliases("pattern: '*'\n").expect("single-quoted asterisk should pass");
+    }
+
+    #[test]
+    fn accept_double_quoted_asterisk() {
+        reject_yaml_aliases("pattern: \"*\"\n").expect("double-quoted asterisk should pass");
+    }
+
+    #[test]
+    fn accept_asterisk_with_spaces() {
+        reject_yaml_aliases("glob: * .txt\n").expect("asterisk followed by space should pass (not anchor name)");
+    }
+
+    #[test]
+    fn reject_alias_with_underscore() {
+        let err = reject_yaml_aliases("a: &my_anchor x\nb: *my_anchor\n");
+        assert!(err.is_err(), "alias with underscore should be rejected");
+    }
+
+    #[test]
+    fn reject_alias_with_digits() {
+        let err = reject_yaml_aliases("a: &anchor123 x\nb: *anchor123\n");
+        assert!(err.is_err(), "alias with digits should be rejected");
+    }
+
+    #[test]
+    fn accept_asterisk_before_non_anchor_char() {
+        reject_yaml_aliases("math: 2 * 3\n").expect("asterisk before space should pass");
+        reject_yaml_aliases("glob: *.\n").expect("asterisk before dot should pass (not alphanumeric or underscore)");
+    }
+
+    #[test]
+    fn reject_alias_at_line_start() {
+        let err = reject_yaml_aliases("a: &a x\n*a\n");
+        assert!(err.is_err(), "alias at line start should be rejected");
+    }
+
+    #[test]
+    fn accept_double_asterisk_glob() {
+        reject_yaml_aliases("pattern: '**/*.txt'\n").expect("double asterisk in glob pattern should pass");
+    }
+
+    #[test]
+    fn accept_escaped_backslash_in_double_quote() {
+        reject_yaml_aliases("path: \"C:\\\\*\"\n").expect("escaped backslash with asterisk should pass");
+    }
+
+    #[test]
+    fn accept_multiple_quotes_same_line() {
+        reject_yaml_aliases("a: \"x\" b: 'y' c: \"*\"\n").expect("multiple quoted values with asterisk should pass");
+    }
+
+    #[test]
+    fn accept_comment_with_asterisk_after_whitespace() {
+        reject_yaml_aliases("key: value  # *not an alias\n").expect("asterisk in comment after spaces should pass");
+    }
+
+    #[test]
+    fn accept_comment_with_asterisk_after_tab() {
+        reject_yaml_aliases("key: value\t# *not an alias\n").expect("asterisk in comment after tab should pass");
+    }
+
+    #[test]
+    fn check_yaml_safety_combines_checks() {
+        check_yaml_safety("listeners: []\n").expect("valid YAML should pass all safety checks");
+
+        let huge = "x".repeat(5 * 1024 * 1024);
+        let err = check_yaml_safety(&huge).unwrap_err();
+        assert!(
+            err.to_string().contains("too large"),
+            "oversized should fail safety check"
+        );
+
+        let alias_err = check_yaml_safety("a: &a x\nb: *a\n").unwrap_err();
+        assert!(
+            alias_err.to_string().contains("alias"),
+            "alias should fail safety check"
+        );
+    }
+
+    #[test]
+    fn line_contains_alias_handles_tabs() {
+        assert!(
+            !line_contains_alias("key:\t*.txt"),
+            "tab before asterisk-glob should pass"
+        );
+        assert!(line_contains_alias("\t*anchor"), "tab before alias should detect");
+    }
+
+    #[test]
+    fn line_contains_alias_escaped_backslash_then_asterisk() {
+        assert!(
+            !line_contains_alias("path: \"\\\\*\""),
+            "escaped backslash followed by asterisk inside quotes should pass"
+        );
+    }
+
+    #[test]
+    fn accept_yaml_with_only_anchor_no_alias() {
+        reject_yaml_aliases("a: &anchor value\nb: &another value\nlisteners: []\n")
+            .expect("multiple anchors without aliases should pass");
+    }
+
+    #[test]
+    fn file_at_exact_boundary() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let path = dir.path().join("exact.yaml");
+        let exact_content = "x".repeat(MAX_YAML_BYTES);
+        std::fs::write(&path, &exact_content).expect("write exact size file");
+
+        let content = read_config_file(&path).expect("file at exact MAX_YAML_BYTES should be readable");
+        assert_eq!(content.len(), MAX_YAML_BYTES, "content should be complete");
+    }
+
+    #[test]
+    fn file_two_bytes_over_boundary() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let path = dir.path().join("over.yaml");
+        let over_content = "x".repeat(MAX_YAML_BYTES + 2);
+        std::fs::write(&path, over_content).expect("write over-size file");
+
+        let err = read_config_file(&path).expect_err("file two bytes over MAX_YAML_BYTES should be rejected");
+        assert!(
+            err.to_string().contains("too large"),
+            "error should mention size limit, got: {err}"
+        );
     }
 }

@@ -974,7 +974,7 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
-    // Hot-Reload Pipeline Pinning (via production helpers)
+    // Hot-Reload Pipeline Pinning (via production utilities)
     // -------------------------------------------------------------------------
 
     #[test]
@@ -1077,7 +1077,7 @@ mod tests {
     }
 
     #[test]
-    fn pipeline_helper_returns_pinned_for_every_phase() {
+    fn pipeline_utility_returns_pinned_for_every_phase() {
         let registry = FilterRegistry::with_builtins();
         let pipeline_a = Arc::new(FilterPipeline::build(&mut [], &registry).unwrap());
         let swap = arc_swap::ArcSwap::from(Arc::clone(&pipeline_a));

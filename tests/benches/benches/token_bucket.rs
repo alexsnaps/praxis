@@ -19,7 +19,7 @@
 // token-bucket internals part of the filter crate's public API.
 #[expect(
     dead_code,
-    reason = "the included implementation also contains non-benchmarked introspection and test helpers"
+    reason = "the included implementation also contains non-benchmarked introspection and test utilities"
 )]
 #[path = "../../../crates/filter/src/builtins/http/traffic_management/token_bucket.rs"]
 mod production_token_bucket;

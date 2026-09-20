@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Praxis Contributors
 
-//! Reserved internal header helpers for proxy-owned routing metadata.
+//! Reserved internal header utilities for proxy-owned routing metadata.
 //!
 //! Headers prefixed with `x-praxis-` and AI extension prefixes are
 //! proxy-internal routing metadata that must never be forwarded to

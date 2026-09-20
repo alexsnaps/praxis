@@ -692,7 +692,7 @@ impl HttpFilter for AccessLogFilter {
 }
 
 // -----------------------------------------------------------------------------
-// Config validation helpers
+// Config validation utilities
 // -----------------------------------------------------------------------------
 
 fn normalize_header_names(names: Option<&[String]>) -> Result<HashSet<String>, FilterError> {

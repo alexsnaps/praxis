@@ -222,7 +222,7 @@ impl KvLookup {
     /// [`StoreNotFound`]: KvLookup::StoreNotFound
     pub fn into_value(self) -> Option<Arc<str>> {
         match self {
-            Self::Value(v) => Some(v),
+            Self::Value(value) => Some(value),
             Self::KeyNotFound | Self::StoreNotFound => None,
         }
     }
@@ -286,7 +286,7 @@ impl KvStoreRegistry {
     /// assert!(registry.get("test").is_some());
     /// ```
     pub fn get(&self, name: &str) -> Option<Arc<dyn KvBackend>> {
-        self.stores.get(name).map(|r| Arc::clone(r.value()))
+        self.stores.get(name).map(|entry| Arc::clone(entry.value()))
     }
 
     /// Get an existing store or create a new empty one.
@@ -358,7 +358,7 @@ impl KvStoreRegistry {
             return KvLookup::StoreNotFound;
         };
         match backend.get(key) {
-            Some(v) => KvLookup::Value(v),
+            Some(value) => KvLookup::Value(value),
             None => KvLookup::KeyNotFound,
         }
     }
@@ -376,7 +376,7 @@ impl KvStoreRegistry {
     /// assert_eq!(names.len(), 2);
     /// ```
     pub fn store_names(&self) -> Vec<Arc<str>> {
-        self.stores.iter().map(|e| Arc::clone(e.key())).collect()
+        self.stores.iter().map(|entry| Arc::clone(entry.key())).collect()
     }
 
     /// Number of stores in the registry.
@@ -559,26 +559,26 @@ mod tests {
 
     #[test]
     fn kv_lookup_is_value() {
-        let v = KvLookup::Value(Arc::from("x"));
-        assert!(v.is_value());
-        assert!(!v.is_key_not_found());
-        assert!(!v.is_store_not_found());
+        let value = KvLookup::Value(Arc::from("x"));
+        assert!(value.is_value());
+        assert!(!value.is_key_not_found());
+        assert!(!value.is_store_not_found());
     }
 
     #[test]
     fn kv_lookup_is_key_not_found() {
-        let v = KvLookup::KeyNotFound;
-        assert!(!v.is_value());
-        assert!(v.is_key_not_found());
-        assert!(!v.is_store_not_found());
+        let value = KvLookup::KeyNotFound;
+        assert!(!value.is_value());
+        assert!(value.is_key_not_found());
+        assert!(!value.is_store_not_found());
     }
 
     #[test]
     fn kv_lookup_is_store_not_found() {
-        let v = KvLookup::StoreNotFound;
-        assert!(!v.is_value());
-        assert!(!v.is_key_not_found());
-        assert!(v.is_store_not_found());
+        let value = KvLookup::StoreNotFound;
+        assert!(!value.is_value());
+        assert!(!value.is_key_not_found());
+        assert!(value.is_store_not_found());
     }
 
     #[test]
@@ -592,7 +592,7 @@ mod tests {
         .take(10)
         .collect();
 
-        let stores: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+        let stores: Vec<_> = handles.into_iter().map(|handle| handle.join().unwrap()).collect();
 
         assert_eq!(
             registry.len(),

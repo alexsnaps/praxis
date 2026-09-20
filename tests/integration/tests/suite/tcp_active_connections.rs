@@ -13,7 +13,7 @@ use praxis_core::config::Config;
 use praxis_test_utils::{free_port, http_get, start_full_proxy, start_tcp_tagged_backend, wait_for_tcp};
 
 // -----------------------------------------------------------------------------
-// Helpers
+// Utilities
 // -----------------------------------------------------------------------------
 
 pub(crate) fn gauge_value(body: &str, listener: &str) -> Option<f64> {

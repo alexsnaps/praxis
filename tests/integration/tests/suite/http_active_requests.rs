@@ -9,7 +9,7 @@ use praxis_core::config::Config;
 use praxis_test_utils::{free_port, http_get, start_backend_with_shutdown, start_proxy, wait_for_tcp};
 
 // -----------------------------------------------------------------------------
-// Helpers
+// Utilities
 // -----------------------------------------------------------------------------
 
 fn series_value(body: &str, metric: &str, listener: &str) -> f64 {

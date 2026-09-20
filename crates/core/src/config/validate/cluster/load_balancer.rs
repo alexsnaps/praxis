@@ -24,7 +24,7 @@ pub(in crate::config::validate) fn validate_lb_strategy(cluster: &Cluster) -> Re
             let entries: u64 = cluster
                 .endpoints
                 .iter()
-                .map(|ep| u64::from(ep.weight()) * u64::from(opts.virtual_nodes))
+                .map(|ep| u64::from(ep.weight()).saturating_mul(u64::from(opts.virtual_nodes)))
                 .sum();
             if entries > MAX_RING_ENTRIES {
                 return Err(ProxyError::Config(format!(

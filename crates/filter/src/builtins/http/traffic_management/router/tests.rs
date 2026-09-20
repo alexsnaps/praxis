@@ -8,9 +8,10 @@ use std::collections::HashMap;
 use http::{HeaderMap, HeaderValue};
 use praxis_core::config::{PathMatch, Route};
 
+#[cfg(feature = "router-json-aliases")]
+use super::config::{JsonAlias, RouterConfig, RouterRouteConfig};
 use super::{
     ResolvedRoute, RouterFilter,
-    config::{JsonAlias, RouterConfig, RouterRouteConfig},
     matching::{route_matches_request, should_stop_early, update_best_match},
 };
 use crate::{FilterAction, filter::HttpFilter as _};
@@ -1601,6 +1602,34 @@ fn mixed_exact_and_prefix_ordering() {
 // JSON Alias Validation Tests
 // -----------------------------------------------------------------------------
 
+// Default build (feature off): the json_aliases keys are not part of the
+// router schema at all, so a config that sets them is rejected as an unknown
+// field rather than silently ignored or accepted-then-rejected.
+#[cfg(not(feature = "router-json-aliases"))]
+#[test]
+fn json_aliases_key_is_unknown_without_feature() {
+    let yaml: serde_yaml::Value = serde_yaml::from_str(
+        r#"
+routes:
+  - path_prefix: "/"
+    cluster: default
+    json_aliases:
+      - field: model
+        match: fast
+"#,
+    )
+    .unwrap();
+    let Err(err) = RouterFilter::from_config(&yaml) else {
+        panic!("json_aliases must be rejected when the router-json-aliases feature is off");
+    };
+    let msg = err.to_string();
+    assert!(
+        msg.contains("unknown field") && msg.contains("json_aliases"),
+        "json_aliases must be rejected as an unknown field when the feature is off: {msg}"
+    );
+}
+
+#[cfg(feature = "router-json-aliases")]
 #[test]
 fn json_alias_validation_empty_aliases_rejected() {
     let err = RouterFilter::with_alias_options(
@@ -1615,6 +1644,7 @@ fn json_alias_validation_empty_aliases_rejected() {
     );
 }
 
+#[cfg(feature = "router-json-aliases")]
 #[test]
 fn json_alias_validation_empty_field_rejected() {
     let err = RouterFilter::with_alias_options(
@@ -1637,6 +1667,7 @@ fn json_alias_validation_empty_field_rejected() {
     );
 }
 
+#[cfg(feature = "router-json-aliases")]
 #[test]
 fn json_alias_validation_empty_pattern_rejected() {
     let err = RouterFilter::with_alias_options(
@@ -1659,6 +1690,7 @@ fn json_alias_validation_empty_pattern_rejected() {
     );
 }
 
+#[cfg(feature = "router-json-aliases")]
 #[test]
 fn json_alias_validation_multiple_wildcards_rejected() {
     let err = RouterFilter::with_alias_options(
@@ -1681,6 +1713,7 @@ fn json_alias_validation_multiple_wildcards_rejected() {
     );
 }
 
+#[cfg(feature = "router-json-aliases")]
 #[test]
 fn json_alias_validation_empty_target_rejected() {
     let err = RouterFilter::with_alias_options(
@@ -1703,6 +1736,7 @@ fn json_alias_validation_empty_target_rejected() {
     );
 }
 
+#[cfg(feature = "router-json-aliases")]
 #[test]
 fn json_aliases_are_rejected_at_construction() {
     let err = RouterFilter::with_alias_options(
@@ -1726,6 +1760,7 @@ fn json_aliases_are_rejected_at_construction() {
     );
 }
 
+#[cfg(feature = "router-json-aliases")]
 #[test]
 fn json_alias_rejection_names_the_first_offending_route() {
     let err = RouterFilter::with_alias_options(
@@ -1744,6 +1779,7 @@ fn json_alias_rejection_names_the_first_offending_route() {
     );
 }
 
+#[cfg(feature = "router-json-aliases")]
 #[test]
 fn routes_without_aliases_are_unaffected() {
     let filter = RouterFilter::with_alias_options(
@@ -1756,6 +1792,7 @@ fn routes_without_aliases_are_unaffected() {
     assert_eq!(filter.routes.len(), 1, "route table should be built as usual");
 }
 
+#[cfg(feature = "router-json-aliases")]
 #[test]
 fn json_alias_from_config_parses_global_options() {
     let cfg = parse_json_alias_config();
@@ -1765,6 +1802,7 @@ fn json_alias_from_config_parses_global_options() {
     assert_eq!(cfg.routes.len(), 3, "should parse 3 routes");
 }
 
+#[cfg(feature = "router-json-aliases")]
 #[test]
 fn json_alias_from_config_parses_first_route_alias() {
     let cfg = parse_json_alias_config();
@@ -1778,6 +1816,7 @@ fn json_alias_from_config_parses_first_route_alias() {
     assert_eq!(aliases[0].target.as_deref(), Some("model-fast"), "first alias target");
 }
 
+#[cfg(feature = "router-json-aliases")]
 #[test]
 fn json_alias_from_config_parses_second_route_alias() {
     let cfg = parse_json_alias_config();
@@ -1791,6 +1830,7 @@ fn json_alias_from_config_parses_second_route_alias() {
     assert_eq!(aliases[0].target.as_deref(), Some("tenant-fast"), "second alias target");
 }
 
+#[cfg(feature = "router-json-aliases")]
 #[test]
 fn json_alias_from_config_parses_fallback_without_aliases() {
     let cfg = parse_json_alias_config();
@@ -1800,6 +1840,7 @@ fn json_alias_from_config_parses_fallback_without_aliases() {
     assert!(third.json_aliases.is_none(), "fallback should have no aliases");
 }
 
+#[cfg(feature = "router-json-aliases")]
 #[test]
 fn json_alias_from_config_is_rejected() {
     let yaml = serde_yaml::from_str::<serde_yaml::Value>(json_alias_config_yaml()).unwrap();
@@ -1813,6 +1854,7 @@ fn json_alias_from_config_is_rejected() {
     );
 }
 
+#[cfg(feature = "router-json-aliases")]
 #[test]
 fn json_alias_from_config_uses_defaults() {
     let cfg: RouterConfig = serde_yaml::from_str(
@@ -1840,6 +1882,7 @@ routes:
     );
 }
 
+#[cfg(feature = "router-json-aliases")]
 #[test]
 fn json_alias_validate_invalid_header_name_rejected() {
     let err = RouterFilter::with_alias_options(
@@ -1858,6 +1901,7 @@ fn json_alias_validate_invalid_header_name_rejected() {
     );
 }
 
+#[cfg(feature = "router-json-aliases")]
 #[test]
 fn json_alias_validate_zero_max_bytes_rejected() {
     let err = RouterFilter::with_alias_options(
@@ -1876,6 +1920,7 @@ fn json_alias_validate_zero_max_bytes_rejected() {
     );
 }
 
+#[cfg(feature = "router-json-aliases")]
 #[test]
 fn json_alias_validate_max_bytes_above_upper_bound_rejected() {
     let err = RouterFilter::with_alias_options(
@@ -1894,6 +1939,7 @@ fn json_alias_validate_max_bytes_above_upper_bound_rejected() {
     );
 }
 
+#[cfg(feature = "router-json-aliases")]
 #[test]
 fn json_alias_max_bytes_at_upper_bound_passes_bounds_check() {
     let err = RouterFilter::with_alias_options(
@@ -1921,6 +1967,7 @@ fn make_router(routes: Vec<Route>) -> RouterFilter {
     RouterFilter::new(routes).expect("test routes should be valid")
 }
 
+#[cfg(feature = "router-json-aliases")]
 fn json_alias_config_yaml() -> &'static str {
     r#"
 json_alias_header: X-AI-Model
@@ -1943,6 +1990,7 @@ routes:
 "#
 }
 
+#[cfg(feature = "router-json-aliases")]
 fn parse_json_alias_config() -> RouterConfig {
     serde_yaml::from_str(json_alias_config_yaml()).unwrap()
 }
@@ -1969,6 +2017,7 @@ fn exact_route(path: &str, cluster: &str) -> Route {
     }
 }
 
+#[cfg(feature = "router-json-aliases")]
 fn router_route(prefix: &str, cluster: &str, json_aliases: Option<Vec<JsonAlias>>) -> RouterRouteConfig {
     RouterRouteConfig {
         route: prefix_route(prefix, cluster),
@@ -1976,6 +2025,7 @@ fn router_route(prefix: &str, cluster: &str, json_aliases: Option<Vec<JsonAlias>
     }
 }
 
+#[cfg(feature = "router-json-aliases")]
 fn json_alias_route(prefix: &str, cluster: &str, aliases: Vec<(&str, &str, Option<&str>)>) -> RouterRouteConfig {
     router_route(
         prefix,

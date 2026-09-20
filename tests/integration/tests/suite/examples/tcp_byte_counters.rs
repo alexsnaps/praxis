@@ -85,7 +85,7 @@ fn tcp_byte_counters_example_forwards_traffic() {
 }
 
 // -----------------------------------------------------------------------------
-// Helpers
+// Utilities
 // -----------------------------------------------------------------------------
 
 fn send_and_close(proxy_port: u16, payload: &[u8]) -> String {

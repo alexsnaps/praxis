@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Praxis Contributors
 
-//! Shared config validation helpers for payload processing filters.
+//! Shared config validation utilities for payload processing filters.
 
 use crate::{FilterError, body::MAX_JSON_BODY_BYTES};
 

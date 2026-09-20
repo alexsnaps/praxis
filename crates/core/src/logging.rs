@@ -63,8 +63,8 @@ impl Drop for TracingGuard {
         #[cfg(feature = "otel")]
         if let Some(provider) = self.provider.take() {
             #[expect(clippy::print_stderr, reason = "tracing subscriber is being torn down")]
-            if let Err(e) = provider.shutdown() {
-                eprintln!("failed to shut down OTel tracer provider: {e}");
+            if let Err(err) = provider.shutdown() {
+                eprintln!("failed to shut down OTel tracer provider: {err}");
             }
         }
 
@@ -104,7 +104,7 @@ pub fn init_tracing(config: &Config) -> Result<TracingGuard, ProxyError> {
     let (filter_layer, reload_handle) = reload::Layer::new(env_filter);
     let log_level = LogLevelState::new(baseline, reload_handle);
 
-    let json = std::env::var("PRAXIS_LOG_FORMAT").is_ok_and(|v| v.eq_ignore_ascii_case("json"));
+    let json = std::env::var("PRAXIS_LOG_FORMAT").is_ok_and(|value| value.eq_ignore_ascii_case("json"));
     let telemetry = config.telemetry.resolve();
     let writer_bundle = writer::build_log_writer(&config.runtime.logging)?;
 
@@ -236,7 +236,7 @@ mod writer {
         ensure_parent_dir(&path)?;
         let raw: Box<dyn Write + Send + Sync> = Box::new(
             open_append_file(&path)
-                .map_err(|e| ProxyError::Config(format!("failed to open log file '{}': {e}", path.display())))?,
+                .map_err(|err| ProxyError::Config(format!("failed to open log file '{}': {err}", path.display())))?,
         );
 
         if cfg.non_blocking {
@@ -279,7 +279,7 @@ mod writer {
             return Ok(());
         }
         fs::create_dir_all(parent)
-            .map_err(|e| ProxyError::Config(format!("failed to create log directory '{}': {e}", parent.display())))
+            .map_err(|err| ProxyError::Config(format!("failed to create log directory '{}': {err}", parent.display())))
     }
 
     /// Mutex-backed synchronous writer used when `non_blocking: false`.
@@ -329,7 +329,7 @@ fn init_with_otel(
     if json {
         let otel_layer = provider
             .as_ref()
-            .map(|p| tracing_opentelemetry::layer().with_tracer(p.tracer("praxis")));
+            .map(|tracer_provider| tracing_opentelemetry::layer().with_tracer(tracer_provider.tracer("praxis")));
         tracing_subscriber::registry()
             .with(filter_layer)
             .with(
@@ -344,7 +344,7 @@ fn init_with_otel(
     } else {
         let otel_layer = provider
             .as_ref()
-            .map(|p| tracing_opentelemetry::layer().with_tracer(p.tracer("praxis")));
+            .map(|tracer_provider| tracing_opentelemetry::layer().with_tracer(tracer_provider.tracer("praxis")));
         tracing_subscriber::registry()
             .with(filter_layer)
             .with(tracing_subscriber::fmt::layer().with_writer(writer))
@@ -456,7 +456,7 @@ fn build_exporter_runtime() -> Result<::tokio::runtime::Runtime, ProxyError> {
         .worker_threads(1)
         .enable_all()
         .build()
-        .map_err(|e| ProxyError::Config(format!("failed to create OTel runtime: {e}")))
+        .map_err(|err| ProxyError::Config(format!("failed to create OTel runtime: {err}")))
 }
 
 // -----------------------------------------------------------------------------
@@ -469,7 +469,7 @@ fn build_exporter_runtime() -> Result<::tokio::runtime::Runtime, ProxyError> {
 fn resolve_otlp_protocol() -> String {
     std::env::var(crate::config::OTLP_PROTOCOL_ENV_VAR)
         .ok()
-        .filter(|s| !s.trim().is_empty())
+        .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| "grpc".to_owned())
 }
 
@@ -507,7 +507,7 @@ fn build_grpc_exporter(
 
     builder
         .build()
-        .map_err(|e| ProxyError::Config(format!("failed to build OTLP gRPC exporter: {e}")))
+        .map_err(|err| ProxyError::Config(format!("failed to build OTLP gRPC exporter: {err}")))
 }
 
 /// Build an HTTP/protobuf OTLP span exporter.
@@ -533,7 +533,7 @@ fn build_http_exporter(
 
     builder
         .build()
-        .map_err(|e| ProxyError::Config(format!("failed to build OTLP HTTP exporter: {e}")))
+        .map_err(|err| ProxyError::Config(format!("failed to build OTLP HTTP exporter: {err}")))
 }
 
 /// Append `/v1/traces` to the endpoint if it has no path component.
@@ -647,13 +647,13 @@ fn build_metadata_map(
     headers: &std::collections::HashMap<String, String>,
 ) -> Result<tonic::metadata::MetadataMap, ProxyError> {
     let mut metadata = tonic::metadata::MetadataMap::new();
-    for (key, value) in headers {
+    for (key, value) in headers.iter().collect::<std::collections::BTreeMap<_, _>>() {
         let name: tonic::metadata::MetadataKey<tonic::metadata::Ascii> = key
             .parse()
-            .map_err(|e| ProxyError::Config(format!("invalid OTLP header name '{key}': {e}")))?;
+            .map_err(|err| ProxyError::Config(format!("invalid OTLP header name '{key}': {err}")))?;
         let val: tonic::metadata::MetadataValue<tonic::metadata::Ascii> = value
             .parse()
-            .map_err(|e| ProxyError::Config(format!("invalid OTLP header value for '{key}': {e}")))?;
+            .map_err(|err| ProxyError::Config(format!("invalid OTLP header value for '{key}': {err}")))?;
         metadata.insert(name, val);
     }
     Ok(metadata)
@@ -717,7 +717,7 @@ fn validate_and_build_directives(
 ) -> Result<String, ProxyError> {
     let mut errors: Vec<String> = Vec::new();
 
-    for (module, level) in overrides {
+    for (module, level) in overrides.iter().collect::<std::collections::BTreeMap<_, _>>() {
         if !is_valid_module_path(module) {
             errors.push(format!(
                 "invalid module path '{module}' (must be alphanumeric, '_', or '::')"
@@ -739,7 +739,7 @@ fn validate_and_build_directives(
     }
 
     let mut directives = base.to_string();
-    for (module, level) in overrides {
+    for (module, level) in overrides.iter().collect::<std::collections::BTreeMap<_, _>>() {
         directives.push(',');
         directives.push_str(module);
         directives.push('=');
@@ -762,30 +762,30 @@ pub fn build_baseline_directive(config: &Config) -> Result<String, ProxyError> {
     Ok(build_env_filter(config)?.to_string())
 }
 
-/// Returns `true` if `s` is a valid Rust module path and is non-empty.
-pub(super) fn is_valid_module_path(s: &str) -> bool {
-    !s.is_empty()
-        && s.split("::").all(|segment| {
+/// Returns `true` if `module_path` is a valid Rust module path and is non-empty.
+pub(super) fn is_valid_module_path(module_path: &str) -> bool {
+    !module_path.is_empty()
+        && module_path.split("::").all(|segment| {
             !segment.is_empty()
                 && segment
                     .bytes()
                     .next()
-                    .is_some_and(|b| b.is_ascii_alphabetic() || b == b'_')
-                && segment.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                    .is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_')
+                && segment.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
         })
 }
 
-/// Returns `true` if `s` is one of the five tracing levels (case-insensitive).
-fn is_valid_log_level(s: &str) -> bool {
+/// Returns `true` if `level` is one of the five tracing levels (case-insensitive).
+fn is_valid_log_level(level: &str) -> bool {
     matches!(
-        s.to_ascii_lowercase().as_str(),
+        level.to_ascii_lowercase().as_str(),
         "error" | "warn" | "info" | "debug" | "trace"
     )
 }
 
 /// Returns `true` for admin overlay levels, including temporary `off`.
-pub(super) fn is_valid_admin_log_level(s: &str) -> bool {
-    is_valid_log_level(s) || s.eq_ignore_ascii_case("off")
+pub(super) fn is_valid_admin_log_level(level: &str) -> bool {
+    is_valid_log_level(level) || level.eq_ignore_ascii_case("off")
 }
 
 // -----------------------------------------------------------------------------
@@ -800,6 +800,9 @@ pub(super) fn is_valid_admin_log_level(s: &str) -> bool {
     clippy::indexing_slicing,
     clippy::needless_raw_strings,
     clippy::needless_raw_string_hashes,
+    clippy::assertions_on_result_states,
+    clippy::panic_in_result_fn,
+    clippy::panic,
     reason = "tests use unwrap/expect/indexing/raw strings for brevity"
 )]
 mod tests {
@@ -1149,5 +1152,166 @@ filter_chains:
         let config = config_with_overrides(HashMap::new());
         let guard = init_tracing(&config).expect("tracing initialization should succeed");
         drop(guard);
+    }
+
+    #[test]
+    fn is_valid_admin_log_level_includes_off() {
+        assert!(is_valid_admin_log_level("off"));
+        assert!(is_valid_admin_log_level("OFF"));
+        assert!(is_valid_admin_log_level("error"));
+        assert!(is_valid_admin_log_level("warn"));
+        assert!(!is_valid_admin_log_level("bogus"));
+    }
+
+    #[test]
+    fn module_path_edge_cases() {
+        assert!(!is_valid_module_path("9praxis"));
+        assert!(!is_valid_module_path("praxis-core"));
+        assert!(is_valid_module_path("_praxis"));
+        assert!(is_valid_module_path("praxis123"));
+    }
+
+    #[test]
+    fn validate_logging_with_valid_config() {
+        let config = config_with_overrides(HashMap::new());
+        assert!(validate_logging(&config).is_ok());
+    }
+
+    #[test]
+    fn validate_log_overrides_with_invalid_module() {
+        let mut overrides = HashMap::new();
+        overrides.insert("bad module".to_owned(), "info".to_owned());
+        let config = config_with_overrides(overrides);
+        let err = validate_log_overrides(&config).unwrap_err();
+        assert!(err.to_string().contains("invalid module path"));
+    }
+
+    #[test]
+    fn build_baseline_directive_includes_overrides() {
+        let mut overrides = HashMap::new();
+        overrides.insert("praxis_filter".to_owned(), "debug".to_owned());
+        let config = config_with_overrides(overrides);
+        let baseline = build_baseline_directive(&config).expect("should build baseline");
+        assert!(baseline.contains("praxis_filter=debug"));
+    }
+
+    #[test]
+    fn log_writer_stdout_vs_stderr() {
+        let stdout_cfg = LoggingConfig {
+            output: LogOutput::Stdout,
+            non_blocking: true,
+            ..LoggingConfig::default()
+        };
+        let stderr_cfg = LoggingConfig {
+            output: LogOutput::Stderr,
+            non_blocking: false,
+            ..LoggingConfig::default()
+        };
+        assert!(writer::build_log_writer(&stdout_cfg).is_ok());
+        assert!(writer::build_log_writer(&stderr_cfg).is_ok());
+    }
+
+    #[test]
+    fn build_log_writer_file_requires_path() {
+        let cfg = LoggingConfig {
+            output: LogOutput::File,
+            file_path: None,
+            ..LoggingConfig::default()
+        };
+        match writer::build_log_writer(&cfg) {
+            Err(err) => assert!(err.to_string().contains("file_path is required")),
+            Ok(_) => panic!("expected error for missing file_path"),
+        }
+    }
+
+    #[test]
+    fn build_file_writer_with_nested_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a").join("b").join("test.log");
+        let cfg = LoggingConfig {
+            output: LogOutput::File,
+            file_path: Some(path.to_string_lossy().into_owned()),
+            non_blocking: false,
+            ..LoggingConfig::default()
+        };
+        let _bundle = writer::build_log_writer(&cfg).expect("should create nested dirs");
+        assert!(path.parent().unwrap().exists());
+    }
+
+    #[test]
+    fn tracing_guard_provides_log_level_state() {
+        let config = config_with_overrides(HashMap::new());
+        let baseline = build_baseline_directive(&config).unwrap();
+        let env_filter = tracing_subscriber::EnvFilter::new(&baseline);
+        let (_filter_layer, reload_handle) = reload::Layer::new(env_filter);
+        let log_level = LogLevelState::new(baseline, reload_handle);
+        let guard = TracingGuard {
+            #[cfg(feature = "otel")]
+            provider: None,
+            worker_guard: None,
+            #[cfg(feature = "otel")]
+            _otel_runtime: None,
+            log_level: Arc::clone(&log_level),
+        };
+        let state = guard.log_level_state();
+        assert!(Arc::ptr_eq(&state, &log_level));
+    }
+
+    #[cfg(feature = "otel")]
+    #[test]
+    fn append_signal_path_to_base_endpoint() {
+        assert_eq!(
+            append_signal_path_if_needed("http://host:4317"),
+            "http://host:4317/v1/traces"
+        );
+        assert_eq!(
+            append_signal_path_if_needed("http://host:4317/"),
+            "http://host:4317/v1/traces"
+        );
+        assert_eq!(
+            append_signal_path_if_needed("http://host:4317/custom"),
+            "http://host:4317/custom"
+        );
+    }
+
+    #[cfg(feature = "otel")]
+    #[test]
+    fn build_metadata_map_with_headers() {
+        use std::collections::HashMap;
+        let mut headers = HashMap::new();
+        headers.insert("x-test".to_owned(), "value".to_owned());
+        let metadata = build_metadata_map(&headers).expect("should build");
+        assert_eq!(metadata.len(), 1);
+    }
+
+    #[cfg(feature = "otel")]
+    #[test]
+    fn build_metadata_map_rejects_invalid_name() {
+        use std::collections::HashMap;
+        let mut headers = HashMap::new();
+        headers.insert("invalid name".to_owned(), "value".to_owned());
+        let err = build_metadata_map(&headers).unwrap_err();
+        assert!(err.to_string().contains("invalid OTLP header name"));
+    }
+
+    #[cfg(feature = "otel")]
+    #[test]
+    fn build_span_exporter_rejects_unsupported_protocol() {
+        let err = build_span_exporter("http://host:4317", None, "unknown").unwrap_err();
+        assert!(err.to_string().contains("unsupported OTLP protocol"));
+    }
+
+    #[cfg(feature = "otel")]
+    #[test]
+    fn build_otel_resource_uses_config_fields() {
+        use crate::config::TelemetryConfig;
+        let config = TelemetryConfig {
+            service_name: Some("test-svc".to_owned()),
+            service_version: Some("1.0.0".to_owned()),
+            environment: Some("prod".to_owned()),
+            ..Default::default()
+        };
+        let resource = build_otel_resource(&config);
+        assert!(!resource.is_empty());
     }
 }

@@ -1,6 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Praxis Contributors
 
+//! Response body streaming and session disposal utilities.
+//!
+//! Handles streaming response bodies from sub-request exchanges with
+//! per-chunk metrics and protocol-aware session cleanup. H2 streams
+//! are released back to the connector to preserve multiplexed
+//! connections, while H1/Custom sessions are shut down immediately
+//! to avoid connection corruption from unread response bytes.
+
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -140,8 +148,8 @@ impl SubResponseBody {
 
         match read_result {
             Ok(Ok(Some(chunk))) => {
-                self.received_bytes += chunk.len();
-                self.chunk_count += 1;
+                self.received_bytes = self.received_bytes.saturating_add(chunk.len());
+                self.chunk_count = self.chunk_count.saturating_add(1);
 
                 // Check byte limit.
                 if let Some(limit) = self.max_total_bytes
@@ -158,9 +166,9 @@ impl SubResponseBody {
                 match check_clean_completion(self.session.as_mut().expect("session present")) {
                     Ok(true) => self.release_session().await,
                     Ok(false) => {},
-                    Err(e) => {
+                    Err(err) => {
                         self.shutdown_and_done("h2_error").await;
-                        return Err(e);
+                        return Err(err);
                     },
                 }
 
@@ -177,15 +185,15 @@ impl SubResponseBody {
                         self.shutdown_and_done("io_error").await;
                         Err(SubRequestError::Io("upstream closed without clean EOF".to_owned()))
                     },
-                    Err(e) => {
+                    Err(err) => {
                         self.shutdown_and_done("io_error").await;
-                        Err(e)
+                        Err(err)
                     },
                 }
             },
-            Ok(Err(e)) => {
+            Ok(Err(err)) => {
                 self.shutdown_and_done("io_error").await;
-                Err(SubRequestError::Io(e.to_string()))
+                Err(SubRequestError::Io(err.to_string()))
             },
             Err(_elapsed) => {
                 // Distinguish stream deadline, read timeout, and idle timeout.
@@ -290,7 +298,7 @@ impl SubResponseBody {
         )
         .increment(1);
         histogram!(SUBREQUEST_STREAM_DURATION_SECONDS).record(elapsed);
-        counter!(SUBREQUEST_STREAM_BYTES_TOTAL).increment(self.received_bytes as u64);
+        counter!(SUBREQUEST_STREAM_BYTES_TOTAL).increment(u64::try_from(self.received_bytes).unwrap_or(u64::MAX));
     }
 }
 

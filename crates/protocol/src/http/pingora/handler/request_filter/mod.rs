@@ -2367,4 +2367,355 @@ mod tests {
             "phase is gated on a selected upstream"
         );
     }
+
+    // -------------------------------------------------------------------------
+    // Templated Route
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn templated_route_no_templates() {
+        let pipeline = empty_pipeline();
+        let ctx = make_ctx();
+        let input_route = Some(::metrics::SharedString::from("raw-route".to_owned()));
+
+        let result = templated_route(&pipeline, &ctx, input_route.clone());
+
+        assert_eq!(result, input_route, "no templates should return input unchanged");
+    }
+
+    #[test]
+    fn templated_route_no_request_snapshot() {
+        let pipeline = empty_pipeline();
+        let ctx = make_ctx();
+
+        let result = templated_route(&pipeline, &ctx, None);
+
+        assert!(result.is_none(), "no snapshot should return None");
+    }
+
+    // -------------------------------------------------------------------------
+    // Terminal Response Edge Cases
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn build_terminal_header_head_preserves_content_length() {
+        let mut resp = make_resp(200);
+        resp.headers
+            .insert(http::header::CONTENT_LENGTH, "1024".parse().unwrap());
+        let body = Some(Bytes::from_static(b"body"));
+
+        let header = build_terminal_header(&resp, body.as_ref(), false, true).expect("should build header for HEAD");
+
+        // For HEAD, the original Content-Length should be preserved
+        assert_eq!(
+            header
+                .headers
+                .get(http::header::CONTENT_LENGTH)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "1024",
+            "HEAD responses preserve original Content-Length"
+        );
+    }
+
+    #[test]
+    fn build_terminal_header_body_prohibited_no_content() {
+        let mut resp = make_resp(204);
+        resp.headers
+            .insert(http::header::CONTENT_LENGTH, "100".parse().unwrap());
+        let body = Some(Bytes::from_static(b"should be ignored"));
+
+        let header = build_terminal_header(&resp, body.as_ref(), true, false).expect("should build header for 204");
+
+        // For 204, no Content-Length should be set even if body exists
+        assert!(
+            !header.headers.contains_key(http::header::CONTENT_LENGTH),
+            "204 responses should not have Content-Length"
+        );
+    }
+
+    #[test]
+    fn build_terminal_header_body_prohibited_not_modified() {
+        let resp = make_resp(304);
+        let body = None;
+
+        let header = build_terminal_header(&resp, body.as_ref(), true, false).expect("should build header for 304");
+
+        assert!(
+            !header.headers.contains_key(http::header::CONTENT_LENGTH),
+            "304 with body_prohibited should not add Content-Length"
+        );
+    }
+
+    #[test]
+    fn build_terminal_header_empty_body() {
+        let resp = make_resp(200);
+        let body = None;
+
+        let header =
+            build_terminal_header(&resp, body.as_ref(), false, false).expect("should build header for empty body");
+
+        assert_eq!(
+            header
+                .headers
+                .get(http::header::CONTENT_LENGTH)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "0",
+            "empty body should have Content-Length: 0"
+        );
+    }
+
+    #[test]
+    fn build_terminal_header_with_body() {
+        let resp = make_resp(200);
+        let body = Some(Bytes::from_static(b"response body"));
+
+        let header = build_terminal_header(&resp, body.as_ref(), false, false).expect("should build header with body");
+
+        assert_eq!(
+            header
+                .headers
+                .get(http::header::CONTENT_LENGTH)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "13",
+            "body length should match actual bytes"
+        );
+    }
+
+    #[test]
+    fn build_terminal_header_removes_stale_content_length_except_head() {
+        let mut resp = make_resp(200);
+        resp.headers
+            .insert(http::header::CONTENT_LENGTH, "9999".parse().unwrap());
+        let body = Some(Bytes::from_static(b"real"));
+
+        let header = build_terminal_header(&resp, body.as_ref(), false, false).expect("should build header");
+
+        assert_eq!(
+            header
+                .headers
+                .get(http::header::CONTENT_LENGTH)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "4",
+            "stale Content-Length should be replaced with actual body length"
+        );
+    }
+
+    #[test]
+    fn build_terminal_header_invalid_status_out_of_range_low() {
+        let resp = make_resp(199);
+
+        let header = build_terminal_header(&resp, None, false, false);
+
+        assert!(header.is_none(), "status 199 should be rejected");
+    }
+
+    #[test]
+    fn build_terminal_header_invalid_status_out_of_range_high() {
+        let resp = make_resp(600);
+
+        let header = build_terminal_header(&resp, None, false, false);
+
+        assert!(header.is_none(), "status 600 should be rejected");
+    }
+
+    #[test]
+    fn build_terminal_header_boundary_status_200() {
+        let resp = make_resp(200);
+
+        let header = build_terminal_header(&resp, None, false, false);
+
+        assert!(header.is_some(), "status 200 is valid");
+    }
+
+    #[test]
+    fn build_terminal_header_boundary_status_599() {
+        let resp = make_resp(599);
+
+        let header = build_terminal_header(&resp, None, false, false);
+
+        assert!(header.is_some(), "status 599 is valid");
+    }
+
+    // -------------------------------------------------------------------------
+    // Pre-Read Mutation Application Edge Cases
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn apply_pre_read_mutations_to_request_with_invalid_add() {
+        let mut request = make_request();
+        let mutations = vec![TrustedHeaderMutation::Add(
+            http::header::HeaderName::from_static("x-test"),
+            "valid\r\ninjection".to_owned(), // Invalid header value with CRLF
+        )];
+
+        apply_pre_read_mutations_to_request(&mut request, &mutations);
+
+        // Invalid mutation should be skipped with a warning
+        assert!(
+            !request.headers.contains_key("x-test"),
+            "invalid header value should be skipped"
+        );
+    }
+
+    #[test]
+    fn apply_pre_read_mutations_to_request_remove_set_add_order() {
+        let mut request = make_request();
+        request.headers.insert(
+            http::header::HeaderName::from_static("x-remove"),
+            http::header::HeaderValue::from_static("original"),
+        );
+
+        let mutations = vec![
+            TrustedHeaderMutation::Remove(http::header::HeaderName::from_static("x-remove")),
+            TrustedHeaderMutation::Set(
+                http::header::HeaderName::from_static("x-set"),
+                http::header::HeaderValue::from_static("set-value"),
+            ),
+            TrustedHeaderMutation::Add(http::header::HeaderName::from_static("x-add"), "add-value".to_owned()),
+        ];
+
+        apply_pre_read_mutations_to_request(&mut request, &mutations);
+
+        assert!(!request.headers.contains_key("x-remove"), "removed header is gone");
+        assert_eq!(request.headers.get("x-set").unwrap(), "set-value", "set header applied");
+        assert_eq!(request.headers.get("x-add").unwrap(), "add-value", "add header applied");
+    }
+
+    // -------------------------------------------------------------------------
+    // Streaming Size Limit Edge Cases
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn streaming_size_limit_stream_buffer_mode_no_limit() {
+        let mut ctx = make_ctx();
+        ctx.response_body_mode = BodyMode::StreamBuffer { max_bytes: Some(1000) };
+        ctx.response_body_bytes = 1001;
+
+        // StreamBuffer mode doesn't enforce limit during streaming terminal responses
+        // The limit is enforced during pre-read phase, not here
+        assert!(
+            !streaming_size_limit_exceeded(&ctx, &empty_pipeline()),
+            "StreamBuffer mode does not enforce limit in streaming terminal context"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Additional Pre-Read Mutation Tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn apply_pre_read_mutations_to_request_multiple_add() {
+        let mut request = make_request();
+
+        let mutations = vec![
+            TrustedHeaderMutation::Add(http::header::HeaderName::from_static("x-multi"), "value1".to_owned()),
+            TrustedHeaderMutation::Add(http::header::HeaderName::from_static("x-multi"), "value2".to_owned()),
+        ];
+
+        apply_pre_read_mutations_to_request(&mut request, &mutations);
+
+        let values: Vec<_> = request.headers.get_all("x-multi").iter().collect();
+        assert_eq!(values.len(), 2, "multiple add mutations should append");
+        assert_eq!(values[0], "value1");
+        assert_eq!(values[1], "value2");
+    }
+
+    #[test]
+    fn apply_pre_read_mutations_to_request_set_overwrites() {
+        let mut request = make_request();
+        request.headers.insert(
+            http::header::HeaderName::from_static("x-replace"),
+            http::header::HeaderValue::from_static("old"),
+        );
+
+        let mutations = vec![TrustedHeaderMutation::Set(
+            http::header::HeaderName::from_static("x-replace"),
+            http::header::HeaderValue::from_static("new"),
+        )];
+
+        apply_pre_read_mutations_to_request(&mut request, &mutations);
+
+        assert_eq!(request.headers.get("x-replace").unwrap(), "new", "set should overwrite");
+        let count = request.headers.get_all("x-replace").iter().count();
+        assert_eq!(count, 1, "set should not duplicate");
+    }
+
+    // -------------------------------------------------------------------------
+    // Additional Streaming Size Limit Tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn streaming_size_limit_size_limit_mode_enforced() {
+        let mut ctx = make_ctx();
+        ctx.response_body_mode = BodyMode::SizeLimit { max_bytes: 500 };
+        ctx.response_body_bytes = 501;
+
+        assert!(
+            streaming_size_limit_exceeded(&ctx, &empty_pipeline()),
+            "SizeLimit mode should enforce limit"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Selected Upstream Body Limit Consistency
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn selected_upstream_body_limit_consistency() {
+        let pipeline = empty_pipeline();
+
+        // The wrapper function must delegate to the pipeline method
+        assert_eq!(
+            selected_upstream_body_limit(&pipeline),
+            pipeline.selected_upstream_request_body_limit(),
+            "wrapper must delegate to pipeline method"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Store Adapted Request Body Edge Cases
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn store_adapted_request_body_with_content() {
+        let mut ctx = make_ctx();
+        let body = Some(Bytes::from_static(b"adapted content"));
+
+        store_adapted_request_body(&mut ctx, body);
+
+        assert_eq!(
+            ctx.adapted_request_body.as_ref().unwrap().len(),
+            1,
+            "should store single chunk"
+        );
+        assert_eq!(
+            ctx.adapted_request_body.as_ref().unwrap().front().unwrap(),
+            &Bytes::from_static(b"adapted content")
+        );
+        assert_eq!(ctx.adapted_request_body_len, Some(15));
+        assert_eq!(
+            ctx.retained_adapted_request_body, ctx.adapted_request_body,
+            "retained copy should match adapted body"
+        );
+    }
+
+    #[test]
+    fn store_adapted_request_body_large_content() {
+        let mut ctx = make_ctx();
+        let large_body = Bytes::from(vec![b'X'; 10_000]);
+        let body = Some(large_body.clone());
+
+        store_adapted_request_body(&mut ctx, body);
+
+        assert_eq!(ctx.adapted_request_body_len, Some(10_000));
+        assert_eq!(ctx.adapted_request_body.as_ref().unwrap().front().unwrap(), &large_body);
+    }
 }

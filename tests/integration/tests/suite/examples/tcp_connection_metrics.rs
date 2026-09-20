@@ -94,7 +94,7 @@ fn tcp_connection_metrics_example_forwards_traffic() {
 }
 
 // -----------------------------------------------------------------------------
-// Helpers
+// Utilities
 // -----------------------------------------------------------------------------
 
 fn tcp_send_recv(addr: &str, data: &[u8]) -> String {

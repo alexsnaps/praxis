@@ -85,6 +85,8 @@ impl From<&Cluster> for ConnectionOptions {
 // -----------------------------------------------------------------------------
 
 #[cfg(test)]
+#[expect(clippy::allow_attributes, reason = "blanket test suppressions")]
+#[allow(clippy::min_ident_chars, reason = "tests")]
 mod tests {
     use super::*;
 

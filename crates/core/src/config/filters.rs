@@ -86,7 +86,7 @@ fn take_optional<T: DeserializeOwned>(map: &mut serde_yaml::Mapping, key: &str) 
     if value.is_null() {
         return Ok(None);
     }
-    serde_yaml::from_value(value).map(Some).map_err(|e| e.to_string())
+    serde_yaml::from_value(value).map(Some).map_err(|err| err.to_string())
 }
 
 /// Split pipeline `conditions` from `access_log` emit-time `conditions`.
@@ -96,8 +96,8 @@ fn split_filter_conditions(
 ) -> Result<(Vec<Condition>, Option<serde_yaml::Value>), String> {
     match conditions_val {
         None => Ok((Vec::new(), None)),
-        Some(v) if v.is_sequence() => Ok((serde_yaml::from_value(v).map_err(|e| e.to_string())?, None)),
-        Some(v) if filter_type == "access_log" && v.is_mapping() => Ok((Vec::new(), Some(v))),
+        Some(value) if value.is_sequence() => Ok((serde_yaml::from_value(value).map_err(|err| err.to_string())?, None)),
+        Some(value) if filter_type == "access_log" && value.is_mapping() => Ok((Vec::new(), Some(value))),
         Some(_) => Err("conditions must be a sequence of pipeline predicates; \
              access_log emit conditions use a mapping with min_duration_ms, \
              status_classes, and/or paths"
@@ -121,7 +121,7 @@ where
 
     let filter_type = match map.remove(serde_yaml::Value::from("filter")) {
         None => return Err(D::Error::missing_field("filter")),
-        Some(v) => v
+        Some(value) => value
             .as_str()
             .map(str::to_owned)
             .ok_or_else(|| D::Error::custom("filter must be a string naming the filter type"))?,
@@ -140,8 +140,8 @@ where
     let (conditions, access_log_conditions) =
         split_filter_conditions(&filter_type, conditions_val).map_err(D::Error::custom)?;
 
-    if let Some(c) = access_log_conditions {
-        map.insert(serde_yaml::Value::from("conditions"), c);
+    if let Some(access_conditions) = access_log_conditions {
+        map.insert(serde_yaml::Value::from("conditions"), access_conditions);
     }
 
     Ok(FilterEntry {
@@ -260,19 +260,22 @@ impl FilterEntry {
 
 /// Levenshtein edit distance between two ASCII strings.
 #[expect(clippy::indexing_slicing, reason = "indices are bounded by input lengths")]
-fn edit_distance(a: &str, b: &str) -> usize {
-    let b_bytes = b.as_bytes();
-    let mut prev: Vec<usize> = (0..=b_bytes.len()).collect();
-    let mut curr = vec![0; b_bytes.len() + 1];
-    for (i, ca) in a.bytes().enumerate() {
-        curr[0] = i + 1;
-        for (j, &cb) in b_bytes.iter().enumerate() {
-            let cost = usize::from(ca != cb);
-            curr[j + 1] = (prev[j] + cost).min(prev[j + 1] + 1).min(curr[j] + 1);
+fn edit_distance(left: &str, right: &str) -> usize {
+    let right_bytes = right.as_bytes();
+    let mut prev: Vec<usize> = (0..=right_bytes.len()).collect();
+    let mut curr = vec![0; right_bytes.len().saturating_add(1)];
+    for (i, left_byte) in left.bytes().enumerate() {
+        curr[0] = i.saturating_add(1);
+        for (j, &right_byte) in right_bytes.iter().enumerate() {
+            let cost = usize::from(left_byte != right_byte);
+            let next = j.saturating_add(1);
+            curr[next] = (prev[j].saturating_add(cost))
+                .min(prev[next].saturating_add(1))
+                .min(curr[j].saturating_add(1));
         }
         std::mem::swap(&mut prev, &mut curr);
     }
-    prev[b_bytes.len()]
+    prev[right_bytes.len()]
 }
 
 // -----------------------------------------------------------------------------

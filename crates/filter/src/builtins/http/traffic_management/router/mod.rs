@@ -12,6 +12,7 @@
 //! host, to choose a cluster.
 
 mod config;
+#[cfg(feature = "router-json-aliases")]
 mod json_alias;
 mod matching;
 
@@ -31,15 +32,18 @@ mod tests;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use http::{HeaderMap, header::HeaderName};
+use http::HeaderMap;
+#[cfg(feature = "router-json-aliases")]
+use http::header::HeaderName;
 use praxis_core::config::{PathMatch, Route};
 use tracing::{debug, info, trace};
 
+#[cfg(feature = "router-json-aliases")]
+use self::config::{
+    DEFAULT_JSON_ALIAS_HEADER, DEFAULT_JSON_ALIAS_MAX_BODY_BYTES, JsonAlias, MAX_JSON_ALIAS_BODY_BYTES,
+};
 use self::{
-    config::{
-        DEFAULT_JSON_ALIAS_HEADER, DEFAULT_JSON_ALIAS_MAX_BODY_BYTES, JsonAlias, MAX_JSON_ALIAS_BODY_BYTES,
-        RouterConfig, RouterRouteConfig,
-    },
+    config::{RouterConfig, RouterRouteConfig},
     matching::{route_matches_request, should_stop_early, update_best_match},
 };
 use crate::{
@@ -156,30 +160,24 @@ impl RouterFilter {
     /// Returns [`FilterError`] if alias configuration is invalid.
     ///
     /// [`FilterError`]: crate::FilterError
+    #[expect(clippy::allow_attributes, reason = "feature-conditional lint")]
+    #[allow(
+        clippy::unnecessary_wraps,
+        reason = "returns Result when router-json-aliases feature is enabled"
+    )]
     pub fn new(routes: Vec<Route>) -> Result<Self, FilterError> {
-        Self::with_alias_options(
-            routes.into_iter().map(RouterRouteConfig::from).collect(),
-            DEFAULT_JSON_ALIAS_HEADER,
-            DEFAULT_JSON_ALIAS_MAX_BODY_BYTES,
-        )
+        let routes: Vec<RouterRouteConfig> = routes.into_iter().map(RouterRouteConfig::from).collect();
+        #[cfg(feature = "router-json-aliases")]
+        let router = Self::with_alias_options(routes, DEFAULT_JSON_ALIAS_HEADER, DEFAULT_JSON_ALIAS_MAX_BODY_BYTES)?;
+        #[cfg(not(feature = "router-json-aliases"))]
+        let router = Self::build(routes);
+        Ok(router)
     }
 
-    /// Create a router with explicit alias options.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`FilterError`] if route or alias configuration is invalid.
-    fn with_alias_options(
-        routes: Vec<RouterRouteConfig>,
-        json_alias_header: &str,
-        json_alias_max_body_bytes: usize,
-    ) -> Result<Self, FilterError> {
+    /// Build the router from route configs (no JSON-alias handling).
+    fn build(routes: Vec<RouterRouteConfig>) -> Self {
         let mut routes = routes;
         sort_routes(&mut routes);
-        validate_json_aliases(&routes)?;
-        let _json_alias_header = parse_json_alias_header(json_alias_header)?;
-        validate_alias_options(&routes, json_alias_max_body_bytes)?;
-        reject_unimplemented_json_aliases(&routes)?;
 
         for r in &routes {
             if r.route.retry_policy.is_some() {
@@ -192,10 +190,28 @@ impl RouterFilter {
 
         let resolved = resolve_routes(routes);
         debug!(routes = resolved.len(), "router initialized");
-        Ok(Self {
+        Self {
             multi_level_subdomain_matching: false,
             routes: resolved,
-        })
+        }
+    }
+
+    /// Create a router with explicit alias options.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FilterError`] if route or alias configuration is invalid.
+    #[cfg(feature = "router-json-aliases")]
+    fn with_alias_options(
+        routes: Vec<RouterRouteConfig>,
+        json_alias_header: &str,
+        json_alias_max_body_bytes: usize,
+    ) -> Result<Self, FilterError> {
+        validate_json_aliases(&routes)?;
+        let _json_alias_header = parse_json_alias_header(json_alias_header)?;
+        validate_alias_options(&routes, json_alias_max_body_bytes)?;
+        reject_unimplemented_json_aliases(&routes)?;
+        Ok(Self::build(routes))
     }
 
     /// Enable multi-level subdomain matching for wildcard hosts.
@@ -221,8 +237,11 @@ impl RouterFilter {
         if cfg.routes.is_empty() {
             return Err("router: 'routes' is empty; every request would fail with 404".into());
         }
+        #[cfg(feature = "router-json-aliases")]
         let router = Self::with_alias_options(cfg.routes, &cfg.json_alias_header, cfg.json_alias_max_body_bytes)?
             .with_multi_level_subdomain_matching(cfg.multi_level_subdomain_matching);
+        #[cfg(not(feature = "router-json-aliases"))]
+        let router = Self::build(cfg.routes).with_multi_level_subdomain_matching(cfg.multi_level_subdomain_matching);
         Ok(Box::new(router))
     }
 
@@ -281,6 +300,7 @@ fn sort_routes(routes: &mut [RouterRouteConfig]) {
 }
 
 /// Validates JSON alias configuration on all routes.
+#[cfg(feature = "router-json-aliases")]
 fn validate_json_aliases(routes: &[RouterRouteConfig]) -> Result<(), FilterError> {
     for route_config in routes {
         let route = &route_config.route;
@@ -302,6 +322,7 @@ fn validate_json_aliases(routes: &[RouterRouteConfig]) -> Result<(), FilterError
 }
 
 /// Validates a single JSON alias field, pattern, and target.
+#[cfg(feature = "router-json-aliases")]
 fn validate_single_alias(alias: &JsonAlias, cluster: &str) -> Result<(), FilterError> {
     if alias.field.is_empty() {
         return Err(format!("router: json alias field for cluster '{cluster}' must not be empty").into());
@@ -329,6 +350,7 @@ fn validate_single_alias(alias: &JsonAlias, cluster: &str) -> Result<(), FilterE
 
 /// Parsed unconditionally so an invalid name fails at construction, not at
 /// request time when alias validation may have been skipped (no alias routes).
+#[cfg(feature = "router-json-aliases")]
 fn parse_json_alias_header(json_alias_header: &str) -> Result<HeaderName, FilterError> {
     HeaderName::from_bytes(json_alias_header.as_bytes()).map_err(|e| {
         format!("router: json_alias_header '{json_alias_header}' is not a valid HTTP header name: {e}").into()
@@ -350,6 +372,7 @@ fn parse_json_alias_header(json_alias_header: &str) -> Result<HeaderName, Filter
 /// groundwork (`json_alias` matching, shape validation) is left in
 /// place; wiring the feature up means deleting this check, not
 /// rebuilding it.
+#[cfg(feature = "router-json-aliases")]
 fn reject_unimplemented_json_aliases(routes: &[RouterRouteConfig]) -> Result<(), FilterError> {
     let Some(route_config) = routes.iter().find(|r| r.json_aliases.is_some()) else {
         return Ok(());
@@ -365,6 +388,7 @@ fn reject_unimplemented_json_aliases(routes: &[RouterRouteConfig]) -> Result<(),
 }
 
 /// Validates global alias options when alias routes exist.
+#[cfg(feature = "router-json-aliases")]
 fn validate_alias_options(routes: &[RouterRouteConfig], max_bytes: usize) -> Result<(), FilterError> {
     let has_aliases = routes.iter().any(|r| r.json_aliases.is_some());
     if !has_aliases {

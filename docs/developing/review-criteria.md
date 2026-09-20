@@ -64,7 +64,8 @@ them to different standards.
 - Linear scans that grow with config size (filter lists,
   route tables, SNI names): acceptable at small N, but
   flag any O(filters × headers) or worse pattern.
-- Are `benchmarks/` scenarios still representative of the
+- Are the scenario benchmarks (run via
+  `cargo xtask benchmark`) still representative of the
   filters most configs enable? A hot-path change without a
   benchmark delta is unverified.
 

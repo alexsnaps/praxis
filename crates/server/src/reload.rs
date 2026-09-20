@@ -67,14 +67,14 @@ pub(crate) fn reload_pipelines(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     info!("building new pipelines from reloaded config");
 
-    if let Err(e) = praxis_core::logging::validate_log_overrides(new_config) {
-        error!(error = %e, "config reload failed: invalid log_overrides");
-        return Err(e.into());
+    if let Err(err) = praxis_core::logging::validate_log_overrides(new_config) {
+        error!(error = %err, "config reload failed: invalid log_overrides");
+        return Err(err.into());
     }
 
-    if let Err(e) = praxis_core::logging::validate_logging(new_config) {
-        error!(error = %e, "config reload failed: invalid logging config");
-        return Err(e.into());
+    if let Err(err) = praxis_core::logging::validate_logging(new_config) {
+        error!(error = %err, "config reload failed: invalid logging config");
+        return Err(err.into());
     }
 
     let health_registry = build_health_registry(&new_config.clusters);
@@ -94,10 +94,10 @@ pub(crate) fn reload_pipelines(
         &updated_client,
         composition,
     ) {
-        Ok(p) => p,
-        Err(e) => {
-            error!(error = %e, "config reload failed: pipeline build error");
-            return Err(e);
+        Ok(pipelines) => pipelines,
+        Err(err) => {
+            error!(error = %err, "config reload failed: pipeline build error");
+            return Err(err);
         },
     };
 
@@ -206,22 +206,28 @@ fn carry_over_health_state(
         return;
     };
 
-    let old_by_name: std::collections::HashMap<&str, &praxis_core::config::Cluster> =
-        old_config.clusters.iter().map(|c| (c.name.as_ref(), c)).collect();
+    let old_by_name: std::collections::HashMap<&str, &praxis_core::config::Cluster> = old_config
+        .clusters
+        .iter()
+        .map(|cluster| (cluster.name.as_ref(), cluster))
+        .collect();
     let mut carried: usize = 0;
     for cluster in &new_config.clusters {
         let unchanged_check = old_by_name.get(cluster.name.as_ref()).is_some_and(|old_c| {
             !crate::reload_diagnostics::config_value_changed(&old_c.health_check, &cluster.health_check)
         });
+
         if !unchanged_check {
             continue;
         }
+
         let (Some(old_entry), Some(new_entry)) = (
             old_registry.get(cluster.name.as_ref()),
             new_registry.get(cluster.name.as_ref()),
         ) else {
             continue;
         };
+
         carried = carried.saturating_add(carry_cluster_endpoints(cluster, old_entry, new_entry));
     }
 
@@ -259,8 +265,8 @@ fn health_checked_cluster_names(config: &Config) -> Vec<&str> {
     config
         .clusters
         .iter()
-        .filter(|c| c.health_check.is_some())
-        .map(|c| c.name.as_ref())
+        .filter(|cluster| cluster.health_check.is_some())
+        .map(|cluster| cluster.name.as_ref())
         .collect()
 }
 
@@ -301,7 +307,7 @@ fn respawn_health_checks(
     let clusters: Vec<praxis_core::config::Cluster> = config
         .clusters
         .iter()
-        .filter(|c| c.health_check.is_some())
+        .filter(|cluster| cluster.health_check.is_some())
         .cloned()
         .collect();
     let registry = Arc::clone(health_registry);
@@ -323,8 +329,8 @@ fn spawn_health_check_thread(
     std::thread::spawn(move || {
         let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
             Ok(rt) => rt,
-            Err(e) => {
-                error!(error = %e, "failed to start health-check runtime after reload; health checks disabled until next reload");
+            Err(err) => {
+                error!(error = %err, "failed to start health-check runtime after reload; health checks disabled until next reload");
                 return;
             },
         };
@@ -346,6 +352,7 @@ fn spawn_health_check_thread(
     clippy::expect_used,
     clippy::indexing_slicing,
     clippy::too_many_lines,
+    clippy::significant_drop_tightening,
     reason = "tests"
 )]
 mod tests {
@@ -414,8 +421,11 @@ filter_chains:
         assert_ne!(old_ptr, new_ptr, "pipeline pointer should change after reload");
 
         let loaded = meta.load();
-        let expected_names: std::collections::HashSet<&str> =
-            new_config.listeners.iter().map(|l| l.name.as_str()).collect();
+        let expected_names: std::collections::HashSet<&str> = new_config
+            .listeners
+            .iter()
+            .map(|listener| listener.name.as_str())
+            .collect();
         let actual_names: std::collections::HashSet<&str> = loaded.keys().map(String::as_str).collect();
         assert_eq!(
             actual_names, expected_names,
@@ -434,6 +444,7 @@ filter_chains:
     }
 
     #[test]
+    #[cfg(feature = "chain-binding")]
     fn reload_rebinds_outbound_chain_and_reinjects_runtime_resources() {
         use async_trait::async_trait;
         use praxis_core::config::ChainRef;
@@ -490,7 +501,7 @@ filter_chains:
                         .cloned()
                         .ok_or_else(|| FilterError::from("missing outbound_chain"))?;
                     let chain_ref: ChainRef = serde_yaml::from_value(raw)
-                        .map_err(|e| FilterError::from(format!("bad outbound_chain: {e}")))?;
+                        .map_err(|err| FilterError::from(format!("bad outbound_chain: {err}")))?;
                     let outbound = ctx.bind_chain(&chain_ref)?;
                     let filter: Box<dyn HttpFilter> = Box::new(ObservingCallout {
                         outbound: Arc::new(outbound),
@@ -1141,17 +1152,17 @@ filter_chains:
     fn audit_identical_configs_all_zeros() {
         let config = valid_config();
         assert_eq!(
-            diff_named_items(&config.listeners, &config.listeners, |l| &l.name),
+            diff_named_items(&config.listeners, &config.listeners, |listener| &listener.name),
             (0, 0, 0),
             "identical listeners should show no changes"
         );
         assert_eq!(
-            diff_named_items(&config.clusters, &config.clusters, |c| &c.name),
+            diff_named_items(&config.clusters, &config.clusters, |cluster| &cluster.name),
             (0, 0, 0),
             "identical clusters should show no changes"
         );
         assert_eq!(
-            diff_named_items(&config.filter_chains, &config.filter_chains, |c| &c.name),
+            diff_named_items(&config.filter_chains, &config.filter_chains, |chain| &chain.name),
             (0, 0, 0),
             "identical chains should show no changes"
         );
@@ -1178,10 +1189,10 @@ filter_chains:
         )
         .unwrap();
 
-        let (a, r, m) = diff_named_items(&old.clusters, &new.clusters, |c| &c.name);
-        assert_eq!(a, 1, "one cluster should be added");
-        assert_eq!(r, 0, "no clusters should be removed");
-        assert_eq!(m, 0, "no clusters should be modified");
+        let (added, removed, modified) = diff_named_items(&old.clusters, &new.clusters, |cluster| &cluster.name);
+        assert_eq!(added, 1, "one cluster should be added");
+        assert_eq!(removed, 0, "no clusters should be removed");
+        assert_eq!(modified, 0, "no clusters should be modified");
     }
 
     #[test]
@@ -1205,10 +1216,10 @@ filter_chains:
         .unwrap();
         let new = valid_config();
 
-        let (a, r, m) = diff_named_items(&old.clusters, &new.clusters, |c| &c.name);
-        assert_eq!(a, 0, "no clusters should be added");
-        assert_eq!(r, 1, "one cluster should be removed");
-        assert_eq!(m, 0, "no clusters should be modified");
+        let (added, removed, modified) = diff_named_items(&old.clusters, &new.clusters, |cluster| &cluster.name);
+        assert_eq!(added, 0, "no clusters should be added");
+        assert_eq!(removed, 1, "one cluster should be removed");
+        assert_eq!(modified, 0, "no clusters should be modified");
     }
 
     #[test]
@@ -1229,10 +1240,10 @@ filter_chains:
         )
         .unwrap();
 
-        let (a, r, m) = diff_named_items(&old.filter_chains, &new.filter_chains, |c| &c.name);
-        assert_eq!(a, 0, "no chains should be added");
-        assert_eq!(r, 0, "no chains should be removed");
-        assert_eq!(m, 1, "one chain should be modified");
+        let (added, removed, modified) = diff_named_items(&old.filter_chains, &new.filter_chains, |chain| &chain.name);
+        assert_eq!(added, 0, "no chains should be added");
+        assert_eq!(removed, 0, "no chains should be removed");
+        assert_eq!(modified, 1, "one chain should be modified");
     }
 
     #[test]
@@ -1298,17 +1309,17 @@ filter_chains:
         )
         .unwrap();
 
-        let (la, lr, lm) = diff_named_items(&old.listeners, &new.listeners, |l| &l.name);
+        let (la, lr, lm) = diff_named_items(&old.listeners, &new.listeners, |listener| &listener.name);
         assert_eq!(la, 1, "one listener added (grpc)");
         assert_eq!(lr, 1, "one listener removed (api)");
         assert_eq!(lm, 0, "web listener unchanged");
 
-        let (ca, cr, cm) = diff_named_items(&old.clusters, &new.clusters, |c| &c.name);
+        let (ca, cr, cm) = diff_named_items(&old.clusters, &new.clusters, |cluster| &cluster.name);
         assert_eq!(ca, 1, "one cluster added (new_cluster)");
         assert_eq!(cr, 1, "one cluster removed (old_cluster)");
         assert_eq!(cm, 0, "no clusters modified");
 
-        let (fa, fr, fm) = diff_named_items(&old.filter_chains, &new.filter_chains, |c| &c.name);
+        let (fa, fr, fm) = diff_named_items(&old.filter_chains, &new.filter_chains, |chain| &chain.name);
         assert_eq!(fa, 0, "no chains added");
         assert_eq!(fr, 0, "no chains removed");
         assert_eq!(fm, 1, "main chain modified (status 200->404)");

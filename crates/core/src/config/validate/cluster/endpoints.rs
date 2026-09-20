@@ -78,7 +78,10 @@ fn validate_endpoint_address(addr: &str, cluster_name: &str) -> Result<(), Proxy
     // A valid port with an empty host (`:80`) parses here but has no
     // resolvable host, so every request to the cluster fails at connect;
     // the empty host also slips past the SSRF hostname check.
-    let host = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')).unwrap_or(host);
+    let host = host
+        .strip_prefix('[')
+        .and_then(|stripped| stripped.strip_suffix(']'))
+        .unwrap_or(host);
     if host.is_empty() {
         return Err(ProxyError::Config(format!(
             "cluster '{cluster_name}': endpoint '{addr}' has an empty host (expected 'host:port')"

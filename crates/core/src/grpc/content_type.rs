@@ -47,7 +47,7 @@ impl GrpcKind {
     pub fn from_headers(headers: &http::HeaderMap) -> Self {
         headers
             .get(http::header::CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok())
+            .and_then(|value| value.to_str().ok())
             .map(Self::from_content_type)
             .unwrap_or_default()
     }
@@ -57,7 +57,7 @@ impl GrpcKind {
         let mime = value.split_once(';').map_or(value, |(before, _)| before).trim();
         if !mime
             .get(..16)
-            .is_some_and(|p| p.as_bytes().eq_ignore_ascii_case(b"application/grpc"))
+            .is_some_and(|prefix| prefix.as_bytes().eq_ignore_ascii_case(b"application/grpc"))
         {
             return Self::None;
         }

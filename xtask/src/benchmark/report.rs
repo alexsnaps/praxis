@@ -3,7 +3,7 @@
 
 //! Benchmark report serialization and deserialization.
 
-use benchmarks::report::BenchmarkReport;
+use praxis_proxy_benchmarks::report::BenchmarkReport;
 
 // -----------------------------------------------------------------------------
 // Load
@@ -11,7 +11,7 @@ use benchmarks::report::BenchmarkReport;
 
 /// Load a [`BenchmarkReport`] from a file, detecting format from the extension.
 ///
-/// [`BenchmarkReport`]: benchmarks::report::BenchmarkReport
+/// [`BenchmarkReport`]: praxis_proxy_benchmarks::report::BenchmarkReport
 pub(crate) fn load_report(path: &str) -> BenchmarkReport {
     let content = std::fs::read_to_string(path).unwrap_or_else(|e| {
         eprintln!("failed to read {path}: {e}");

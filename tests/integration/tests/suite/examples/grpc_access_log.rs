@@ -20,7 +20,7 @@ use praxis_test_utils::{
 };
 
 // -----------------------------------------------------------------------------
-// Helpers
+// Utilities
 // -----------------------------------------------------------------------------
 
 /// Run one gRPC call through the example config and return the log output.

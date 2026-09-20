@@ -142,25 +142,25 @@ fn warn_active_insecure_options(opts: &InsecureOptions) {
 }
 
 /// Emit a warning for each active granular pipeline check skip flag.
-fn warn_active_pipeline_checks(s: &SkipPipelineChecks) {
+fn warn_active_pipeline_checks(checks: &SkipPipelineChecks) {
     for (name, active) in [
-        ("skip_pipeline_checks.conditional_security", s.conditional_security),
+        ("skip_pipeline_checks.conditional_security", checks.conditional_security),
         (
             "skip_pipeline_checks.conflicting_cluster_selectors",
-            s.conflicting_cluster_selectors,
+            checks.conflicting_cluster_selectors,
         ),
         (
             "skip_pipeline_checks.duplicate_load_balancers",
-            s.duplicate_load_balancers,
+            checks.duplicate_load_balancers,
         ),
         (
             "skip_pipeline_checks.duplicate_rewrite_filters",
-            s.duplicate_rewrite_filters,
+            checks.duplicate_rewrite_filters,
         ),
-        ("skip_pipeline_checks.duplicate_routers", s.duplicate_routers),
-        ("skip_pipeline_checks.lb_without_router", s.lb_without_router),
-        ("skip_pipeline_checks.misaligned_clusters", s.misaligned_clusters),
-        ("skip_pipeline_checks.unreachable_filters", s.unreachable_filters),
+        ("skip_pipeline_checks.duplicate_routers", checks.duplicate_routers),
+        ("skip_pipeline_checks.lb_without_router", checks.lb_without_router),
+        ("skip_pipeline_checks.misaligned_clusters", checks.misaligned_clusters),
+        ("skip_pipeline_checks.unreachable_filters", checks.unreachable_filters),
     ] {
         if active {
             warn!(flag = name, "insecure_options flag is active");
@@ -198,20 +198,20 @@ fn validate_body_limits(limits: &BodyLimitsConfig, allow_unbounded: bool) -> Res
          must both be set; use insecure_options.allow_unbounded_body: true to override",
         limits
             .max_request_bytes
-            .map_or_else(|| "none".to_owned(), |v| v.to_string()),
+            .map_or_else(|| "none".to_owned(), |bytes| bytes.to_string()),
         limits
             .max_response_bytes
-            .map_or_else(|| "none".to_owned(), |v| v.to_string()),
+            .map_or_else(|| "none".to_owned(), |bytes| bytes.to_string()),
     )))
 }
 
 /// Reject a body limit that exceeds the absolute ceiling.
 fn validate_body_limit_ceiling(field: &str, value: Option<usize>) -> Result<(), ProxyError> {
-    if let Some(v) = value
-        && v > ABSOLUTE_MAX_BODY_BYTES
+    if let Some(bytes) = value
+        && bytes > ABSOLUTE_MAX_BODY_BYTES
     {
         return Err(ProxyError::Config(format!(
-            "body_limits.{field} ({v} bytes) exceeds maximum ({ABSOLUTE_MAX_BODY_BYTES} bytes / 64 MiB)"
+            "body_limits.{field} ({bytes} bytes) exceeds maximum ({ABSOLUTE_MAX_BODY_BYTES} bytes / 64 MiB)"
         )));
     }
     Ok(())
@@ -276,7 +276,10 @@ pub(super) fn warn_filter_duration_without_admin(filter_duration: bool, admin_en
 fn validate_upstream_ca_file(ca_file: Option<&str>) -> Result<(), ProxyError> {
     let Some(path) = ca_file else { return Ok(()) };
 
-    if Path::new(path).components().any(|c| matches!(c, Component::ParentDir)) {
+    if Path::new(path)
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
         return Err(ProxyError::Config(format!(
             "upstream_ca_file must not contain path traversal (..): {path}"
         )));
@@ -293,9 +296,10 @@ fn validate_upstream_ca_file(ca_file: Option<&str>) -> Result<(), ProxyError> {
 
 /// Emit a warning when a path is a symlink.
 fn warn_if_symlink(path: &str) {
-    let p = Path::new(path);
-    if p.is_symlink() {
-        let target = std::fs::canonicalize(p).map_or_else(|_| "unknown".to_owned(), |c| c.display().to_string());
+    let candidate = Path::new(path);
+    if candidate.is_symlink() {
+        let target = std::fs::canonicalize(candidate)
+            .map_or_else(|_| "unknown".to_owned(), |canonical| canonical.display().to_string());
         warn!(
             path = path,
             target = %target,
@@ -320,15 +324,15 @@ fn validate_runtime_threads(threads: usize) -> Result<(), ProxyError> {
 
 /// Reject `runtime.max_connections` values that are zero or above the ceiling.
 fn validate_runtime_max_connections(max_connections: Option<u32>) -> Result<(), ProxyError> {
-    let Some(v) = max_connections else {
+    let Some(count) = max_connections else {
         return Ok(());
     };
-    if v == 0 {
+    if count == 0 {
         return Err(ProxyError::Config("runtime.max_connections must be >= 1".into()));
     }
-    if v > super::MAX_CONNECTIONS {
+    if count > super::MAX_CONNECTIONS {
         return Err(ProxyError::Config(format!(
-            "runtime.max_connections ({v}) exceeds maximum ({})",
+            "runtime.max_connections ({count}) exceeds maximum ({})",
             super::MAX_CONNECTIONS,
         )));
     }
@@ -337,11 +341,11 @@ fn validate_runtime_max_connections(max_connections: Option<u32>) -> Result<(), 
 
 /// Reject `upstream_keepalive_pool_size` above the ceiling.
 fn validate_keepalive_pool_size(pool_size: Option<usize>) -> Result<(), ProxyError> {
-    if let Some(v) = pool_size
-        && v > MAX_KEEPALIVE_POOL_SIZE
+    if let Some(size) = pool_size
+        && size > MAX_KEEPALIVE_POOL_SIZE
     {
         return Err(ProxyError::Config(format!(
-            "runtime.upstream_keepalive_pool_size ({v}) exceeds maximum ({MAX_KEEPALIVE_POOL_SIZE})"
+            "runtime.upstream_keepalive_pool_size ({size}) exceeds maximum ({MAX_KEEPALIVE_POOL_SIZE})"
         )));
     }
     Ok(())
@@ -349,11 +353,11 @@ fn validate_keepalive_pool_size(pool_size: Option<usize>) -> Result<(), ProxyErr
 
 /// Reject `runtime.subrequest_pool_size` above the ceiling.
 fn validate_subrequest_pool_size(pool_size: Option<usize>) -> Result<(), ProxyError> {
-    if let Some(v) = pool_size
-        && v > MAX_SUBREQUEST_POOL_SIZE
+    if let Some(size) = pool_size
+        && size > MAX_SUBREQUEST_POOL_SIZE
     {
         return Err(ProxyError::Config(format!(
-            "runtime.subrequest_pool_size ({v}) exceeds maximum ({MAX_SUBREQUEST_POOL_SIZE})"
+            "runtime.subrequest_pool_size ({size}) exceeds maximum ({MAX_SUBREQUEST_POOL_SIZE})"
         )));
     }
     Ok(())
@@ -361,17 +365,17 @@ fn validate_subrequest_pool_size(pool_size: Option<usize>) -> Result<(), ProxyEr
 
 /// Reject `runtime.max_memory_bytes` outside the allowed range.
 fn validate_max_memory_bytes(max_memory_bytes: Option<usize>) -> Result<(), ProxyError> {
-    let Some(v) = max_memory_bytes else {
+    let Some(bytes) = max_memory_bytes else {
         return Ok(());
     };
-    if v < MIN_MEMORY_BYTES {
+    if bytes < MIN_MEMORY_BYTES {
         return Err(ProxyError::Config(format!(
-            "runtime.max_memory_bytes ({v}) must be >= {MIN_MEMORY_BYTES} (1 MiB)"
+            "runtime.max_memory_bytes ({bytes}) must be >= {MIN_MEMORY_BYTES} (1 MiB)"
         )));
     }
-    if v > MAX_MEMORY_BYTES {
+    if bytes > MAX_MEMORY_BYTES {
         return Err(ProxyError::Config(format!(
-            "runtime.max_memory_bytes ({v}) exceeds maximum ({MAX_MEMORY_BYTES} / 1 TiB)"
+            "runtime.max_memory_bytes ({bytes}) exceeds maximum ({MAX_MEMORY_BYTES} / 1 TiB)"
         )));
     }
     Ok(())
@@ -380,19 +384,19 @@ fn validate_max_memory_bytes(max_memory_bytes: Option<usize>) -> Result<(), Prox
 /// Reject `runtime.subrequest_max_connections` of zero or above the
 /// semaphore permit ceiling.
 fn validate_subrequest_max_connections(max: Option<usize>) -> Result<(), ProxyError> {
-    let Some(v) = max else {
+    let Some(count) = max else {
         return Ok(());
     };
-    if v == 0 {
+    if count == 0 {
         return Err(ProxyError::Config(
             "runtime.subrequest_max_connections must be >= 1 when set \
              (0 would block all sub-requests indefinitely)"
                 .to_owned(),
         ));
     }
-    if v > tokio::sync::Semaphore::MAX_PERMITS {
+    if count > tokio::sync::Semaphore::MAX_PERMITS {
         return Err(ProxyError::Config(format!(
-            "runtime.subrequest_max_connections ({v}) exceeds tokio \
+            "runtime.subrequest_max_connections ({count}) exceeds tokio \
              Semaphore::MAX_PERMITS ({})",
             tokio::sync::Semaphore::MAX_PERMITS,
         )));

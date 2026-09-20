@@ -1,7 +1,43 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2024 Praxis Contributors
 
-//! Shared retry budget and per-cluster active-request tracking.
+//! Retry budget and active-request tracking to prevent cascading failures.
+//!
+//! When an upstream cluster starts failing, aggressive retries can amplify the
+//! problem: doubling traffic against an already-overloaded backend turns a
+//! partial outage into a total one. This module provides token-bucket retry
+//! admission control that prevents retry storms.
+//!
+//! # How it works
+//!
+//! Each cluster gets a [`RetryBudget`](crate::retry::RetryBudget) that acts as a token-bucket rate limiter.
+//! Tokens refill at a minimum floor rate (`min_retries_per_second`) and are
+//! capped at a percentage of the cluster's active request count. When a request
+//! needs to retry, it must acquire a token first; if the bucket is empty, the
+//! retry is rejected and the error is returned to the client immediately.
+//!
+//! The dynamic cap (`percent` of active requests) means retry capacity scales
+//! with legitimate traffic: a healthy cluster handling 1000 req/s with a 20%
+//! budget can retry up to 200 req/s, but when traffic drops to 100 req/s during
+//! an incident, retry capacity drops to 20 req/s. This prevents retries from
+//! dominating the request mix when a backend is already struggling.
+//!
+//! # Why per-cluster
+//!
+//! Retry state is cluster-scoped, not global or per-listener. A failure in one
+//! backend cluster should not exhaust retry budget for unrelated clusters. Each
+//! cluster's [`ClusterRetryState`](crate::retry::ClusterRetryState) tracks its own active requests and budget.
+//!
+//! # Token refill and admission
+//!
+//! Tokens refill continuously based on wall-clock time since the last refill,
+//! using atomic compare-exchange loops to handle concurrent callers. The refill
+//! rate is `min_retries_per_second` tokens per second, capped at
+//! `max_tokens(active_requests)`. Acquiring a token is a single atomic decrement
+//! that fails when the bucket is empty.
+//!
+//! When no budget is configured for a cluster, an unlimited budget is used that
+//! always admits retries (the legacy behavior, retained for compatibility).
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -54,10 +90,11 @@ impl RetryBudget {
     #[must_use]
     pub fn max_tokens(&self, active_requests: u64) -> u64 {
         #[expect(
+            clippy::as_conversions,
             clippy::cast_possible_truncation,
             clippy::cast_sign_loss,
             clippy::cast_precision_loss,
-            reason = "bounded percent; precision loss acceptable for budget math"
+            reason = "u64<->f64 has no lossless From/TryFrom; bounded percent budget math"
         )]
         let computed = (active_requests as f64 * self.percent / 100.0) as u64;
         computed.max(u64::from(self.min_retries_per_second))
@@ -74,7 +111,7 @@ impl RetryBudget {
         if now <= last {
             return;
         }
-        let elapsed_ms = now - last;
+        let elapsed_ms = now.saturating_sub(last);
         if elapsed_ms == 0 {
             return;
         }
@@ -121,10 +158,12 @@ impl RetryBudget {
             if current == 0 {
                 return false;
             }
-            match self
-                .tokens
-                .compare_exchange_weak(current, current - 1, Ordering::Relaxed, Ordering::Relaxed)
-            {
+            match self.tokens.compare_exchange_weak(
+                current,
+                current.saturating_sub(1),
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
                 Ok(_) => return true,
                 Err(observed) => current = observed,
             }
@@ -143,7 +182,7 @@ fn now_ms() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+        .map_or(0, |dur| u64::try_from(dur.as_millis()).unwrap_or(u64::MAX))
 }
 
 // -----------------------------------------------------------------------------
@@ -171,7 +210,7 @@ impl ClusterRetryState {
 
     /// Increment the active-request counter. Returns the new count.
     pub fn enter(&self) -> u64 {
-        self.active_requests.fetch_add(1, Ordering::Relaxed) + 1
+        self.active_requests.fetch_add(1, Ordering::Relaxed).saturating_add(1)
     }
 
     /// Decrement the active-request counter (saturating at zero).
@@ -181,10 +220,12 @@ impl ClusterRetryState {
             if current == 0 {
                 return;
             }
-            match self
-                .active_requests
-                .compare_exchange_weak(current, current - 1, Ordering::Relaxed, Ordering::Relaxed)
-            {
+            match self.active_requests.compare_exchange_weak(
+                current,
+                current.saturating_sub(1),
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
                 Ok(_) => return,
                 Err(observed) => current = observed,
             }
@@ -212,7 +253,7 @@ impl ClusterRetryState {
 
 #[cfg(test)]
 #[expect(clippy::allow_attributes, reason = "blanket test suppressions")]
-#[allow(clippy::unwrap_used, clippy::expect_used, reason = "tests")]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::min_ident_chars, reason = "tests")]
 mod tests {
     use super::*;
     use crate::config::BudgetPercent;

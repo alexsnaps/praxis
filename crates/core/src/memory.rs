@@ -123,7 +123,7 @@ impl MemoryPressure {
 }
 
 // -----------------------------------------------------------------------------
-// Platform Helpers
+// Platform Utilities
 // -----------------------------------------------------------------------------
 
 /// Whether a cached RSS sample taken at `last_ms` is stale relative to
@@ -144,7 +144,7 @@ fn epoch_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .ok()
-        .and_then(|d| u64::try_from(d.as_millis()).ok())
+        .and_then(|dur| u64::try_from(dur.as_millis()).ok())
         .unwrap_or(0)
 }
 
@@ -204,7 +204,10 @@ mod tests {
     #[test]
     fn sample_rss_returns_positive_value() {
         let rss = sample_rss();
-        assert!(rss.is_some_and(|v| v > 0), "RSS should be a positive value on Linux");
+        assert!(
+            rss.is_some_and(|bytes| bytes > 0),
+            "RSS should be a positive value on Linux"
+        );
     }
 
     #[cfg(target_os = "linux")]

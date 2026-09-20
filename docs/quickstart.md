@@ -1,5 +1,38 @@
 # Quickstart
 
+## Quick Test Servers
+
+For rapid experimentation without building or configuring, use the xtask utilities:
+
+**Echo server** (static responses):
+
+```console
+cargo xtask echo
+curl http://127.0.0.1:8080/
+# {"status": "ok"}
+```
+
+Customize responses:
+
+```console
+cargo xtask echo --status 201 --body '{"created": true}' --header "X-Custom: value"
+```
+
+**Debug server** (run with dev settings):
+
+```console
+cargo xtask debug
+# Runs with debug logging, admin API on :9090, single-threaded
+```
+
+Pass a config file:
+
+```console
+cargo xtask debug examples/configs/traffic-management/basic-reverse-proxy.yaml
+```
+
+## Build and Run
+
 Build the release binary:
 
 ```console

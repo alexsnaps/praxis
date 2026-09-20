@@ -1,0 +1,90 @@
+name: Performance Issue
+description: Report performance regression or optimization opportunity
+labels: ["performance", "triage/needs-triage"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What performance issue did you observe?
+      placeholder: |
+        Examples:
+        - Request latency increased after upgrade to v0.5.0
+        - Memory usage grows unbounded under load
+        - CPU usage spikes when using filter X
+        - Throughput degraded by 40% compared to baseline
+    validations:
+      required: true
+  - type: textarea
+    id: measurements
+    attributes:
+      label: Measurements
+      description: Quantitative data (latency, throughput, CPU, memory)
+      placeholder: |
+        - p50 latency: 50ms → 200ms
+        - Throughput: 10k req/s → 6k req/s
+        - Memory: RSS grows from 100MB to 2GB over 1 hour
+        - CPU: 40% → 80% under same load
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to Reproduce
+      description: Configuration, workload, and steps to observe the issue
+      placeholder: |
+        Config:
+        ```yaml
+        (paste relevant config)
+        ```
+
+        Load pattern:
+        - Tool: vegeta, wrk, etc.
+        - Rate: 1000 req/s
+        - Duration: 5 minutes
+
+        Steps:
+        1. Start proxy with config above
+        2. Run load test
+        3. Observe metric X
+    validations:
+      required: true
+  - type: textarea
+    id: baseline
+    attributes:
+      label: Baseline / Expected Performance
+      description: What performance did you expect or observe previously?
+      placeholder: |
+        - Version v0.4.0 handled same load at 10ms p50 latency
+        - Expected memory to stay under 500MB based on docs
+        - Similar proxies (Envoy, NGINX) show 2x better throughput
+  - type: input
+    id: version
+    attributes:
+      label: Praxis Version
+      placeholder: "v0.5.0"
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - AI / Inference
+        - Core / Config
+        - Filter Pipeline
+        - Observability
+        - Protocol
+        - Security / TLS
+        - Traffic Management
+        - Transformation
+        - Other
+  - type: textarea
+    id: profiling
+    attributes:
+      label: Profiling Data (optional)
+      description: Flame graphs, CPU profiles, heap dumps, traces
+      placeholder: |
+        Attach or link to:
+        - Flame graph
+        - perf output
+        - cargo-flamegraph results
+        - Heap profile from valgrind/dhat

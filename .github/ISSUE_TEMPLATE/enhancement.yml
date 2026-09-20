@@ -3,9 +3,9 @@ description: Starting point to a new feature, which might need a formal proposal
 labels: ["enhancement", "triage/needs-triage"]
 body:
   - type: textarea
-    id: what 
+    id: what
     attributes:
-      label: What? 
+      label: What?
       description: What do you want to add?
     validations:
       required: true
@@ -21,3 +21,17 @@ body:
     attributes:
       label: Assumptions
       description: What presuppositions is this based on?
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - AI / Inference
+        - Core / Config
+        - Filter Pipeline
+        - Observability
+        - Protocol
+        - Security / TLS
+        - Traffic Management
+        - Transformation
+        - Other

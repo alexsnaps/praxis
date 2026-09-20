@@ -27,7 +27,7 @@ macro_rules! impl_condition_deserialize {
     ($cond:ident, $match_:ty, $label:expr) => {
         #[derive(serde::Deserialize)]
         #[serde(deny_unknown_fields)]
-        struct ConditionDeserHelper {
+        struct ConditionDeserUtility {
             /// The `when` predicate, if present.
             #[serde(default)]
             when: Option<$match_>,
@@ -39,10 +39,10 @@ macro_rules! impl_condition_deserialize {
 
         impl<'de> serde::Deserialize<'de> for $cond {
             fn deserialize<D: serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-                let helper = ConditionDeserHelper::deserialize(deserializer)?;
-                match (helper.when, helper.unless) {
-                    (Some(m), None) => Ok($cond::When(m)),
-                    (None, Some(m)) => Ok($cond::Unless(m)),
+                let utility = ConditionDeserUtility::deserialize(deserializer)?;
+                match (utility.when, utility.unless) {
+                    (Some(predicate), None) => Ok($cond::When(predicate)),
+                    (None, Some(predicate)) => Ok($cond::Unless(predicate)),
                     (Some(_), Some(_)) => Err(serde::de::Error::custom(concat!(
                         $label,
                         " must have exactly one of 'when' or 'unless', not both"
@@ -71,8 +71,8 @@ macro_rules! impl_condition_serialize {
                 use serde::ser::SerializeMap as _;
                 let mut map = serializer.serialize_map(Some(1))?;
                 match self {
-                    $cond::When(m) => map.serialize_entry("when", m)?,
-                    $cond::Unless(m) => map.serialize_entry("unless", m)?,
+                    $cond::When(predicate) => map.serialize_entry("when", predicate)?,
+                    $cond::Unless(predicate) => map.serialize_entry("unless", predicate)?,
                 }
                 map.end()
             }

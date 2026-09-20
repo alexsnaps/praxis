@@ -3,6 +3,11 @@
 
 //! Build-level guarantees about the policy engine.
 //!
+//! This is a dedicated per-crate test binary, not an inline `#[cfg(test)]`
+//! module or a case in the shared `tests/integration` suite. It has to be:
+//! both guarantees below only hold when these tests are compiled against this
+//! crate, with its own feature resolution, and run in their own process.
+//!
 //! The registration case lives in its own test binary because the connector
 //! slot is process-wide and last-wins: the lib unit tests resolve pipelines
 //! concurrently, and any of their registrations would clobber the one asserted
@@ -10,7 +15,7 @@
 //! cannot mask it.
 
 // Integration tests carry the same suppressions the crate's in-module tests do:
-// the workspace gate denies panicking helpers and test functions outside a
+// the workspace gate denies panicking utilities and test functions outside a
 // cfg(test) module, neither of which applies to a standalone test binary.
 #![allow(
     clippy::allow_attributes_without_reason,

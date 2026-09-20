@@ -28,7 +28,7 @@ pub(super) fn validate_tls_settings(cluster: &Cluster, insecure_options: &Insecu
 
     if let Some(sni) = &tls.sni {
         praxis_tls::validate_sni_name(sni)
-            .map_err(|e| ProxyError::Config(format!("cluster '{}': sni {e}", cluster.name)))?;
+            .map_err(|err| ProxyError::Config(format!("cluster '{}': sni {err}", cluster.name)))?;
     }
 
     check_sni_verify_requirement(tls.sni.is_some(), tls.verify, &cluster.name, insecure_options)?;

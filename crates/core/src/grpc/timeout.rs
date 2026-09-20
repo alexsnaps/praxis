@@ -157,8 +157,8 @@ impl GrpcTimeout {
     ///
     /// Returns a [`GrpcTimeoutParseError`] describing which rule the
     /// value broke.
-    pub fn parse(value: &str) -> Result<Self, GrpcTimeoutParseError> {
-        let (unit_byte, digits) = value.as_bytes().split_last().ok_or(GrpcTimeoutParseError::Empty)?;
+    pub fn parse(input: &str) -> Result<Self, GrpcTimeoutParseError> {
+        let (unit_byte, digits) = input.as_bytes().split_last().ok_or(GrpcTimeoutParseError::Empty)?;
         let unit = match *unit_byte {
             b'H' => GrpcTimeoutUnit::Hour,
             b'M' => GrpcTimeoutUnit::Minute,
@@ -346,7 +346,13 @@ impl GrpcDeadline {
 
 #[cfg(test)]
 #[expect(clippy::allow_attributes, reason = "blanket test suppressions")]
-#[allow(clippy::unwrap_used, reason = "tests use unwrap for brevity")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::assertions_on_result_states,
+    clippy::uninlined_format_args,
+    clippy::shadow_unrelated,
+    reason = "tests use unwrap for brevity"
+)]
 mod tests {
     use super::*;
 
@@ -479,5 +485,413 @@ mod tests {
         assert!(past.is_expired(), "a past deadline is expired");
         assert_eq!(past.remaining(), None, "an expired deadline has no time left");
         assert!(past.was_clamped(), "the clamped flag should survive");
+    }
+
+    #[test]
+    fn timeout_unit_and_value_accessors() {
+        let timeout = GrpcTimeout::parse("250m").unwrap();
+        assert_eq!(
+            timeout.unit(),
+            GrpcTimeoutUnit::Millisecond,
+            "unit() should return the parsed unit"
+        );
+        assert_eq!(timeout.value(), 250, "value() should return the parsed value");
+
+        let timeout = GrpcTimeout::parse("5M").unwrap();
+        assert_eq!(timeout.unit(), GrpcTimeoutUnit::Minute);
+        assert_eq!(timeout.value(), 5);
+
+        let timeout = GrpcTimeout::parse("99999999H").unwrap();
+        assert_eq!(timeout.unit(), GrpcTimeoutUnit::Hour);
+        assert_eq!(timeout.value(), 99_999_999);
+    }
+
+    #[test]
+    fn timeout_unit_as_str_coverage() {
+        assert_eq!(GrpcTimeoutUnit::Hour.as_str(), "H");
+        assert_eq!(GrpcTimeoutUnit::Minute.as_str(), "M");
+        assert_eq!(GrpcTimeoutUnit::Second.as_str(), "S");
+        assert_eq!(GrpcTimeoutUnit::Millisecond.as_str(), "m");
+        assert_eq!(GrpcTimeoutUnit::Microsecond.as_str(), "u");
+        assert_eq!(GrpcTimeoutUnit::Nanosecond.as_str(), "n");
+    }
+
+    #[test]
+    fn all_duration_conversion_paths() {
+        // Test each unit's as_duration conversion
+        let hour = GrpcTimeout::parse("2H").unwrap();
+        assert_eq!(hour.as_duration(), Duration::from_secs(7200));
+
+        let minute = GrpcTimeout::parse("30M").unwrap();
+        assert_eq!(minute.as_duration(), Duration::from_secs(1800));
+
+        let second = GrpcTimeout::parse("45S").unwrap();
+        assert_eq!(second.as_duration(), Duration::from_secs(45));
+
+        let milli = GrpcTimeout::parse("500m").unwrap();
+        assert_eq!(milli.as_duration(), Duration::from_millis(500));
+
+        let micro = GrpcTimeout::parse("1000u").unwrap();
+        assert_eq!(micro.as_duration(), Duration::from_micros(1000));
+
+        let nano = GrpcTimeout::parse("5000n").unwrap();
+        assert_eq!(nano.as_duration(), Duration::from_nanos(5000));
+    }
+
+    #[test]
+    fn minute_values_saturate_rather_than_overflow() {
+        let huge = GrpcTimeout::parse("99999999M").unwrap();
+        let duration = huge.as_duration();
+        assert!(
+            duration > Duration::from_secs(60),
+            "a huge minute value should produce a duration"
+        );
+        assert_eq!(duration, Duration::from_secs(99_999_999 * 60));
+    }
+
+    #[test]
+    fn from_headers_with_non_utf8() {
+        use http::header::HeaderValue;
+
+        let mut headers = http::HeaderMap::new();
+        // Create a header value with non-UTF8 bytes (invalid for grpc-timeout)
+        let non_utf8 = HeaderValue::from_bytes(&[0xFF, 0xFE]).unwrap();
+        let _prev = headers.insert("grpc-timeout", non_utf8);
+
+        // Should return None because to_str() fails
+        assert!(
+            GrpcTimeout::from_headers(&headers).is_none(),
+            "a non-UTF8 header should be treated as absent, not malformed"
+        );
+    }
+
+    #[test]
+    fn from_headers_with_valid_timeout() {
+        let mut headers = http::HeaderMap::new();
+        let _prev = headers.insert("grpc-timeout", http::HeaderValue::from_static("100m"));
+
+        let result = GrpcTimeout::from_headers(&headers);
+        assert!(result.is_some(), "valid header should parse");
+        let timeout = result.unwrap().unwrap();
+        assert_eq!(timeout.as_duration(), Duration::from_millis(100));
+    }
+
+    #[test]
+    fn encode_with_very_large_duration() {
+        // Test with Duration that exceeds all unit scales
+        let huge = Duration::from_secs(u64::MAX);
+        let encoded = GrpcTimeout::encode(huge);
+        // Should encode with hours unit, truncating to fit 8 digits
+        assert!(encoded.ends_with('H'), "huge durations should use hours");
+        assert!(encoded.len() <= 9, "should fit in 8 digits + unit"); // 8 digits + 'H'
+    }
+
+    #[test]
+    fn encode_with_zero_duration() {
+        // Zero duration should encode as smallest possible value (1 nanosecond)
+        let zero = Duration::ZERO;
+        let encoded = GrpcTimeout::encode(zero);
+        assert_eq!(encoded, "1n", "zero duration should encode as 1n to avoid invalid zero");
+    }
+
+    #[test]
+    fn encode_prefers_coarsest_exact_unit() {
+        // 1 hour exactly should encode as "1H", not "3600S" or "60M"
+        assert_eq!(GrpcTimeout::encode(Duration::from_secs(3600)), "1H");
+
+        // 1 minute exactly should encode as "1M", not "60S"
+        assert_eq!(GrpcTimeout::encode(Duration::from_secs(60)), "1M");
+
+        // Non-exact values should use finest unit that fits
+        assert_eq!(
+            GrpcTimeout::encode(Duration::from_secs(61)),
+            "61S",
+            "61 seconds is not exact in minutes"
+        );
+    }
+
+    #[test]
+    fn encode_handles_fractional_units() {
+        // 1.5 seconds = 1500 milliseconds (exact)
+        assert_eq!(GrpcTimeout::encode(Duration::from_millis(1500)), "1500m");
+
+        // 1500 microseconds = 1500000 nanoseconds (exact)
+        assert_eq!(GrpcTimeout::encode(Duration::from_micros(1500)), "1500u");
+
+        // Non-exact: 1500 nanoseconds
+        assert_eq!(GrpcTimeout::encode(Duration::from_nanos(1500)), "1500n");
+    }
+
+    #[test]
+    fn encode_truncates_when_no_exact_fit() {
+        // A value that doesn't fit exactly in any unit
+        let awkward = Duration::from_nanos(999_999_999_999_999);
+        let encoded = GrpcTimeout::encode(awkward);
+        let reparsed = GrpcTimeout::parse(&encoded).unwrap().as_duration();
+
+        // Should truncate down, never round up
+        assert!(reparsed <= awkward, "encoded value should truncate down, not round up");
+    }
+
+    #[test]
+    fn deadline_accessors() {
+        let instant = Instant::now() + Duration::from_secs(10);
+        let deadline = GrpcDeadline::new(instant, true, false);
+
+        assert_eq!(deadline.deadline(), instant, "deadline() should return the instant");
+        assert!(deadline.was_clamped(), "was_clamped() should return true");
+        assert!(!deadline.propagate(), "propagate() should return false");
+    }
+
+    #[test]
+    fn deadline_propagate_flag() {
+        let instant = Instant::now() + Duration::from_secs(10);
+
+        let propagate_true = GrpcDeadline::new(instant, false, true);
+        assert!(propagate_true.propagate(), "propagate should be true");
+
+        let propagate_false = GrpcDeadline::new(instant, false, false);
+        assert!(!propagate_false.propagate(), "propagate should be false");
+    }
+
+    #[test]
+    fn deadline_remaining_excludes_zero() {
+        // A deadline at exactly now might have a zero duration remaining
+        let instant = Instant::now();
+        let deadline = GrpcDeadline::new(instant, false, true);
+
+        // remaining() filters out zero durations
+        let remaining = deadline.remaining();
+        if let Some(dur) = remaining {
+            assert!(!dur.is_zero(), "remaining() should not return zero durations");
+        }
+    }
+
+    #[test]
+    fn error_display_messages() {
+        // Test that all error variants produce readable messages
+        assert_eq!(GrpcTimeoutParseError::Empty.to_string(), "grpc-timeout is empty");
+
+        assert_eq!(
+            GrpcTimeoutParseError::MissingDigits.to_string(),
+            "grpc-timeout has no digits before its unit"
+        );
+
+        assert_eq!(
+            GrpcTimeoutParseError::NonDigit.to_string(),
+            "grpc-timeout value must be ASCII digits"
+        );
+
+        assert_eq!(
+            GrpcTimeoutParseError::TooManyDigits { got: 10 }.to_string(),
+            "grpc-timeout has 10 digits, at most 8 allowed"
+        );
+
+        assert_eq!(
+            GrpcTimeoutParseError::UnknownUnit { unit: 'z' }.to_string(),
+            "grpc-timeout has unknown unit 'z'"
+        );
+
+        assert_eq!(GrpcTimeoutParseError::Zero.to_string(), "grpc-timeout is zero");
+    }
+
+    #[test]
+    fn parse_edge_cases_with_whitespace() {
+        // Leading whitespace should fail
+        assert!(GrpcTimeout::parse(" 10S").is_err());
+
+        // Trailing whitespace should be treated as unknown unit
+        assert!(GrpcTimeout::parse("10S ").is_err());
+
+        // Embedded whitespace should fail
+        assert!(GrpcTimeout::parse("10 S").is_err());
+    }
+
+    #[test]
+    fn parse_with_plus_sign() {
+        // Plus sign is accepted by Rust's parse::<u64>(), so the parser accepts it
+        // (even though the gRPC spec says "ASCII digits", the implementation allows it)
+        let result = GrpcTimeout::parse("+10S");
+        assert!(result.is_ok(), "plus sign is accepted by u64 parsing");
+        assert_eq!(result.unwrap().value(), 10);
+    }
+
+    #[test]
+    fn parse_maximum_value_for_each_unit() {
+        // Test maximum 8-digit value for each unit
+        assert!(GrpcTimeout::parse("99999999H").is_ok());
+        assert!(GrpcTimeout::parse("99999999M").is_ok());
+        assert!(GrpcTimeout::parse("99999999S").is_ok());
+        assert!(GrpcTimeout::parse("99999999m").is_ok());
+        assert!(GrpcTimeout::parse("99999999u").is_ok());
+        assert!(GrpcTimeout::parse("99999999n").is_ok());
+    }
+
+    #[test]
+    fn parse_single_digit_for_each_unit() {
+        // Test minimum 1-digit value for each unit
+        assert!(GrpcTimeout::parse("1H").is_ok());
+        assert!(GrpcTimeout::parse("1M").is_ok());
+        assert!(GrpcTimeout::parse("1S").is_ok());
+        assert!(GrpcTimeout::parse("1m").is_ok());
+        assert!(GrpcTimeout::parse("1u").is_ok());
+        assert!(GrpcTimeout::parse("1n").is_ok());
+    }
+
+    #[test]
+    fn error_variants_equality() {
+        // Test PartialEq implementation for errors
+        assert_eq!(GrpcTimeoutParseError::Empty, GrpcTimeoutParseError::Empty);
+        assert_eq!(GrpcTimeoutParseError::Zero, GrpcTimeoutParseError::Zero);
+
+        assert_eq!(
+            GrpcTimeoutParseError::TooManyDigits { got: 9 },
+            GrpcTimeoutParseError::TooManyDigits { got: 9 }
+        );
+
+        assert_ne!(
+            GrpcTimeoutParseError::TooManyDigits { got: 9 },
+            GrpcTimeoutParseError::TooManyDigits { got: 10 }
+        );
+
+        assert_eq!(
+            GrpcTimeoutParseError::UnknownUnit { unit: 'x' },
+            GrpcTimeoutParseError::UnknownUnit { unit: 'x' }
+        );
+    }
+
+    #[test]
+    fn timeout_struct_equality() {
+        // Test PartialEq/Eq implementation for GrpcTimeout
+        let t1 = GrpcTimeout::parse("100m").unwrap();
+        let t2 = GrpcTimeout::parse("100m").unwrap();
+        let t3 = GrpcTimeout::parse("100S").unwrap();
+
+        assert_eq!(t1, t2, "identical timeouts should be equal");
+        assert_ne!(t1, t3, "different timeouts should not be equal");
+    }
+
+    #[test]
+    fn timeout_debug_format() {
+        let timeout = GrpcTimeout::parse("250m").unwrap();
+        let debug = format!("{:?}", timeout);
+        assert!(debug.contains("GrpcTimeout"), "debug should show type name");
+        assert!(
+            debug.contains("250") || debug.contains("Millisecond"),
+            "debug should show value or unit"
+        );
+    }
+
+    #[test]
+    fn unit_debug_format() {
+        assert!(format!("{:?}", GrpcTimeoutUnit::Hour).contains("Hour"));
+        assert!(format!("{:?}", GrpcTimeoutUnit::Minute).contains("Minute"));
+        assert!(format!("{:?}", GrpcTimeoutUnit::Second).contains("Second"));
+        assert!(format!("{:?}", GrpcTimeoutUnit::Millisecond).contains("Millisecond"));
+        assert!(format!("{:?}", GrpcTimeoutUnit::Microsecond).contains("Microsecond"));
+        assert!(format!("{:?}", GrpcTimeoutUnit::Nanosecond).contains("Nanosecond"));
+    }
+
+    #[test]
+    fn unit_equality() {
+        assert_eq!(GrpcTimeoutUnit::Hour, GrpcTimeoutUnit::Hour);
+        assert_ne!(GrpcTimeoutUnit::Hour, GrpcTimeoutUnit::Minute);
+        assert_ne!(GrpcTimeoutUnit::Millisecond, GrpcTimeoutUnit::Microsecond);
+    }
+
+    #[test]
+    fn unit_clone() {
+        let unit = GrpcTimeoutUnit::Second;
+        let cloned = unit;
+        assert_eq!(unit, cloned);
+    }
+
+    #[test]
+    fn timeout_clone() {
+        let original = GrpcTimeout::parse("100m").unwrap();
+        let cloned = original;
+        assert_eq!(original, cloned);
+    }
+
+    #[test]
+    fn deadline_clone() {
+        let instant = Instant::now() + Duration::from_secs(10);
+        let original = GrpcDeadline::new(instant, true, false);
+        let cloned = original;
+
+        assert_eq!(original.deadline(), cloned.deadline());
+        assert_eq!(original.was_clamped(), cloned.was_clamped());
+        assert_eq!(original.propagate(), cloned.propagate());
+    }
+
+    #[test]
+    fn deadline_debug_format() {
+        let deadline = GrpcDeadline::new(Instant::now() + Duration::from_secs(10), true, false);
+        let debug = format!("{:?}", deadline);
+        assert!(debug.contains("GrpcDeadline"), "debug should show type name");
+    }
+
+    #[test]
+    fn encode_all_unit_boundaries() {
+        // Test encoding at unit boundaries to ensure correct unit selection
+
+        // Just under 1 microsecond: should use nanoseconds
+        assert_eq!(GrpcTimeout::encode(Duration::from_nanos(999)), "999n");
+
+        // Exactly 1 microsecond: should use microseconds
+        assert_eq!(GrpcTimeout::encode(Duration::from_nanos(1_000)), "1u");
+
+        // Just under 1 millisecond: should use microseconds
+        assert_eq!(GrpcTimeout::encode(Duration::from_nanos(999_000)), "999u");
+
+        // Exactly 1 millisecond: should use milliseconds
+        assert_eq!(GrpcTimeout::encode(Duration::from_nanos(1_000_000)), "1m");
+
+        // Just under 1 second: should use milliseconds
+        assert_eq!(GrpcTimeout::encode(Duration::from_millis(999)), "999m");
+
+        // Exactly 1 second: should use seconds
+        assert_eq!(GrpcTimeout::encode(Duration::from_millis(1_000)), "1S");
+
+        // Just under 1 minute: should use seconds
+        assert_eq!(GrpcTimeout::encode(Duration::from_secs(59)), "59S");
+
+        // Exactly 1 minute: should use minutes
+        assert_eq!(GrpcTimeout::encode(Duration::from_secs(60)), "1M");
+    }
+
+    #[test]
+    fn parse_all_error_branches() {
+        // Ensure all error branches are covered
+
+        // Empty string
+        assert!(matches!(GrpcTimeout::parse(""), Err(GrpcTimeoutParseError::Empty)));
+
+        // Only unit, no digits
+        assert!(matches!(
+            GrpcTimeout::parse("H"),
+            Err(GrpcTimeoutParseError::MissingDigits)
+        ));
+
+        // Unknown unit
+        assert!(matches!(
+            GrpcTimeout::parse("10X"),
+            Err(GrpcTimeoutParseError::UnknownUnit { unit: 'X' })
+        ));
+
+        // Non-digit character
+        assert!(matches!(
+            GrpcTimeout::parse("1a2S"),
+            Err(GrpcTimeoutParseError::NonDigit)
+        ));
+
+        // Too many digits
+        assert!(matches!(
+            GrpcTimeout::parse("123456789S"),
+            Err(GrpcTimeoutParseError::TooManyDigits { got: 9 })
+        ));
+
+        // Zero value
+        assert!(matches!(GrpcTimeout::parse("0S"), Err(GrpcTimeoutParseError::Zero)));
     }
 }

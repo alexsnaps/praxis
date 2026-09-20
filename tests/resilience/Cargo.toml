@@ -12,7 +12,6 @@ workspace = true
 
 [dev-dependencies]
 async-trait = { workspace = true }
-benchmarks = { workspace = true }
 bytes = { workspace = true }
 praxis = { workspace = true }
 praxis-core = { workspace = true }

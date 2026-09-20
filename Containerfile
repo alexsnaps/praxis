@@ -20,10 +20,13 @@ WORKDIR /src
 # See: https://shaneutt.com/blog/rust-fast-small-docker-image-builds/
 
 COPY Cargo.toml Cargo.lock ./
+# NOTE: crate list must be kept in sync with crates/ directory structure.
+# When adding a new crate under crates/, add its Cargo.toml here AND in
+# the RUN mkdir + stub creation below, AND in the COPY src lines, AND in
+# the find command that touches source files.
 COPY crates/core/Cargo.toml crates/core/Cargo.toml
 COPY crates/filter/Cargo.toml crates/filter/Cargo.toml
 COPY crates/protocol/Cargo.toml crates/protocol/Cargo.toml
-COPY crates/simd-scan/Cargo.toml crates/simd-scan/Cargo.toml
 COPY crates/tls/Cargo.toml crates/tls/Cargo.toml
 COPY crates/server/Cargo.toml crates/server/Cargo.toml
 
@@ -37,13 +40,11 @@ RUN sed -i '/xtask/d; /benchmarks/d; /tests\//d' Cargo.toml
 RUN mkdir -p crates/core/src \
     crates/filter/src \
     crates/protocol/src \
-    crates/simd-scan/src \
     crates/tls/src \
     crates/server/src \
     && echo '//! stub' > crates/core/src/lib.rs \
     && echo '//! stub' > crates/filter/src/lib.rs \
     && echo '//! stub' > crates/protocol/src/lib.rs \
-    && echo '//! stub' > crates/simd-scan/src/lib.rs \
     && echo '//! stub' > crates/tls/src/lib.rs \
     && echo '//! stub' > crates/server/src/lib.rs \
     && printf '//! stub\nfn main() {}\n' > crates/server/src/main.rs
@@ -61,7 +62,6 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 COPY crates/core/src crates/core/src
 COPY crates/filter/src crates/filter/src
 COPY crates/protocol/src crates/protocol/src
-COPY crates/simd-scan/src crates/simd-scan/src
 COPY crates/tls/src crates/tls/src
 COPY crates/server/src crates/server/src
 COPY examples examples
@@ -69,7 +69,7 @@ COPY examples examples
 # Touch the lib/main files so cargo sees them as newer than
 # the cached stub artifacts.
 RUN find crates/core/src crates/filter/src \
-    crates/protocol/src crates/simd-scan/src crates/tls/src crates/server/src \
+    crates/protocol/src crates/tls/src crates/server/src \
     -name '*.rs' -exec touch {} +
 
 # ------------------------------------------------------------------------------
@@ -91,7 +91,12 @@ LABEL org.opencontainers.image.source="https://github.com/praxis-proxy/praxis" \
     org.opencontainers.image.description="Praxis proxy server" \
     org.opencontainers.image.licenses="Apache-2.0"
 
-RUN apk add --no-cache ca-certificates \
+# Install runtime dependencies:
+#   ca-certificates: TLS certificate validation
+#   wget: HEALTHCHECK probe (Alpine includes wget by default, but explicit for clarity)
+RUN apk add --no-cache \
+    ca-certificates \
+    wget \
     && addgroup -S praxis \
     && adduser -S -G praxis -h /nonexistent -s /sbin/nologin praxis \
     && mkdir -p /etc/praxis
@@ -107,7 +112,9 @@ USER praxis:praxis
 
 WORKDIR /etc/praxis
 
-EXPOSE 8080
+# Port 8080: proxy listener (see container-default.yaml)
+# Port 9901: admin API for healthcheck and metrics
+EXPOSE 8080 9901
 
 HEALTHCHECK --interval=5s --timeout=3s --start-period=2s \
     CMD wget -qO- http://127.0.0.1:9901/healthy || exit 1

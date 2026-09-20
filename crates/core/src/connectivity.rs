@@ -5,7 +5,7 @@
 
 mod connection_options;
 mod network;
-/// Shared [`HttpPeer`] construction helpers for TLS and connection options.
+/// Shared [`HttpPeer`] construction utilities for TLS and connection options.
 ///
 /// [`HttpPeer`]: pingora_core::upstreams::peer::HttpPeer
 pub mod peer;

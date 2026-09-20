@@ -295,7 +295,7 @@ impl HttpFilter for GrpcTimeoutFilter {
 }
 
 // -----------------------------------------------------------------------------
-// Helpers
+// Utilities
 // -----------------------------------------------------------------------------
 
 /// Build a Trailers-Only gRPC response carrying `code` and `message`.

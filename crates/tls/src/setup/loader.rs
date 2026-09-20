@@ -1,7 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2024 Praxis Contributors
 
-//! Certificate and key loading utilities.
+//! Certificate and key loading utilities for TLS setup.
+//!
+//! This module provides validated loading of certificates and private keys
+//! from PEM-encoded files. All loading paths use [`Zeroizing`] wrappers to
+//! clear sensitive key material from memory when dropped. Loaded certificate
+//! and key pairs are validated to ensure they match before being accepted,
+//! with detailed error messages that distinguish key-mismatch failures from
+//! parse errors.
+//!
+//! The module is consumed by the parent [`setup`][crate::setup] module to
+//! construct `rustls::ServerConfig` instances for listeners and upstream
+//! cluster TLS.
+//!
+//! [`Zeroizing`]: zeroize::Zeroizing
 
 use std::sync::Arc;
 
@@ -37,10 +50,22 @@ pub(crate) fn default_crypto_provider() -> Arc<CryptoProvider> {
 // Certificate Loading
 // -----------------------------------------------------------------------------
 
-/// Load a [`CertifiedKey`] from a [`CertKeyPair`].
+/// Load and validate a certificate/key pair into a [`CertifiedKey`].
+///
+/// Loads the certificate chain and private key from the paths in [`CertKeyPair`],
+/// validates that the certificate and key are cryptographically consistent (the
+/// key's public component matches the certificate), and constructs a signing key
+/// using the process-wide [`CryptoProvider`].
+///
+/// Returns a [`TlsError::FileLoadError`] if the files cannot be read, parsed,
+/// or validated. The error detail distinguishes key-mismatch failures from
+/// certificate parse failures and signing-key exposure failures so operators
+/// are not sent chasing the wrong problem.
 ///
 /// [`CertifiedKey`]: rustls::sign::CertifiedKey
 /// [`CertKeyPair`]: crate::CertKeyPair
+/// [`CryptoProvider`]: rustls::crypto::CryptoProvider
+/// [`TlsError::FileLoadError`]: crate::TlsError::FileLoadError
 pub(crate) fn load_certified_key(pair: &CertKeyPair) -> Result<CertifiedKey, TlsError> {
     let (certs, key) = load_cert_and_key(pair)?;
     let provider = default_crypto_provider();
@@ -82,7 +107,19 @@ fn keys_match_error_detail(e: &rustls::Error) -> String {
     }
 }
 
-/// Load certificate chain and private key from PEM files.
+/// Load and parse certificate chain and private key from PEM files.
+///
+/// Reads the PEM-encoded certificate and key files, parses them into DER
+/// form, and validates that at least one certificate is present and exactly
+/// one private key is found. File contents are wrapped in [`Zeroizing`] to
+/// clear sensitive key material from memory.
+///
+/// Returns the parsed certificate chain and private key on success, or a
+/// [`TlsError::FileLoadError`] if files cannot be read or parsed, if no
+/// certificates or keys are found, or if the PEM structure is invalid.
+///
+/// [`Zeroizing`]: zeroize::Zeroizing
+/// [`TlsError::FileLoadError`]: crate::TlsError::FileLoadError
 pub(super) fn load_cert_and_key(
     pair: &CertKeyPair,
 ) -> Result<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>), TlsError> {
@@ -320,6 +357,168 @@ mod tests {
         assert!(
             err.to_string().contains("no certificates found"),
             "using key file as cert should say no certs found, got: {err}"
+        );
+    }
+
+    #[test]
+    fn malformed_key_pem_returns_error() {
+        let certs = gen_test_certs();
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let bad_key = dir.path().join("bad-key.pem");
+        // Use invalid base64 that will fail PEM parsing
+        std::fs::write(
+            &bad_key,
+            b"-----BEGIN PRIVATE KEY-----\ninvalid base64 !!!\n-----END PRIVATE KEY-----\n",
+        )
+        .expect("write malformed key");
+        let pair = CertKeyPair {
+            cert_path: certs.cert_path.to_str().expect("path").to_owned(),
+            default: false,
+            key_path: bad_key.to_str().expect("path").to_owned(),
+            server_names: Vec::new(),
+        };
+        let err = load_cert_and_key(&pair).expect_err("malformed key PEM should fail");
+        assert!(
+            err.to_string().contains("failed to parse key PEM"),
+            "malformed key should report parse error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn malformed_cert_pem_structure_returns_error() {
+        let certs = gen_test_certs();
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let bad_cert = dir.path().join("bad-structure.pem");
+        std::fs::write(
+            &bad_cert,
+            b"-----BEGIN CERTIFICATE-----\ninvalid base64 !!!\n-----END CERTIFICATE-----\n",
+        )
+        .expect("write bad cert");
+        let pair = CertKeyPair {
+            cert_path: bad_cert.to_str().expect("path").to_owned(),
+            default: false,
+            key_path: certs.key_path.to_str().expect("path").to_owned(),
+            server_names: Vec::new(),
+        };
+        let err = load_cert_and_key(&pair).expect_err("malformed cert structure should fail");
+        assert!(
+            err.to_string().contains("failed to parse cert PEM"),
+            "malformed cert structure should report parse error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn cert_with_multiple_certificates_loads_chain() {
+        let certs = gen_test_certs();
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let chain_path = dir.path().join("chain.pem");
+
+        // Read existing cert and CA, combine into a chain
+        let cert_pem = std::fs::read(&certs.cert_path).expect("read cert");
+        let ca_pem = std::fs::read(&certs.ca_cert_path).expect("read CA");
+        let mut chain_bytes = Vec::new();
+        chain_bytes.extend_from_slice(&cert_pem);
+        chain_bytes.extend_from_slice(&ca_pem);
+        std::fs::write(&chain_path, chain_bytes).expect("write chain");
+
+        let pair = CertKeyPair {
+            cert_path: chain_path.to_str().expect("path").to_owned(),
+            default: false,
+            key_path: certs.key_path.to_str().expect("path").to_owned(),
+            server_names: Vec::new(),
+        };
+
+        let (chain, _key) = load_cert_and_key(&pair).expect("chain should load");
+        assert!(
+            chain.len() >= 2,
+            "certificate chain should contain at least 2 certificates (leaf + CA)"
+        );
+    }
+
+    #[test]
+    fn keys_match_error_detail_coverage() {
+        // Test KeyMismatch variant
+        let mismatch_err = rustls::Error::InconsistentKeys(rustls::InconsistentKeys::KeyMismatch);
+        let mismatch_msg = keys_match_error_detail(&mismatch_err);
+        assert!(
+            mismatch_msg.contains("do not match"),
+            "KeyMismatch should mention 'do not match', got: {mismatch_msg}"
+        );
+
+        // Test Unknown variant
+        let unknown_err = rustls::Error::InconsistentKeys(rustls::InconsistentKeys::Unknown);
+        let unknown_msg = keys_match_error_detail(&unknown_err);
+        assert!(
+            unknown_msg.contains("cannot expose its public key"),
+            "Unknown should mention public key exposure issue, got: {unknown_msg}"
+        );
+
+        // Test other error variant (using a different rustls error)
+        let other_err = rustls::Error::General("test error".to_owned());
+        let other_msg = keys_match_error_detail(&other_err);
+        assert!(
+            other_msg.contains("failed to validate"),
+            "Other errors should use generic validation message, got: {other_msg}"
+        );
+    }
+
+    #[test]
+    fn load_certified_key_with_valid_pair() {
+        let certs = gen_test_certs();
+        let pair = CertKeyPair {
+            cert_path: certs.cert_path.to_str().expect("path").to_owned(),
+            default: false,
+            key_path: certs.key_path.to_str().expect("path").to_owned(),
+            server_names: Vec::new(),
+        };
+
+        let certified = load_certified_key(&pair).expect("valid pair should create CertifiedKey");
+        assert!(!certified.cert.is_empty(), "certified key should contain certificates");
+    }
+
+    #[test]
+    fn multiple_certs_in_file_loads_all() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+
+        // Generate two separate cert chains
+        let certs1 = gen_test_certs();
+        let certs2 = gen_test_certs();
+
+        let multi_cert = dir.path().join("multi.pem");
+        let cert1 = std::fs::read(&certs1.cert_path).expect("read cert1");
+        let cert2 = std::fs::read(&certs2.cert_path).expect("read cert2");
+
+        let mut combined = Vec::new();
+        combined.extend_from_slice(&cert1);
+        combined.push(b'\n');
+        combined.extend_from_slice(&cert2);
+        std::fs::write(&multi_cert, combined).expect("write multi cert");
+
+        let pair = CertKeyPair {
+            cert_path: multi_cert.to_str().expect("path").to_owned(),
+            default: false,
+            key_path: certs1.key_path.to_str().expect("path").to_owned(),
+            server_names: Vec::new(),
+        };
+
+        let (certs, _key) = load_cert_and_key(&pair).expect("multiple certs should load");
+        assert!(certs.len() >= 2, "should load multiple certificates from file");
+    }
+
+    #[test]
+    fn load_cert_and_key_io_error_messages() {
+        let pair = CertKeyPair {
+            cert_path: "/nonexistent/cert.pem".to_owned(),
+            default: false,
+            key_path: "/nonexistent/key.pem".to_owned(),
+            server_names: Vec::new(),
+        };
+
+        let err = load_cert_and_key(&pair).expect_err("nonexistent files should fail");
+        let err_str = err.to_string();
+        assert!(
+            err_str.contains("failed to read cert") || err_str.contains("cert.pem"),
+            "error should mention cert reading failure, got: {err_str}"
         );
     }
 }

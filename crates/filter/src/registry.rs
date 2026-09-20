@@ -5,11 +5,14 @@
 
 use std::collections::HashMap;
 
+#[cfg(feature = "iterative-request-router")]
 use praxis_core::config::InsecureOptions;
 
+#[cfg(feature = "chain-binding")]
+use crate::binding::ChainBindingHttpFactory;
 use crate::{
     any_filter::AnyFilter,
-    binding::{ChainBindingContext, ChainBindingHttpFactory},
+    binding::ChainBindingContext,
     factory::{FilterFactory, HttpFilterFactoryFn, TcpFilterFactoryFn, http_builtin, tcp_builtin},
     filter::FilterError,
 };
@@ -59,10 +62,12 @@ enum RegisteredFilterFactory {
     Standard(FilterFactory),
 
     /// A built-in HTTP factory that resolves nested filters.
+    #[cfg(feature = "iterative-request-router")]
     HttpWithRegistry(RegistryHttpFilterFactory),
 
     /// An application HTTP factory that binds an outbound subrequest chain at
     /// construction time via a [`ChainBindingContext`].
+    #[cfg(feature = "chain-binding")]
     ChainBinding(ChainBindingHttpFactory),
 }
 
@@ -76,6 +81,7 @@ enum RegisteredFilterFactory {
 /// declared [`InsecureOptions`], so inline outbound clusters are gated
 /// (SSRF/TLS-verify) by the containing build's real posture rather than an
 /// unconditional strict default. Used by `iterative_request_router`.
+#[cfg(feature = "iterative-request-router")]
 type RegistryHttpFilterFactory =
     fn(&serde_yaml::Value, &ChainBindingContext<'_>) -> Result<Box<dyn crate::filter::HttpFilter>, FilterError>;
 
@@ -89,7 +95,15 @@ impl RegisteredFilterFactory {
     /// supplies one.
     ///
     /// [`FilterPipeline::build_with_chains`]: crate::FilterPipeline::build_with_chains
-    fn create(&self, config: &serde_yaml::Value, registry: &FilterRegistry) -> Result<AnyFilter, FilterError> {
+    fn create(
+        &self,
+        config: &serde_yaml::Value,
+        #[cfg_attr(
+            not(feature = "iterative-request-router"),
+            expect(unused_variables, reason = "registry is read only by the gated HttpWithRegistry arm")
+        )]
+        registry: &FilterRegistry,
+    ) -> Result<AnyFilter, FilterError> {
         match self {
             Self::Standard(factory) => factory.create(config),
             // No containing build here, so there is no named-chain table, no
@@ -97,10 +111,12 @@ impl RegisteredFilterFactory {
             // context (empty chains, strict default posture). The real server
             // path builds through `create_with_binding`, which threads the true
             // `ChainBindingContext` from `FilterPipeline::build_with_chains`.
+            #[cfg(feature = "iterative-request-router")]
             Self::HttpWithRegistry(factory) => {
                 ChainBindingContext::with_standalone(registry, &InsecureOptions::default(), |ctx| factory(config, ctx))
                     .map(AnyFilter::Http)
             },
+            #[cfg(feature = "chain-binding")]
             Self::ChainBinding(_) => Err(FilterError::from(
                 "this filter binds an outbound subrequest chain and must be built via \
                  FilterPipeline::build_with_chains",
@@ -117,11 +133,20 @@ impl RegisteredFilterFactory {
     fn create_with_binding(
         &self,
         config: &serde_yaml::Value,
+        #[cfg_attr(
+            not(any(feature = "iterative-request-router", feature = "chain-binding")),
+            expect(
+                unused_variables,
+                reason = "ctx is read only by the gated HttpWithRegistry and ChainBinding arms"
+            )
+        )]
         ctx: &ChainBindingContext<'_>,
     ) -> Result<AnyFilter, FilterError> {
         match self {
             Self::Standard(factory) => factory.create(config),
+            #[cfg(feature = "iterative-request-router")]
             Self::HttpWithRegistry(factory) => Ok(AnyFilter::Http(factory(config, ctx)?)),
+            #[cfg(feature = "chain-binding")]
             Self::ChainBinding(factory) => Ok(AnyFilter::Http(factory(config, ctx)?)),
         }
     }
@@ -315,6 +340,7 @@ impl FilterRegistry {
     ///
     /// [`ChainBindingContext`]: crate::ChainBindingContext
     /// [`FilterPipeline`]: crate::FilterPipeline
+    #[cfg(feature = "chain-binding")]
     pub fn register_chain_binding(&mut self, name: &str, factory: ChainBindingHttpFactory) -> Result<(), FilterError> {
         self.register_chain_binding_with_class(name, factory, SecurityClass::Standard)
     }
@@ -326,6 +352,7 @@ impl FilterRegistry {
     /// # Errors
     ///
     /// Returns [`FilterError`] if the name is already registered.
+    #[cfg(feature = "chain-binding")]
     pub fn register_chain_binding_with_class(
         &mut self,
         name: &str,
@@ -454,9 +481,8 @@ fn register_http_builtins(filters: &mut HashMap<String, FilterRegistration>) {
     use crate::builtins::{
         AccessLogFilter, CircuitBreakerFilter, CompressionFilter, CorsFilter, CredentialInjectionFilter, CsrfFilter,
         ForwardedHeadersFilter, GrpcDetectionFilter, GrpcStatusFilter, GrpcTimeoutFilter, GrpcWebFilter, HeaderFilter,
-        IpAclFilter, JsonBodyFieldFilter, JsonBodyFilter, JsonRpcFilter, PathRewriteFilter, PeerIdentityTrustFilter,
-        RateLimitFilter, RedirectFilter, RequestIdFilter, StaticResponseFilter, TimeoutFilter, TraceContextFilter,
-        UrlRewriteFilter,
+        IpAclFilter, JsonBodyFieldFilter, JsonBodyFilter, JsonRpcFilter, PathRewriteFilter, RateLimitFilter,
+        RedirectFilter, RequestIdFilter, StaticResponseFilter, TimeoutFilter, TraceContextFilter, UrlRewriteFilter,
     };
 
     register_http(filters, "access_log", AccessLogFilter::from_config);
@@ -484,6 +510,7 @@ fn register_http_builtins(filters: &mut HashMap<String, FilterRegistration>) {
     register_http(filters, "grpc_web", GrpcWebFilter::from_config);
     register_http_security(filters, "guardrails", crate::GuardrailsFilter::from_config);
     register_http_security(filters, "ip_acl", IpAclFilter::from_config);
+    #[cfg(feature = "iterative-request-router")]
     register_http_with_registry(
         filters,
         "iterative_request_router",
@@ -503,7 +530,12 @@ fn register_http_builtins(filters: &mut HashMap<String, FilterRegistration>) {
     register_http(filters, "json_body", JsonBodyFilter::from_config);
     register_http(filters, "json_body_field", JsonBodyFieldFilter::from_config);
     register_http(filters, "json_rpc", JsonRpcFilter::from_config);
-    register_http_security(filters, "peer_identity_trust", PeerIdentityTrustFilter::from_config);
+    #[cfg(feature = "spiffe")]
+    register_http_security(
+        filters,
+        "peer_identity_trust",
+        crate::builtins::PeerIdentityTrustFilter::from_config,
+    );
 }
 
 /// Registers a single HTTP filter factory with [`SecurityClass::Standard`].
@@ -513,6 +545,7 @@ fn register_http(filters: &mut HashMap<String, FilterRegistration>, name: &str, 
 
 /// Registers a built-in HTTP filter whose nested configuration must
 /// resolve against the same registry as its containing pipeline.
+#[cfg(feature = "iterative-request-router")]
 fn register_http_with_registry(
     filters: &mut HashMap<String, FilterRegistration>,
     name: &str,
@@ -656,11 +689,13 @@ mod tests {
             names.contains(&"json_body_field"),
             "json_body_field should be registered"
         );
+        #[cfg(feature = "iterative-request-router")]
         assert!(
             names.contains(&"iterative_request_router"),
             "iterative_request_router should be registered"
         );
         assert!(names.contains(&"json_rpc"), "json_rpc should be registered");
+        #[cfg(feature = "spiffe")]
         assert!(
             names.contains(&"peer_identity_trust"),
             "peer_identity_trust should be registered"
@@ -731,7 +766,7 @@ mod tests {
     #[test]
     fn builtin_security_filters_classified() {
         let registry = FilterRegistry::with_builtins();
-        #[allow(unused_mut, reason = "mutated only with basic-auth-filter")]
+        #[allow(unused_mut, reason = "mutated only with basic-auth-filter or spiffe")]
         let mut expected_security = vec![
             "cors",
             "credential_injection",
@@ -739,11 +774,12 @@ mod tests {
             "forwarded_headers",
             "guardrails",
             "ip_acl",
-            "peer_identity_trust",
             "rate_limit",
         ];
         #[cfg(feature = "basic-auth-filter")]
         expected_security.push("basic_auth");
+        #[cfg(feature = "spiffe")]
+        expected_security.push("peer_identity_trust");
 
         for name in &expected_security {
             assert!(
@@ -804,6 +840,7 @@ mod tests {
         );
         assert!(sec.contains(&"guardrails"), "guardrails should be in security_filters");
         assert!(sec.contains(&"ip_acl"), "ip_acl should be in security_filters");
+        #[cfg(feature = "spiffe")]
         assert!(
             sec.contains(&"peer_identity_trust"),
             "peer_identity_trust should be in security_filters"

@@ -833,7 +833,7 @@ mod tests {
     }
 
     #[test]
-    fn read_helpers_big_endian() {
+    fn read_utilities_big_endian() {
         assert_eq!(
             read_u16(&[0x01, 0x00], 0).expect("valid u16"),
             256,

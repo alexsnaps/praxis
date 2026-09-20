@@ -15,6 +15,7 @@ mod guardrails;
 mod ip_acl;
 pub(crate) mod origin_matcher;
 pub(crate) mod origin_normalize;
+#[cfg(feature = "spiffe")]
 mod peer_identity_trust;
 #[cfg(feature = "policy-engine")]
 mod policy;
@@ -27,6 +28,7 @@ pub use csrf::CsrfFilter;
 pub use forwarded_headers::ForwardedHeadersFilter;
 pub use guardrails::{ContainsValue, GuardrailsAction, GuardrailsFilter, PiiKind, RuleTargetKind};
 pub use ip_acl::IpAclFilter;
+#[cfg(feature = "spiffe")]
 pub use peer_identity_trust::PeerIdentityTrustFilter;
 #[cfg(feature = "policy-engine")]
 pub use policy::{PolicyFilter, PolicyPluginFactoryFn, register_policy_plugin_factory};

@@ -78,7 +78,7 @@ fn validate_entry_conditions(chain_name: &str, entry: &FilterEntry) -> Result<()
 fn validate_request_conditions(chain_name: &str, entry: &FilterEntry) -> Result<(), ProxyError> {
     for (idx, condition) in entry.conditions.iter().enumerate() {
         let matcher = match condition {
-            Condition::When(m) | Condition::Unless(m) => m,
+            Condition::When(inner) | Condition::Unless(inner) => inner,
         };
         if matcher.grpc.is_none()
             && matcher.path.is_none()
@@ -142,7 +142,7 @@ fn validate_condition_paths(
 fn validate_response_conditions(chain_name: &str, entry: &FilterEntry) -> Result<(), ProxyError> {
     for (idx, condition) in entry.response_conditions.iter().enumerate() {
         let matcher = match condition {
-            ResponseCondition::When(m) | ResponseCondition::Unless(m) => m,
+            ResponseCondition::When(inner) | ResponseCondition::Unless(inner) => inner,
         };
         if matcher.status.is_none() && matcher.headers.is_none() {
             return Err(ProxyError::Config(format!(
@@ -196,7 +196,7 @@ pub const TERMINAL_FILTERS: &[&str] = &["iterative_request_router"];
 fn validate_terminal_filters(chains: &[FilterChainConfig]) -> Result<(), ProxyError> {
     for chain in chains {
         for (i, entry) in chain.filters.iter().enumerate() {
-            if TERMINAL_FILTERS.contains(&entry.filter_type.as_str()) && i + 1 < chain.filters.len() {
+            if TERMINAL_FILTERS.contains(&entry.filter_type.as_str()) && i.saturating_add(1) < chain.filters.len() {
                 return Err(ProxyError::Config(format!(
                     "filter '{}' must be the last filter in chain '{}' \
                      because it produces terminal responses",
@@ -291,7 +291,7 @@ fn validate_chain_names(chains: &[FilterChainConfig]) -> Result<(), ProxyError> 
 
 /// Reject listener references to non-existent chains.
 fn validate_listener_references(chains: &[FilterChainConfig], listeners: &[Listener]) -> Result<(), ProxyError> {
-    let chain_names: HashSet<&str> = chains.iter().map(|c| c.name.as_str()).collect();
+    let chain_names: HashSet<&str> = chains.iter().map(|chain| chain.name.as_str()).collect();
     for listener in listeners {
         for chain_ref in &listener.filter_chains {
             if !chain_names.contains(chain_ref.as_str()) {

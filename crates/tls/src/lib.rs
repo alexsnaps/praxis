@@ -8,6 +8,7 @@
     clippy::min_ident_chars,
     reason = "TODO(conventions-sync): fix violations and remove"
 )]
+// TODO we need to remove these clippy overrides completely, and force the code to be correct
 
 //! TLS configuration types for the Praxis proxy.
 //!

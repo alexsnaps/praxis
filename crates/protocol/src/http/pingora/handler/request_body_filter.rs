@@ -343,6 +343,203 @@ mod tests {
         assert_eq!(body, None, "empty adapted body forwards nothing (Content-Length: 0)");
     }
 
+    #[test]
+    fn drain_clears_adapted_body_after_exhaustion() {
+        let mut ctx = make_ctx();
+        ctx.adapted_request_body = Some(VecDeque::from([Bytes::from_static(b"chunk1")]));
+        ctx.retained_adapted_request_body = Some(VecDeque::from([Bytes::from_static(b"chunk1")]));
+
+        let mut body = None;
+        assert!(drain_pre_read_body(&mut ctx, &mut body), "first drain active");
+        assert_eq!(body, Some(Bytes::from_static(b"chunk1")));
+
+        // After draining all chunks, adapted_request_body should be set to None
+        let mut body2 = None;
+        assert!(
+            drain_pre_read_body(&mut ctx, &mut body2),
+            "drain remains active with empty adapted body"
+        );
+        assert_eq!(body2, None, "no more chunks");
+        assert!(
+            ctx.adapted_request_body.is_none(),
+            "adapted body cleared after exhaustion"
+        );
+    }
+
+    #[test]
+    fn drain_with_multiple_adapted_chunks() {
+        let mut ctx = make_ctx();
+        ctx.adapted_request_body = Some(VecDeque::from([
+            Bytes::from_static(b"adapted1"),
+            Bytes::from_static(b"adapted2"),
+            Bytes::from_static(b"adapted3"),
+        ]));
+        ctx.retained_adapted_request_body = Some(VecDeque::new());
+
+        let mut body = None;
+        assert!(drain_pre_read_body(&mut ctx, &mut body));
+        assert_eq!(body, Some(Bytes::from_static(b"adapted1")));
+
+        let mut body = None;
+        assert!(drain_pre_read_body(&mut ctx, &mut body));
+        assert_eq!(body, Some(Bytes::from_static(b"adapted2")));
+
+        let mut body = None;
+        assert!(drain_pre_read_body(&mut ctx, &mut body));
+        assert_eq!(body, Some(Bytes::from_static(b"adapted3")));
+
+        let mut body = None;
+        assert!(drain_pre_read_body(&mut ctx, &mut body));
+        assert_eq!(body, None, "exhausted");
+    }
+
+    #[test]
+    fn drain_adapted_body_none_but_marker_present() {
+        let mut ctx = make_ctx();
+        // Marker is present but adapted_request_body is None (already drained)
+        ctx.adapted_request_body = None;
+        ctx.retained_adapted_request_body = Some(VecDeque::new());
+
+        let mut body = None;
+        assert!(drain_pre_read_body(&mut ctx, &mut body), "drain active due to marker");
+        assert_eq!(body, None, "no body when adapted is None");
+    }
+
+    #[test]
+    fn drain_pre_read_multiple_chunks() {
+        let mut ctx = make_ctx();
+        ctx.pre_read_body = Some(VecDeque::from([
+            Bytes::from_static(b"chunk1"),
+            Bytes::from_static(b"chunk2"),
+        ]));
+
+        let mut body = None;
+        assert!(drain_pre_read_body(&mut ctx, &mut body));
+        assert_eq!(body, Some(Bytes::from_static(b"chunk1")));
+        assert!(ctx.pre_read_body.is_some(), "still has chunks");
+
+        let mut body = None;
+        assert!(drain_pre_read_body(&mut ctx, &mut body));
+        assert_eq!(body, Some(Bytes::from_static(b"chunk2")));
+        assert!(ctx.pre_read_body.is_none(), "cleared after last chunk");
+    }
+
+    #[test]
+    fn drain_pre_read_body_none_returns_false() {
+        let mut ctx = make_ctx();
+        let mut body = Some(Bytes::from_static(b"regular"));
+
+        assert!(
+            !drain_pre_read_body(&mut ctx, &mut body),
+            "no drain when pre_read_body is None"
+        );
+        assert_eq!(body, Some(Bytes::from_static(b"regular")), "body unchanged");
+    }
+
+    #[test]
+    fn drain_adapted_empty_deque_clears_immediately() {
+        let mut ctx = make_ctx();
+        ctx.adapted_request_body = Some(VecDeque::new());
+        ctx.retained_adapted_request_body = Some(VecDeque::new());
+
+        let mut body = Some(Bytes::from_static(b"ignored"));
+        assert!(drain_pre_read_body(&mut ctx, &mut body), "drain active");
+        assert_eq!(body, None, "empty deque yields None");
+        assert!(ctx.adapted_request_body.is_none(), "empty deque cleared immediately");
+    }
+
+    #[test]
+    fn drain_pre_read_single_empty_chunk() {
+        let mut ctx = make_ctx();
+        ctx.pre_read_body = Some(VecDeque::from([Bytes::new()]));
+
+        let mut body = None;
+        assert!(drain_pre_read_body(&mut ctx, &mut body));
+        assert_eq!(body, Some(Bytes::new()), "empty chunk forwarded");
+        assert!(ctx.pre_read_body.is_none(), "cleared after draining");
+    }
+
+    #[test]
+    fn drain_adapted_marker_prevents_canonical_fallback() {
+        let mut ctx = make_ctx();
+        // Canonical body present, adapted exhausted, but marker present
+        ctx.pre_read_body = Some(VecDeque::from([Bytes::from_static(b"canonical")]));
+        ctx.adapted_request_body = Some(VecDeque::new());
+        ctx.retained_adapted_request_body = Some(VecDeque::new());
+
+        let mut body = None;
+        assert!(drain_pre_read_body(&mut ctx, &mut body));
+        assert_eq!(body, None, "no fallback to canonical");
+        assert!(ctx.pre_read_body.is_some(), "canonical body untouched");
+    }
+
+    #[test]
+    fn drain_body_mutation_only_when_active() {
+        let mut ctx = make_ctx();
+        let original_body = Bytes::from_static(b"original");
+        let mut body = Some(original_body.clone());
+
+        // No drain active
+        assert!(!drain_pre_read_body(&mut ctx, &mut body));
+        assert_eq!(body, Some(original_body), "body unchanged when inactive");
+    }
+
+    #[test]
+    fn drain_adapted_body_is_none_or_empty_check() {
+        let mut ctx = make_ctx();
+        ctx.adapted_request_body = Some(VecDeque::from([Bytes::from_static(b"last")]));
+        ctx.retained_adapted_request_body = Some(VecDeque::new());
+
+        let mut body = None;
+        assert!(drain_pre_read_body(&mut ctx, &mut body));
+        assert_eq!(body, Some(Bytes::from_static(b"last")));
+
+        // Now adapted_request_body is Some(empty VecDeque), should be cleared
+        let mut body2 = None;
+        assert!(drain_pre_read_body(&mut ctx, &mut body2));
+        assert_eq!(body2, None);
+        assert!(
+            ctx.adapted_request_body.is_none(),
+            "empty VecDeque cleared via is_none_or(is_empty)"
+        );
+    }
+
+    #[test]
+    fn drain_priority_adapted_over_canonical() {
+        let mut ctx = make_ctx();
+        // Both present, adapted should win
+        ctx.pre_read_body = Some(VecDeque::from([Bytes::from_static(b"canonical")]));
+        ctx.adapted_request_body = Some(VecDeque::from([Bytes::from_static(b"adapted")]));
+        ctx.retained_adapted_request_body = Some(VecDeque::new());
+
+        let mut body = None;
+        assert!(drain_pre_read_body(&mut ctx, &mut body));
+        assert_eq!(body, Some(Bytes::from_static(b"adapted")), "adapted has priority");
+        assert!(
+            ctx.pre_read_body.is_some(),
+            "canonical not touched when adapted present"
+        );
+    }
+
+    #[test]
+    fn drain_state_transitions() {
+        let mut ctx = make_ctx();
+
+        // State 1: No drain
+        let mut body = None;
+        assert!(!drain_pre_read_body(&mut ctx, &mut body));
+
+        // State 2: Add pre_read_body, drain becomes active
+        ctx.pre_read_body = Some(VecDeque::from([Bytes::from_static(b"chunk")]));
+        let mut body = None;
+        assert!(drain_pre_read_body(&mut ctx, &mut body));
+        assert_eq!(body, Some(Bytes::from_static(b"chunk")));
+
+        // State 3: Drained, becomes inactive
+        let mut body = None;
+        assert!(!drain_pre_read_body(&mut ctx, &mut body));
+    }
+
     // -------------------------------------------------------------------------
     // Test Utilities
     // -------------------------------------------------------------------------

@@ -121,8 +121,8 @@ pub(crate) fn spawn_config_watcher(params: WatcherParams) -> std::thread::JoinHa
     std::thread::spawn(move || {
         let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
             Ok(rt) => rt,
-            Err(e) => {
-                tracing::error!(error = %e, "failed to start config watcher runtime; hot reload disabled");
+            Err(err) => {
+                tracing::error!(error = %err, "failed to start config watcher runtime; hot reload disabled");
                 return;
             },
         };
@@ -139,8 +139,8 @@ async fn watch_loop(params: WatcherParams) {
 
     let _watcher = match setup_watcher(tx, &watch_dirs, &params.config_path, &params.referenced_files) {
         Ok(w) => w,
-        Err(e) => {
-            error!(error = %e, "failed to start config file watcher");
+        Err(err) => {
+            error!(error = %err, "failed to start config file watcher");
             return;
         },
     };
@@ -321,11 +321,11 @@ fn handle_reload(
     composition: &PipelineComposition,
 ) -> bool {
     let content = match praxis_core::config::read_config_file(config_path) {
-        Ok(c) => c,
-        Err(e) => {
+        Ok(contents) => contents,
+        Err(err) => {
             error!(
                 path = %config_path.display(),
-                error = %e,
+                error = %err,
                 "failed to read config file for reload"
             );
             praxis_protocol::http::pingora::metrics::record_config_reload_failure();
@@ -349,11 +349,11 @@ fn handle_reload(
     // content until it succeeds.
 
     let new_config = match Config::from_yaml(&content) {
-        Ok(c) => c,
-        Err(e) => {
+        Ok(config) => config,
+        Err(err) => {
             error!(
                 path = %config_path.display(),
-                error = %e,
+                error = %err,
                 "config reload failed: invalid config"
             );
             praxis_protocol::http::pingora::metrics::record_config_reload_failure();
@@ -381,8 +381,8 @@ fn handle_reload(
             praxis_protocol::http::pingora::metrics::record_config_reload_success();
             true
         },
-        Err(e) => {
-            error!(error = %e, "config reload failed");
+        Err(err) => {
+            error!(error = %err, "config reload failed");
             praxis_protocol::http::pingora::metrics::record_config_reload_failure();
             false
         },
@@ -428,7 +428,7 @@ struct PathFilter {
 impl PathFilter {
     /// Build a filter for the given config path.
     fn new(config_path: &std::path::Path, referenced: &[PathBuf]) -> Self {
-        let is_symlink = config_path.symlink_metadata().is_ok_and(|m| m.is_symlink());
+        let is_symlink = config_path.symlink_metadata().is_ok_and(|meta| meta.is_symlink());
 
         let canonical = std::fs::canonicalize(config_path).unwrap_or_else(|_| config_path.to_path_buf());
 
@@ -441,11 +441,11 @@ impl PathFilter {
         // Each referenced document is matched in every spelling a platform might
         // report, the same way the main config is: macOS reports canonical paths,
         // Linux reports lexical ones.
-        let mut expanded = std::collections::HashSet::with_capacity(referenced.len() * 3);
+        let mut expanded = std::collections::HashSet::with_capacity(referenced.len().saturating_mul(3));
         for path in referenced {
             expanded.insert(path.clone());
-            if let Ok(c) = std::fs::canonicalize(path) {
-                expanded.insert(c);
+            if let Ok(resolved) = std::fs::canonicalize(path) {
+                expanded.insert(resolved);
             }
             // An absolute path is already covered by the insert above; only a
             // relative one needs its cwd-joined spelling.
@@ -468,8 +468,11 @@ impl PathFilter {
     /// Whether a filesystem event should trigger a reload attempt.
     fn matches(&self, event: &notify::Event) -> bool {
         self.accept_all
-            || event.paths.iter().any(|p| {
-                p == &self.canonical || p == &self.absolute || p == &self.original || self.referenced.contains(p)
+            || event.paths.iter().any(|path| {
+                path == &self.canonical
+                    || path == &self.absolute
+                    || path == &self.original
+                    || self.referenced.contains(path)
             })
     }
 }
@@ -494,8 +497,8 @@ fn setup_watcher(
                 tracing::trace!("config watcher channel full, event coalesced by debounce");
             }
         },
-        Err(e) => {
-            tracing::warn!(error = %e, "config file watcher error");
+        Err(err) => {
+            tracing::warn!(error = %err, "config file watcher error");
         },
         _ => {},
     })?;
@@ -527,7 +530,7 @@ fn is_relevant_event(kind: EventKind) -> bool {
 /// `Some("")` rather than `None`.
 fn watch_dir_for_path(path: &std::path::Path) -> PathBuf {
     path.parent()
-        .filter(|p| !p.as_os_str().is_empty())
+        .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| std::path::Path::new("."))
         .to_path_buf()
 }
@@ -803,15 +806,15 @@ mod tests {
     #[test]
     fn swapping_two_referenced_documents_is_detected() {
         let dir = tempfile::tempdir().unwrap();
-        let a = dir.path().join("a.yaml");
-        let b = dir.path().join("b.yaml");
-        std::fs::write(&a, "one\n").unwrap();
-        std::fs::write(&b, "two\n").unwrap();
-        let refs = vec![a.clone(), b.clone()];
+        let path_a = dir.path().join("a.yaml");
+        let path_b = dir.path().join("b.yaml");
+        std::fs::write(&path_a, "one\n").unwrap();
+        std::fs::write(&path_b, "two\n").unwrap();
+        let refs = vec![path_a.clone(), path_b.clone()];
         let before = composite_hash(VALID_YAML, &refs);
 
-        std::fs::write(&a, "two\n").unwrap();
-        std::fs::write(&b, "one\n").unwrap();
+        std::fs::write(&path_a, "two\n").unwrap();
+        std::fs::write(&path_b, "one\n").unwrap();
         assert_ne!(
             before,
             composite_hash(VALID_YAML, &refs),
@@ -1255,16 +1258,16 @@ mod tests {
 
     #[test]
     fn hash_content_deterministic() {
-        let a = composite_hash("hello world", &[]);
-        let b = composite_hash("hello world", &[]);
-        assert_eq!(a, b, "same content should produce the same hash");
+        let first = composite_hash("hello world", &[]);
+        let second = composite_hash("hello world", &[]);
+        assert_eq!(first, second, "same content should produce the same hash");
     }
 
     #[test]
     fn hash_content_differs_for_different_input() {
-        let a = composite_hash("status: 200", &[]);
-        let b = composite_hash("status: 201", &[]);
-        assert_ne!(a, b, "different content should produce different hashes");
+        let first = composite_hash("status: 200", &[]);
+        let second = composite_hash("status: 201", &[]);
+        assert_ne!(first, second, "different content should produce different hashes");
     }
 
     #[test]
@@ -1680,6 +1683,10 @@ mod tests {
 
     /// Poll `predicate` every 20ms until it returns `true` or `timeout` elapses.
     fn poll_until(timeout: Duration, predicate: impl Fn() -> bool) {
+        #[expect(
+            clippy::arithmetic_side_effects,
+            reason = "Instant + Duration cannot overflow for realistic timeout values"
+        )]
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
             if predicate() {

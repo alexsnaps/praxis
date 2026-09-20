@@ -28,6 +28,26 @@ It is recommended you run `make setup-hooks` to set
 up pre-commit hooks that ensure linting is always
 done before committing code.
 
+## Dev Utilities
+
+For rapid development and testing:
+
+**Echo server** (quick HTTP test backend):
+
+```console
+cargo xtask echo
+cargo xtask echo --status 201 --body '{"created": true}'
+```
+
+**Debug server** (run with dev settings):
+
+```console
+cargo xtask debug
+cargo xtask debug path/to/config.yaml
+```
+
+See the [Quickstart](../quickstart.md#quick-test-servers) for full usage.
+
 ## Build
 
 ```console
@@ -48,7 +68,7 @@ before issuing requests. On slow or heavily loaded runners (notably
 under coverage instrumentation), the default readiness deadlines can
 expire before startup finishes, producing spurious failures. Set
 `PRAXIS_TEST_READY_TIMEOUT_MS` to a larger value (in milliseconds) to
-raise the deadline for every readiness helper; `make coverage` and
+raise the deadline for every readiness utility; `make coverage` and
 `make coverage-check` already set it. When unset, the defaults apply
 (2s for TCP, 5s for HTTP, HTTP/2, and TLS).
 

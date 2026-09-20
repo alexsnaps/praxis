@@ -85,18 +85,18 @@ pub(in crate::config::validate) fn validate_clusters(
 
 /// Validate `max_connections` is at least 1 and within the allowed ceiling.
 fn validate_cluster_max_connections(cluster: &crate::config::Cluster) -> Result<(), ProxyError> {
-    let Some(v) = cluster.max_connections else {
+    let Some(max_connections) = cluster.max_connections else {
         return Ok(());
     };
     let name = &cluster.name;
-    if v == 0 {
+    if max_connections == 0 {
         return Err(ProxyError::Config(format!(
             "cluster '{name}': max_connections must be >= 1"
         )));
     }
-    if v > super::MAX_CONNECTIONS {
+    if max_connections > super::MAX_CONNECTIONS {
         return Err(ProxyError::Config(format!(
-            "cluster '{name}': max_connections ({v}) exceeds maximum ({})",
+            "cluster '{name}': max_connections ({max_connections}) exceeds maximum ({})",
             super::MAX_CONNECTIONS,
         )));
     }

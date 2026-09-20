@@ -449,7 +449,7 @@ pub fn https_get(addr: &str, path: &str, client_config: &Arc<ClientConfig>) -> (
 }
 
 /// Perform an HTTP/2 GET over TLS.
-#[expect(clippy::large_stack_frames, reason = "test helper with H2 handshake structs")]
+#[expect(clippy::large_stack_frames, reason = "test utility with H2 handshake structs")]
 async fn h2_get(addr: &str, path: &str, client_config: &Arc<ClientConfig>) -> (u16, String) {
     let tls = tls_connect(addr, client_config).await;
 
@@ -626,7 +626,7 @@ pub fn wait_for_https(addr: &str, client_config: &Arc<ClientConfig>) {
 }
 
 /// Attempt an H2-over-TLS GET, returning `None` on any failure.
-#[expect(clippy::large_stack_frames, reason = "test helper with H2 handshake structs")]
+#[expect(clippy::large_stack_frames, reason = "test utility with H2 handshake structs")]
 fn try_h2_get(addr: &str, path: &str, client_config: &Arc<ClientConfig>) -> Option<(u16, String)> {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -640,7 +640,7 @@ fn try_h2_get(addr: &str, path: &str, client_config: &Arc<ClientConfig>) -> Opti
 }
 
 /// Inner fallible H2 GET that returns `None` instead of panicking.
-#[expect(clippy::large_stack_frames, reason = "test helper with H2 handshake structs")]
+#[expect(clippy::large_stack_frames, reason = "test utility with H2 handshake structs")]
 async fn try_h2_get_inner(addr: &str, path: &str, client_config: &Arc<ClientConfig>) -> Option<(u16, String)> {
     let connector = tokio_rustls::TlsConnector::from(Arc::clone(client_config));
     let server_name = rustls::pki_types::ServerName::try_from("localhost").ok()?;

@@ -15,9 +15,9 @@ use std::{
 /// Environment variable overriding the readiness deadline, in milliseconds.
 ///
 /// When set to a positive integer it replaces the default deadline of every
-/// `wait_for_*` helper. Coverage runs and heavily loaded CI runners set it so
+/// `wait_for_*` utility. Coverage runs and heavily loaded CI runners set it so
 /// slow server startup under instrumentation does not read as a test failure.
-/// Unset, empty, zero, or unparseable values leave each helper on its default.
+/// Unset, empty, zero, or unparseable values leave each utility on its default.
 pub(crate) const READY_TIMEOUT_ENV_VAR: &str = "PRAXIS_TEST_READY_TIMEOUT_MS";
 
 /// Default readiness deadline for a bare TCP connect.

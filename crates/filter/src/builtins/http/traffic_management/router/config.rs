@@ -13,12 +13,15 @@ use serde::Deserialize;
 // -----------------------------------------------------------------------------
 
 /// Default header name for the resolved JSON alias value.
+#[cfg(feature = "router-json-aliases")]
 pub(super) const DEFAULT_JSON_ALIAS_HEADER: &str = "X-Json-Alias";
 
 /// Default maximum body bytes to buffer for JSON alias resolution.
+#[cfg(feature = "router-json-aliases")]
 pub(super) const DEFAULT_JSON_ALIAS_MAX_BODY_BYTES: usize = 10_485_760; // 10 MiB
 
 /// Hard upper bound for `json_alias_max_body_bytes`.
+#[cfg(feature = "router-json-aliases")]
 pub(super) const MAX_JSON_ALIAS_BODY_BYTES: usize = 67_108_864; // 64 MiB
 
 // -----------------------------------------------------------------------------
@@ -29,17 +32,21 @@ pub(super) const MAX_JSON_ALIAS_BODY_BYTES: usize = 67_108_864; // 64 MiB
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct RouterConfig {
-    /// Reserved for the unimplemented JSON alias feature; has no effect.
+    /// Reserved for the experimental, unimplemented JSON alias feature.
     ///
-    /// Kept so existing configs continue to parse. Any route that
-    /// actually sets `json_aliases` is rejected at startup.
+    /// Only present under the `router-json-aliases` feature, and even then
+    /// it has no effect: any route setting `json_aliases` is rejected at
+    /// startup. Default builds do not accept this key.
+    #[cfg(feature = "router-json-aliases")]
     #[serde(default = "default_json_alias_header")]
     pub json_alias_header: String,
 
-    /// Reserved for the unimplemented JSON alias feature; has no effect.
+    /// Reserved for the experimental, unimplemented JSON alias feature.
     ///
-    /// Kept so existing configs continue to parse. Any route that
-    /// actually sets `json_aliases` is rejected at startup.
+    /// Only present under the `router-json-aliases` feature, and even then
+    /// it has no effect: any route setting `json_aliases` is rejected at
+    /// startup. Default builds do not accept this key.
+    #[cfg(feature = "router-json-aliases")]
     #[serde(default = "default_json_alias_max_body_bytes")]
     pub json_alias_max_body_bytes: usize,
 
@@ -77,7 +84,9 @@ pub(super) struct RouterRouteConfig {
     ///
     /// Body-field routing is not wired into the request path. Promote
     /// the value to a header with a classifier filter and match it via
-    /// the route's `headers` field instead.
+    /// the route's `headers` field instead. Only present under the
+    /// experimental `router-json-aliases` feature.
+    #[cfg(feature = "router-json-aliases")]
     pub json_aliases: Option<Vec<JsonAlias>>,
 }
 
@@ -85,6 +94,7 @@ impl From<Route> for RouterRouteConfig {
     fn from(route: Route) -> Self {
         Self {
             route,
+            #[cfg(feature = "router-json-aliases")]
             json_aliases: None,
         }
     }
@@ -116,7 +126,9 @@ struct RouterRouteConfigRaw {
     #[serde(default)]
     host: Option<String>,
 
-    /// Not implemented. Setting this is rejected at startup.
+    /// Not implemented. Setting this is rejected at startup. Only present
+    /// under the experimental `router-json-aliases` feature.
+    #[cfg(feature = "router-json-aliases")]
     #[serde(default)]
     json_aliases: Option<Vec<JsonAlias>>,
 
@@ -139,6 +151,7 @@ impl TryFrom<RouterRouteConfigRaw> for RouterRouteConfig {
         route.validate_semantics()?;
         Ok(Self {
             route,
+            #[cfg(feature = "router-json-aliases")]
             json_aliases: raw.json_aliases,
         })
     }
@@ -150,6 +163,7 @@ impl TryFrom<RouterRouteConfigRaw> for RouterRouteConfig {
 /// [`reject_unimplemented_json_aliases`].
 ///
 /// [`reject_unimplemented_json_aliases`]: super::reject_unimplemented_json_aliases
+#[cfg(feature = "router-json-aliases")]
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct JsonAlias {
@@ -166,11 +180,13 @@ pub(super) struct JsonAlias {
 }
 
 /// Serde default for [`RouterConfig::json_alias_header`].
+#[cfg(feature = "router-json-aliases")]
 fn default_json_alias_header() -> String {
     DEFAULT_JSON_ALIAS_HEADER.to_owned()
 }
 
 /// Serde default for [`RouterConfig::json_alias_max_body_bytes`].
+#[cfg(feature = "router-json-aliases")]
 fn default_json_alias_max_body_bytes() -> usize {
     DEFAULT_JSON_ALIAS_MAX_BODY_BYTES
 }

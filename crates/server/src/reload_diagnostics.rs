@@ -34,7 +34,11 @@ pub(crate) fn log_restart_required_changes(old: &Config, new: &Config) {
 /// `find` per listener would make every detector quadratic in
 /// listener count on each reload.
 fn listeners_by_name(config: &Config) -> ListenersByName<'_> {
-    config.listeners.iter().map(|l| (l.name.as_str(), l)).collect()
+    config
+        .listeners
+        .iter()
+        .map(|listener| (listener.name.as_str(), listener))
+        .collect()
 }
 
 /// Index type shared by the restart-required listener detectors.
@@ -42,8 +46,10 @@ type ListenersByName<'cfg> = std::collections::HashMap<&'cfg str, &'cfg praxis_c
 
 /// Detect listener additions, removals, and address rebinds.
 fn detect_listener_topology_changes_with(old: &Config, new: &Config, old_by_name: &ListenersByName<'_>) {
-    let old_names: std::collections::HashSet<&str> = old.listeners.iter().map(|l| l.name.as_str()).collect();
-    let new_names: std::collections::HashSet<&str> = new.listeners.iter().map(|l| l.name.as_str()).collect();
+    let old_names: std::collections::HashSet<&str> =
+        old.listeners.iter().map(|listener| listener.name.as_str()).collect();
+    let new_names: std::collections::HashSet<&str> =
+        new.listeners.iter().map(|listener| listener.name.as_str()).collect();
 
     for name in new_names.difference(&old_names) {
         warn!(
@@ -105,12 +111,12 @@ fn detect_compression_additions_with(old: &Config, new: &Config, old_by_name: &L
             let old_had_compression = old_l
                 .filter_chains
                 .iter()
-                .any(|c| old_chains_with_compression.contains(c.as_str()));
+                .any(|chain| old_chains_with_compression.contains(chain.as_str()));
 
             let new_has_compression = new_l
                 .filter_chains
                 .iter()
-                .any(|c| new_chains_with_compression.contains(c.as_str()));
+                .any(|chain| new_chains_with_compression.contains(chain.as_str()));
 
             if !old_had_compression && new_has_compression {
                 warn!(
@@ -127,8 +133,8 @@ pub(crate) fn find_chains_with_compression(config: &Config) -> std::collections:
     config
         .filter_chains
         .iter()
-        .filter(|c| c.filters.iter().any(|f| f.filter_type == "compression"))
-        .map(|c| c.name.as_str())
+        .filter(|chain| chain.filters.iter().any(|filter| filter.filter_type == "compression"))
+        .map(|chain| chain.name.as_str())
         .collect()
 }
 
@@ -169,7 +175,7 @@ fn detect_tls_toggles_with(new: &Config, old_by_name: &ListenersByName<'_>) {
 /// serializations failed) as unchanged.
 pub(crate) fn config_value_changed<T: serde::Serialize>(old: &T, new: &T) -> bool {
     match (serde_yaml::to_string(old), serde_yaml::to_string(new)) {
-        (Ok(a), Ok(b)) => a != b,
+        (Ok(old_yaml), Ok(new_yaml)) => old_yaml != new_yaml,
         _ => true,
     }
 }
@@ -209,21 +215,21 @@ fn detect_subrequest_circuit_breaker_change(old: &Config, new: &Config) {
     let changed = match (old_cb, new_cb) {
         (None, None) => false,
         (None, Some(_)) | (Some(_), None) => true,
-        (Some(a), Some(b)) => {
-            a.consecutive_failures != b.consecutive_failures
-                || a.recovery_window_secs != b.recovery_window_secs
-                || a.half_open_timeout_secs != b.half_open_timeout_secs
+        (Some(old_settings), Some(new_settings)) => {
+            old_settings.consecutive_failures != new_settings.consecutive_failures
+                || old_settings.recovery_window_secs != new_settings.recovery_window_secs
+                || old_settings.half_open_timeout_secs != new_settings.half_open_timeout_secs
         },
     };
     if changed {
         warn!(
-            old = ?old_cb.as_ref().map(|c| format!(
+            old = ?old_cb.as_ref().map(|breaker| format!(
                 "failures={}, recovery={}s, half_open={}s",
-                c.consecutive_failures, c.recovery_window_secs, c.half_open_timeout_secs
+                breaker.consecutive_failures, breaker.recovery_window_secs, breaker.half_open_timeout_secs
             )),
-            new = ?new_cb.as_ref().map(|c| format!(
+            new = ?new_cb.as_ref().map(|breaker| format!(
                 "failures={}, recovery={}s, half_open={}s",
-                c.consecutive_failures, c.recovery_window_secs, c.half_open_timeout_secs
+                breaker.consecutive_failures, breaker.recovery_window_secs, breaker.half_open_timeout_secs
             )),
             "runtime.subrequest_circuit_breaker changed; requires restart \
              (circuit breaker registry is bound to the connector)"
@@ -231,7 +237,12 @@ fn detect_subrequest_circuit_breaker_change(old: &Config, new: &Config) {
     }
 }
 
-/// Warn for each changed startup-only runtime field.
+/// Emit a restart-required warning for each changed runtime field in the list.
+///
+/// Compares `old.runtime.$field` against `new.runtime.$field` for each field
+/// name given, logging a structured warning when any differs. The caller
+/// supplies a list of field identifiers; the macro generates a comparison and
+/// warning for each.
 macro_rules! detect_runtime_field_changes {
     ($old:expr, $new:expr, [$($field:ident),* $(,)?]) => {
         $(
@@ -396,7 +407,7 @@ pub(crate) fn collect_escalated_pipeline_checks(
             ]
         )
         .into_iter()
-        .filter(|(_, o, n)| !o && *n)
+        .filter(|(_, old_present, new_present)| !old_present && *new_present)
         .map(|(name, ..)| name),
     );
 }
@@ -411,7 +422,7 @@ pub(crate) fn warn_stateful_filter_reset(config: &Config) {
     let has_stateful = config
         .filter_chains
         .iter()
-        .any(|c| c.filters.iter().any(is_stateful_recursive));
+        .any(|chain| chain.filters.iter().any(is_stateful_recursive));
 
     if has_stateful {
         warn!(
@@ -423,13 +434,13 @@ pub(crate) fn warn_stateful_filter_reset(config: &Config) {
 }
 
 /// Check a filter entry and its inline branch chain filters.
-pub(crate) fn is_stateful_recursive(f: &praxis_core::config::FilterEntry) -> bool {
-    if f.filter_type == "rate_limit" || f.filter_type == "circuit_breaker" {
+pub(crate) fn is_stateful_recursive(entry: &praxis_core::config::FilterEntry) -> bool {
+    if entry.filter_type == "rate_limit" || entry.filter_type == "circuit_breaker" {
         return true;
     }
-    f.branch_chains.as_ref().is_some_and(|branches| {
-        branches.iter().any(|b| {
-            b.chains.iter().any(|chain_ref| {
+    entry.branch_chains.as_ref().is_some_and(|branches| {
+        branches.iter().any(|branch| {
+            branch.chains.iter().any(|chain_ref| {
                 if let praxis_core::config::ChainRef::Inline { filters, .. } = chain_ref {
                     filters.iter().any(is_stateful_recursive)
                 } else {
@@ -452,9 +463,9 @@ pub(crate) fn is_stateful_recursive(f: &praxis_core::config::FilterEntry) -> boo
 /// with a general-purpose change summary for incident investigation
 /// and config drift tracking.
 pub(crate) fn log_config_change_audit(old: &Config, new: &Config) {
-    let (la, lr, lm) = diff_named_items(&old.listeners, &new.listeners, |l| &l.name);
-    let (ca, cr, cm) = diff_named_items(&old.clusters, &new.clusters, |c| &c.name);
-    let (fa, fr, fm) = diff_named_items(&old.filter_chains, &new.filter_chains, |c| &c.name);
+    let (la, lr, lm) = diff_named_items(&old.listeners, &new.listeners, |listener| &listener.name);
+    let (ca, cr, cm) = diff_named_items(&old.clusters, &new.clusters, |cluster| &cluster.name);
+    let (fa, fr, fm) = diff_named_items(&old.filter_chains, &new.filter_chains, |chain| &chain.name);
 
     let insecure_changed = config_value_changed(&old.insecure_options, &new.insecure_options);
 
@@ -491,11 +502,11 @@ pub(crate) fn diff_named_items<T: serde::Serialize>(
     let old_map: HashMap<&str, String> = old.iter().map(|i| (name_fn(i), serialize(i))).collect();
     let new_map: HashMap<&str, String> = new.iter().map(|i| (name_fn(i), serialize(i))).collect();
 
-    let added = new_map.keys().filter(|k| !old_map.contains_key(*k)).count();
-    let removed = old_map.keys().filter(|k| !new_map.contains_key(*k)).count();
+    let added = new_map.keys().filter(|key| !old_map.contains_key(*key)).count();
+    let removed = old_map.keys().filter(|key| !new_map.contains_key(*key)).count();
     let modified = new_map
         .iter()
-        .filter(|(k, v)| old_map.get(*k).is_some_and(|old_v| old_v != *v))
+        .filter(|(key, value)| old_map.get(*key).is_some_and(|old_v| old_v != *value))
         .count();
 
     (added, removed, modified)
@@ -552,11 +563,11 @@ mod tests {
         .unwrap()
     }
 
-    fn capture_warnings<F: FnOnce()>(f: F) -> Vec<String> {
+    fn capture_warnings<F: FnOnce()>(run: F) -> Vec<String> {
         let messages = Arc::new(Mutex::new(Vec::<String>::new()));
         let capture = WarningCapture(Arc::clone(&messages));
         let subscriber = tracing_subscriber::registry().with(capture);
-        tracing::subscriber::with_default(subscriber, f);
+        tracing::subscriber::with_default(subscriber, run);
         std::mem::take(&mut *messages.lock().unwrap())
     }
 

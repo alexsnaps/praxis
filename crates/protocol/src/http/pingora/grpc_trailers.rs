@@ -116,3 +116,120 @@ fn build_header(
     }
     Some(header)
 }
+
+// Tested via integration tests in tests/integration/tests/suite/examples/grpc_status_errors.rs
+// and related files, which verify the HTTP/2 END_STREAM behavior and protocol-level details
+// that require a full Session context.
+
+#[cfg(test)]
+#[expect(clippy::allow_attributes, reason = "blanket test suppressions")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::assertions_on_result_states,
+    clippy::str_to_string,
+    clippy::uninlined_format_args,
+    clippy::redundant_test_prefix,
+    clippy::string_add,
+    reason = "tests"
+)]
+mod tests {
+    use praxis_core::grpc::GrpcKind;
+
+    use super::*;
+
+    fn make_test_mapping_with_message() -> GrpcErrorMapping {
+        GrpcErrorMapping::new(GrpcKind::Grpc, true)
+    }
+
+    fn make_test_mapping_without_message() -> GrpcErrorMapping {
+        GrpcErrorMapping::new(GrpcKind::GrpcProto, false)
+    }
+
+    #[test]
+    fn test_grpc_error_mapping_include_message() {
+        let mapping_with = make_test_mapping_with_message();
+        assert!(mapping_with.include_message());
+
+        let mapping_without = make_test_mapping_without_message();
+        assert!(!mapping_without.include_message());
+    }
+
+    #[test]
+    fn test_grpc_status_as_header_value() {
+        let codes = vec![
+            GrpcStatusCode::Ok,
+            GrpcStatusCode::Cancelled,
+            GrpcStatusCode::Unknown,
+            GrpcStatusCode::InvalidArgument,
+            GrpcStatusCode::DeadlineExceeded,
+            GrpcStatusCode::NotFound,
+            GrpcStatusCode::AlreadyExists,
+            GrpcStatusCode::PermissionDenied,
+            GrpcStatusCode::ResourceExhausted,
+            GrpcStatusCode::FailedPrecondition,
+            GrpcStatusCode::Aborted,
+            GrpcStatusCode::OutOfRange,
+            GrpcStatusCode::Unimplemented,
+            GrpcStatusCode::Internal,
+            GrpcStatusCode::Unavailable,
+            GrpcStatusCode::DataLoss,
+            GrpcStatusCode::Unauthenticated,
+        ];
+
+        for code in codes {
+            let header_val = code.as_header_value();
+            assert!(header_val.to_str().is_ok());
+
+            let val_str = header_val.to_str().unwrap();
+            assert!(val_str.parse::<u32>().is_ok(), "Invalid gRPC status: {}", val_str);
+        }
+    }
+
+    #[test]
+    fn test_edge_case_http_status_codes() {
+        // These should all complete without panicking
+        let _grpc_status = GrpcStatusCode::from_http_status(0);
+        let _grpc_status = GrpcStatusCode::from_http_status(100);
+        let _grpc_status = GrpcStatusCode::from_http_status(301);
+        let _grpc_status = GrpcStatusCode::from_http_status(999);
+    }
+
+    #[test]
+    fn test_message_encoding_edge_cases() {
+        // Very long message
+        let long_message = "Error: ".to_string() + &"x".repeat(1000);
+        let encoded = encode_grpc_message(&long_message);
+        assert!(encoded.len() >= long_message.len());
+
+        // Message with only special characters
+        let special_only = "\n\r\t";
+        let encoded = encode_grpc_message(special_only);
+        assert!(!encoded.is_empty());
+        assert!(encoded.starts_with('%'));
+
+        // Message with null bytes
+        let with_null = "Error\0Details";
+        let encoded = encode_grpc_message(with_null);
+        assert!(encoded.contains("%00"));
+
+        // Already percent-encoded message
+        let already_encoded = "Error%20message";
+        let encoded = encode_grpc_message(already_encoded);
+        assert!(encoded.contains("%25")); // % itself gets encoded
+    }
+
+    #[test]
+    fn test_content_type_variations() {
+        let kinds = vec![
+            (GrpcKind::Grpc, "application/grpc"),
+            (GrpcKind::GrpcProto, "application/grpc+proto"),
+            (GrpcKind::GrpcJson, "application/grpc+json"),
+        ];
+
+        for (kind, expected_ct) in kinds {
+            let mapping = GrpcErrorMapping::new(kind, true);
+            assert_eq!(mapping.content_type().to_str().unwrap(), expected_ct);
+        }
+    }
+}

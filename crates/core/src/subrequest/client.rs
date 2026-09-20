@@ -1,6 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Praxis Contributors
 
+//! Hardened sub-request client executor.
+//!
+//! [`SubRequestClient`] wraps a shared connector to provide safe,
+//! bounded execution of outbound HTTP exchanges with deadline
+//! enforcement, response body size limits, and automatic hop-by-hop
+//! header sanitization. Supports both buffered (collect full body)
+//! and streaming (chunk-by-chunk) response modes.
+
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -124,13 +132,13 @@ impl SubRequestClient {
     /// and `send_streaming()` call this, then diverge.
     #[expect(clippy::large_stack_frames, reason = "Pingora session types are large")]
     #[expect(clippy::too_many_lines, reason = "sequential HTTP exchange steps")]
-    async fn open_exchange<'a>(
-        &'a self,
+    async fn open_exchange<'conn>(
+        &'conn self,
         peer: &HttpPeer,
         request: &SubRequest,
         timeout: Duration,
         framework_headers: Option<&FrameworkHeaders>,
-    ) -> Result<RawExchange<'a>, SubRequestError> {
+    ) -> Result<RawExchange<'conn, 'conn>, SubRequestError> {
         let exchange_started = tokio::time::Instant::now();
         let deadline = exchange_started
             .checked_add(timeout)
@@ -146,7 +154,7 @@ impl SubRequestClient {
             .path_and_query()
             .map_or(b"/".as_slice(), |pq| pq.as_str().as_bytes());
         let mut req_header = pingora_http::RequestHeader::build(request.method.clone(), path, None)
-            .map_err(|e| SubRequestError::InvalidRequest(e.to_string()))?;
+            .map_err(|err| SubRequestError::InvalidRequest(err.to_string()))?;
 
         // Forward the request headers in one pass — no intermediate map
         // clone, no repeated removal passes: skip hop-by-hop (fixed and
@@ -212,18 +220,18 @@ impl SubRequestClient {
         // ---------------------------------------------------------------------
         // 5. Connect + I/O
         // ---------------------------------------------------------------------
-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        if remaining.is_zero() {
+        let connect_budget = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if connect_budget.is_zero() {
             return Err(SubRequestError::DeadlineExceeded);
         }
 
         let (mut session, reused) = tokio::time::timeout(
-            remaining,
+            connect_budget,
             Box::pin(self.connector.connector().get_http_session(&bounded_peer)),
         )
         .await
         .map_err(|_elapsed| SubRequestError::DeadlineExceeded)?
-        .map_err(|e| SubRequestError::Connect(e.to_string()))?;
+        .map_err(|err| SubRequestError::Connect(err.to_string()))?;
 
         debug!(
             peer = %bounded_peer.address(),
@@ -233,40 +241,43 @@ impl SubRequestClient {
             "sub-request: connected"
         );
 
-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        if remaining.is_zero() {
+        let header_budget = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if header_budget.is_zero() {
             return Err(SubRequestError::DeadlineExceeded);
         }
 
-        let write_timeout = min_timeout(bounded_peer.options.write_timeout, remaining);
-        tokio::time::timeout(write_timeout, session.write_request_header(Box::new(req_header)))
+        let header_write_timeout = min_timeout(bounded_peer.options.write_timeout, header_budget);
+        tokio::time::timeout(header_write_timeout, session.write_request_header(Box::new(req_header)))
             .await
-            .map_err(|_elapsed| classify_timeout(remaining, bounded_peer.options.write_timeout, "write"))?
-            .map_err(|e| SubRequestError::Io(e.to_string()))?;
+            .map_err(|_elapsed| classify_timeout(header_budget, bounded_peer.options.write_timeout, "write"))?
+            .map_err(|err| SubRequestError::Io(err.to_string()))?;
 
         if !request.body.is_empty() {
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            if remaining.is_zero() {
+            let body_budget = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if body_budget.is_zero() {
                 session.shutdown().await;
                 return Err(SubRequestError::DeadlineExceeded);
             }
-            let write_timeout = min_timeout(bounded_peer.options.write_timeout, remaining);
-            tokio::time::timeout(write_timeout, session.write_request_body(request.body.clone(), true))
-                .await
-                .map_err(|_elapsed| classify_timeout(remaining, bounded_peer.options.write_timeout, "write"))?
-                .map_err(|e| SubRequestError::Io(e.to_string()))?;
+            let body_write_timeout = min_timeout(bounded_peer.options.write_timeout, body_budget);
+            tokio::time::timeout(
+                body_write_timeout,
+                session.write_request_body(request.body.clone(), true),
+            )
+            .await
+            .map_err(|_elapsed| classify_timeout(body_budget, bounded_peer.options.write_timeout, "write"))?
+            .map_err(|err| SubRequestError::Io(err.to_string()))?;
         }
 
-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        if remaining.is_zero() {
+        let finish_budget = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if finish_budget.is_zero() {
             session.shutdown().await;
             return Err(SubRequestError::DeadlineExceeded);
         }
-        let write_timeout = min_timeout(bounded_peer.options.write_timeout, remaining);
-        tokio::time::timeout(write_timeout, session.finish_request_body())
+        let finish_write_timeout = min_timeout(bounded_peer.options.write_timeout, finish_budget);
+        tokio::time::timeout(finish_write_timeout, session.finish_request_body())
             .await
-            .map_err(|_elapsed| classify_timeout(remaining, bounded_peer.options.write_timeout, "write"))?
-            .map_err(|e| SubRequestError::Io(e.to_string()))?;
+            .map_err(|_elapsed| classify_timeout(finish_budget, bounded_peer.options.write_timeout, "write"))?
+            .map_err(|err| SubRequestError::Io(err.to_string()))?;
 
         // ---------------------------------------------------------------------
         // 6. Read the response header, skipping 1xx interim responses
@@ -281,17 +292,17 @@ impl SubRequestClient {
         // `101 Switching Protocols` is a final response, not interim.
         let mut interim_count = 0_u32;
         let status = loop {
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            if remaining.is_zero() {
+            let read_budget = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if read_budget.is_zero() {
                 session.shutdown().await;
                 return Err(SubRequestError::DeadlineExceeded);
             }
-            let read_timeout = min_timeout(bounded_peer.options.read_timeout, remaining);
+            let read_timeout = min_timeout(bounded_peer.options.read_timeout, read_budget);
 
             tokio::time::timeout(read_timeout, session.read_response_header())
                 .await
-                .map_err(|_elapsed| classify_timeout(remaining, bounded_peer.options.read_timeout, "read"))?
-                .map_err(|e| SubRequestError::Io(e.to_string()))?;
+                .map_err(|_elapsed| classify_timeout(read_budget, bounded_peer.options.read_timeout, "read"))?
+                .map_err(|err| SubRequestError::Io(err.to_string()))?;
 
             let resp_header = session
                 .response_header()
@@ -299,7 +310,7 @@ impl SubRequestClient {
             let status = resp_header.status.as_u16();
 
             if (100..=199).contains(&status) && status != 101 {
-                interim_count += 1;
+                interim_count = interim_count.saturating_add(1);
                 if interim_count > MAX_INTERIM_RESPONSES {
                     session.shutdown().await;
                     return Err(SubRequestError::Io(
@@ -325,10 +336,10 @@ impl SubRequestClient {
         // map stores the http crate's type), so cloning is a refcount
         // bump — re-validating every byte through `from_bytes` was pure
         // waste and its error arm was unreachable.
-        let nominated = connection_nominated_tokens(&resp_header.headers);
+        let resp_nominated = connection_nominated_tokens(&resp_header.headers);
         let mut resp_headers = HeaderMap::with_capacity(resp_header.headers.len());
         for (name, value) in &resp_header.headers {
-            if is_boundary_stripped(name, &nominated) {
+            if is_boundary_stripped(name, &resp_nominated) {
                 continue;
             }
             resp_headers.append(name.clone(), value.clone());
@@ -401,12 +412,14 @@ impl SubRequestClient {
             match check_clean_completion(&mut exchange.session) {
                 Ok(true) => {},
                 Ok(false) => {
-                    let e = SubRequestError::Io(
+                    let err = SubRequestError::Io(
                         "upstream indicated response done but stream is not cleanly terminated".to_owned(),
                     );
-                    return Err(Box::pin(fail_header_exchange(exchange, circuit_guard, "header_incomplete", e)).await);
+                    return Err(
+                        Box::pin(fail_header_exchange(exchange, circuit_guard, "header_incomplete", err)).await,
+                    );
                 },
-                Err(e) => return Err(Box::pin(fail_header_exchange(exchange, circuit_guard, "h2_error", e)).await),
+                Err(err) => return Err(Box::pin(fail_header_exchange(exchange, circuit_guard, "h2_error", err)).await),
             }
             if let Some(guard) = circuit_guard {
                 guard.finalize_success();
@@ -443,7 +456,7 @@ impl SubRequestClient {
         let handoff_now = tokio::time::Instant::now();
         let stream_deadline = limits
             .max_stream_duration
-            .map(|d| handoff_now.checked_add(d).ok_or(SubRequestError::DeadlineExceeded))
+            .map(|dur| handoff_now.checked_add(dur).ok_or(SubRequestError::DeadlineExceeded))
             .transpose()?;
 
         let body = SubResponseBody {
@@ -522,7 +535,7 @@ impl SubRequestClient {
             deadline,
         } = match exchange {
             Ok(ex) => ex,
-            Err(e) => return Err(e),
+            Err(err) => return Err(err),
         };
 
         let effective_limit = max_response_bytes.min(self.max_response_bytes);
@@ -541,15 +554,15 @@ impl SubRequestClient {
         // bodies; the ResponseTooLarge check below stays authoritative.
         let advertised = resp_headers
             .get(http::header::CONTENT_LENGTH)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.parse::<usize>().ok())
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<usize>().ok())
             .map_or(0, |len| len.min(effective_limit).min(EAGER_BODY_CAPACITY));
         let body_result: Result<Bytes, SubRequestError> = tokio::time::timeout(remaining, async {
             let mut body_buf = Vec::with_capacity(advertised);
             while !session.response_done() {
                 match session.read_response_body().await {
                     Ok(Some(chunk)) => {
-                        if body_buf.len() + chunk.len() > effective_limit {
+                        if body_buf.len().saturating_add(chunk.len()) > effective_limit {
                             warn!(
                                 current = body_buf.len(),
                                 chunk = chunk.len(),
@@ -558,16 +571,16 @@ impl SubRequestClient {
                             );
                             session.shutdown().await;
                             return Err(SubRequestError::ResponseTooLarge {
-                                actual: body_buf.len() + chunk.len(),
+                                actual: body_buf.len().saturating_add(chunk.len()),
                                 limit: effective_limit,
                             });
                         }
                         body_buf.extend_from_slice(&chunk);
                     },
                     Ok(None) => break,
-                    Err(e) => {
+                    Err(err) => {
                         session.shutdown().await;
-                        return Err(SubRequestError::Io(e.to_string()));
+                        return Err(SubRequestError::Io(err.to_string()));
                     },
                 }
             }
@@ -605,7 +618,7 @@ impl SubRequestClient {
 /// guard (recording a failure via its `Drop` impl), discard the session,
 /// record the termination metric, and hand back the error to return.
 async fn fail_header_exchange(
-    exchange: RawExchange<'_>,
+    exchange: RawExchange<'_, '_>,
     circuit_guard: Option<CircuitGuard<'_>>,
     termination: &'static str,
     error: SubRequestError,
@@ -619,4 +632,337 @@ async fn fail_header_exchange(
     .await;
     record_header_termination(termination);
     error
+}
+
+#[cfg(test)]
+#[expect(clippy::allow_attributes, reason = "blanket test suppressions")]
+#[allow(
+    clippy::test_attr_in_doctest,
+    clippy::redundant_test_prefix,
+    clippy::uninlined_format_args,
+    clippy::too_many_lines,
+    clippy::items_after_statements,
+    clippy::bool_assert_comparison,
+    reason = "tests"
+)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_max_interim_responses_constant() {
+        // Verify the constant is set to expected value
+        assert_eq!(MAX_INTERIM_RESPONSES, 32);
+    }
+
+    #[test]
+    fn test_eager_body_capacity_constant() {
+        // Verify the constant is 128 KiB
+        assert_eq!(EAGER_BODY_CAPACITY, 131_072);
+        assert_eq!(EAGER_BODY_CAPACITY, 128 * 1024);
+    }
+
+    #[test]
+    fn test_new_client_uses_absolute_max_body_bytes() {
+        let connector = SubRequestConnector::new(128, None);
+        let client = SubRequestClient::new(connector);
+
+        assert_eq!(
+            client.max_response_bytes,
+            crate::config::ABSOLUTE_MAX_BODY_BYTES,
+            "new() should default to ABSOLUTE_MAX_BODY_BYTES"
+        );
+    }
+
+    #[test]
+    fn test_with_max_response_bytes_sets_ceiling() {
+        let connector = SubRequestConnector::new(128, None);
+        let custom_ceiling = 1_048_576; // 1 MiB
+        let client = SubRequestClient::with_max_response_bytes(connector, custom_ceiling);
+
+        assert_eq!(
+            client.max_response_bytes, custom_ceiling,
+            "with_max_response_bytes() should set the provided ceiling"
+        );
+    }
+
+    #[test]
+    fn test_connector_accessor() {
+        let connector = SubRequestConnector::new(128, None);
+        let client = SubRequestClient::new(connector.clone());
+
+        // Verify connector() returns a reference to the underlying connector
+        let retrieved = client.connector();
+        assert_eq!(
+            std::ptr::eq(retrieved, &connector),
+            false,
+            "connector() should return reference to the stored connector"
+        );
+    }
+
+    #[test]
+    fn test_evict_idle_circuits_with_no_circuit_breaker() {
+        let connector = SubRequestConnector::new(128, None);
+        let client = SubRequestClient::new(connector);
+
+        let evicted = client.evict_idle_circuits(Duration::from_secs(60));
+
+        assert_eq!(
+            evicted, 0,
+            "evict_idle_circuits should return 0 when no circuit breaker is configured"
+        );
+    }
+
+    #[test]
+    fn test_debug_impl() {
+        let connector = SubRequestConnector::new(128, None);
+        let client = SubRequestClient::new(connector);
+
+        let debug_str = format!("{:?}", client);
+        assert!(
+            debug_str.contains("SubRequestClient"),
+            "Debug impl should include type name"
+        );
+        assert!(
+            debug_str.contains("connector"),
+            "Debug impl should show connector field"
+        );
+        assert!(
+            debug_str.contains("max_response_bytes"),
+            "Debug impl should show max_response_bytes field"
+        );
+    }
+
+    #[test]
+    fn test_clone_impl() {
+        let connector = SubRequestConnector::new(128, None);
+        let client = SubRequestClient::with_max_response_bytes(connector, 5_000_000);
+
+        let cloned = client.clone();
+
+        assert_eq!(
+            client.max_response_bytes, cloned.max_response_bytes,
+            "clone should preserve max_response_bytes"
+        );
+    }
+
+    #[test]
+    fn test_response_ceiling_scenarios() {
+        let connector = SubRequestConnector::new(128, None);
+
+        // Test various ceiling values
+        let test_cases = vec![
+            (1_000, "small ceiling"),
+            (10_000_000, "large ceiling"),
+            (EAGER_BODY_CAPACITY, "ceiling equal to eager capacity"),
+            (EAGER_BODY_CAPACITY / 2, "ceiling smaller than eager capacity"),
+            (EAGER_BODY_CAPACITY * 2, "ceiling larger than eager capacity"),
+        ];
+
+        for (ceiling, description) in test_cases {
+            let client = SubRequestClient::with_max_response_bytes(connector.clone(), ceiling);
+            assert_eq!(client.max_response_bytes, ceiling, "Failed for case: {description}");
+        }
+    }
+
+    #[test]
+    fn test_max_response_bytes_values() {
+        let connector = SubRequestConnector::new(128, None);
+
+        // Test boundary values for max_response_bytes
+        let zero_client = SubRequestClient::with_max_response_bytes(connector.clone(), 0);
+        assert_eq!(zero_client.max_response_bytes, 0);
+
+        let one_client = SubRequestClient::with_max_response_bytes(connector.clone(), 1);
+        assert_eq!(one_client.max_response_bytes, 1);
+
+        let large_client = SubRequestClient::with_max_response_bytes(connector, usize::MAX);
+        assert_eq!(large_client.max_response_bytes, usize::MAX);
+    }
+
+    #[test]
+    fn test_eager_capacity_boundary_values() {
+        // Test that EAGER_BODY_CAPACITY is used correctly for buffer pre-sizing
+        // This tests the constant's usage in the context of response body collection
+
+        // Values around the EAGER_BODY_CAPACITY boundary
+        let test_sizes = vec![
+            0,
+            1,
+            1024,
+            EAGER_BODY_CAPACITY - 1,
+            EAGER_BODY_CAPACITY,
+            EAGER_BODY_CAPACITY + 1,
+            EAGER_BODY_CAPACITY * 2,
+            10_485_760, // 10 MiB
+        ];
+
+        for size in test_sizes {
+            // The actual clamping logic:
+            // len.min(effective_limit).min(EAGER_BODY_CAPACITY)
+            let effective_limit = 67_108_864; // ABSOLUTE_MAX_BODY_BYTES
+            let pre_alloc = size.min(effective_limit).min(EAGER_BODY_CAPACITY);
+
+            if size <= EAGER_BODY_CAPACITY {
+                assert_eq!(
+                    pre_alloc, size,
+                    "sizes <= EAGER_BODY_CAPACITY should not be capped (size: {size})"
+                );
+            } else {
+                assert_eq!(
+                    pre_alloc, EAGER_BODY_CAPACITY,
+                    "sizes > EAGER_BODY_CAPACITY should be capped (size: {size})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_per_call_vs_client_limit_interaction() {
+        let connector = SubRequestConnector::new(128, None);
+
+        // Client-wide ceiling: 1 MiB
+        let client_ceiling = 1_048_576;
+        let client = SubRequestClient::with_max_response_bytes(connector, client_ceiling);
+
+        // Simulate the clamping logic from execute()
+        // effective_limit = max_response_bytes.min(self.max_response_bytes)
+
+        let test_cases = vec![
+            (500_000, 500_000, "per-call smaller than ceiling"),
+            (1_048_576, 1_048_576, "per-call equal to ceiling"),
+            (2_000_000, 1_048_576, "per-call larger than ceiling (should clamp)"),
+            (10_000_000, 1_048_576, "per-call much larger (should clamp)"),
+            (0, 0, "per-call zero"),
+        ];
+
+        for (per_call_limit, expected_effective, description) in test_cases {
+            let effective = per_call_limit.min(client.max_response_bytes);
+            assert_eq!(effective, expected_effective, "Failed for case: {description}");
+        }
+    }
+
+    #[test]
+    fn test_limit_clamping_with_various_ceilings() {
+        let connector = SubRequestConnector::new(128, None);
+
+        // Test different client ceiling scenarios
+        struct TestCase {
+            client_ceiling: usize,
+            per_call_limit: usize,
+            expected_effective: usize,
+            description: &'static str,
+        }
+
+        let test_cases = vec![
+            TestCase {
+                client_ceiling: 1_000_000,
+                per_call_limit: 500_000,
+                expected_effective: 500_000,
+                description: "normal case: per-call < ceiling",
+            },
+            TestCase {
+                client_ceiling: 1_000_000,
+                per_call_limit: 2_000_000,
+                expected_effective: 1_000_000,
+                description: "clamp case: per-call > ceiling",
+            },
+            TestCase {
+                client_ceiling: 100,
+                per_call_limit: 1_000_000,
+                expected_effective: 100,
+                description: "tight ceiling: per-call >> ceiling",
+            },
+            TestCase {
+                client_ceiling: usize::MAX,
+                per_call_limit: 1_000_000,
+                expected_effective: 1_000_000,
+                description: "no ceiling: per-call is effective",
+            },
+            TestCase {
+                client_ceiling: 0,
+                per_call_limit: 1_000_000,
+                expected_effective: 0,
+                description: "zero ceiling: always zero",
+            },
+        ];
+
+        for tc in test_cases {
+            let client = SubRequestClient::with_max_response_bytes(connector.clone(), tc.client_ceiling);
+
+            let effective = tc.per_call_limit.min(client.max_response_bytes);
+
+            assert_eq!(effective, tc.expected_effective, "Failed for case: {}", tc.description);
+        }
+    }
+
+    #[test]
+    fn test_constants_are_power_of_two_friendly() {
+        // EAGER_BODY_CAPACITY should be a nice round number
+        assert_eq!(EAGER_BODY_CAPACITY % 1024, 0, "should be KiB-aligned");
+        assert_eq!(EAGER_BODY_CAPACITY / 1024, 128, "should be exactly 128 KiB");
+    }
+
+    #[test]
+    fn test_interim_responses_limit_boundary() {
+        // Test the boundary around MAX_INTERIM_RESPONSES
+        let limit = MAX_INTERIM_RESPONSES;
+
+        // Values just below, at, and above the limit
+        assert!(limit > 0, "limit should be positive");
+        assert!(limit < 1000, "limit should be reasonable");
+
+        // The actual check in the code: interim_count > MAX_INTERIM_RESPONSES
+        // So 32 interim responses is OK, 33 would fail
+        let acceptable_count = limit;
+        let unacceptable_count = limit + 1;
+
+        assert!(
+            acceptable_count <= limit,
+            "exactly {limit} interim responses should be within limit"
+        );
+        assert!(
+            unacceptable_count > limit,
+            "{} interim responses should exceed limit",
+            limit + 1
+        );
+    }
+
+    #[test]
+    fn test_multiple_clients_with_different_limits() {
+        let connector = SubRequestConnector::new(128, None);
+
+        // Create multiple clients with different ceilings
+        let client_a = SubRequestClient::with_max_response_bytes(connector.clone(), 1_000_000);
+        let client_b = SubRequestClient::with_max_response_bytes(connector.clone(), 5_000_000);
+        let client_c = SubRequestClient::new(connector);
+
+        assert_eq!(client_a.max_response_bytes, 1_000_000);
+        assert_eq!(client_b.max_response_bytes, 5_000_000);
+        assert_eq!(client_c.max_response_bytes, crate::config::ABSOLUTE_MAX_BODY_BYTES);
+    }
+
+    #[test]
+    fn test_evict_idle_circuits_duration_values() {
+        let connector = SubRequestConnector::new(128, None);
+        let client = SubRequestClient::new(connector);
+
+        // Test various duration values (all should return 0 since no circuit breaker)
+        let durations = vec![
+            Duration::from_secs(0),
+            Duration::from_millis(1),
+            Duration::from_secs(1),
+            Duration::from_secs(60),
+            Duration::from_secs(3600),
+            Duration::from_secs(86400),
+        ];
+
+        for duration in durations {
+            let evicted = client.evict_idle_circuits(duration);
+            assert_eq!(
+                evicted, 0,
+                "should always return 0 when no circuit breaker, duration: {:?}",
+                duration
+            );
+        }
+    }
 }

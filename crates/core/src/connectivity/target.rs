@@ -126,7 +126,7 @@ pub(crate) fn parse_target(url: &str) -> Result<ParsedTarget, InvalidTarget> {
 
     let uri: http::Uri = url
         .parse()
-        .map_err(|e: http::uri::InvalidUri| InvalidTarget::Malformed(e.to_string()))?;
+        .map_err(|parse_err: http::uri::InvalidUri| InvalidTarget::Malformed(parse_err.to_string()))?;
 
     let is_tls = match uri.scheme_str() {
         Some("http") => false,
@@ -192,8 +192,8 @@ pub(crate) fn parse_target(url: &str) -> Result<ParsedTarget, InvalidTarget> {
         }
     };
 
-    let host_authority =
-        http::HeaderValue::from_str(authority.as_str()).map_err(|e| InvalidTarget::Malformed(e.to_string()))?;
+    let host_authority = http::HeaderValue::from_str(authority.as_str())
+        .map_err(|header_err| InvalidTarget::Malformed(header_err.to_string()))?;
 
     // `uri.path()` normalizes an empty authority-form path to `/` and always
     // carries a leading slash; `path_and_query().as_str()` does not (a
@@ -203,7 +203,7 @@ pub(crate) fn parse_target(url: &str) -> Result<ParsedTarget, InvalidTarget> {
         None => uri.path().to_owned(),
     }
     .parse()
-    .map_err(|e: http::uri::InvalidUri| InvalidTarget::Malformed(e.to_string()))?;
+    .map_err(|parse_err: http::uri::InvalidUri| InvalidTarget::Malformed(parse_err.to_string()))?;
 
     Ok(ParsedTarget {
         is_tls,
@@ -558,7 +558,16 @@ pub(crate) async fn prepare_url_target_with_resolver<R: HostResolver + Sync>(
 
 #[cfg(test)]
 #[expect(clippy::allow_attributes, reason = "blanket test suppressions")]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, reason = "tests")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::assertions_on_result_states,
+    clippy::min_ident_chars,
+    clippy::shadow_unrelated,
+    clippy::arithmetic_side_effects,
+    reason = "tests"
+)]
 mod tests {
     use std::time::{Duration, Instant};
 
@@ -594,7 +603,7 @@ mod tests {
         assert!(matches!(err, UrlTargetError::InvalidTarget(InvalidTarget::MissingHost)));
     }
 
-    #[expect(clippy::panic, reason = "test helper panics to fail the test on parse error")]
+    #[expect(clippy::panic, reason = "test utility panics to fail the test on parse error")]
     fn parse_ok(url: &str) -> ParsedTarget {
         parse_target(url).unwrap_or_else(|e| panic!("expected {url} to parse: {e}"))
     }
@@ -1214,5 +1223,244 @@ mod tests {
         }
         assert_eq!(collected, b"hello-parity");
         drop(streaming);
+    }
+
+    #[test]
+    fn url_target_error_debug() {
+        let err = UrlTargetError::DeadlineExceeded;
+        let debug = format!("{err:?}");
+        assert!(debug.contains("DeadlineExceeded"));
+
+        let invalid = UrlTargetError::InvalidTarget(InvalidTarget::MissingHost);
+        let debug = format!("{invalid:?}");
+        assert!(debug.contains("InvalidTarget"));
+        assert!(debug.contains("MissingHost"));
+
+        let resolve = UrlTargetError::Resolve(AddressResolutionError::Empty("test".to_owned()));
+        let debug = format!("{resolve:?}");
+        assert!(debug.contains("Resolve"));
+        assert!(debug.contains("Empty"));
+    }
+
+    #[test]
+    fn url_target_error_display() {
+        assert_eq!(
+            UrlTargetError::DeadlineExceeded.to_string(),
+            "target preparation deadline exceeded"
+        );
+
+        let err = UrlTargetError::InvalidTarget(InvalidTarget::MissingHost);
+        assert_eq!(err.to_string(), "target has no host");
+
+        let policy = UrlTargetError::PolicyRejected("test".into());
+        assert_eq!(policy.to_string(), "address policy rejected the resolved target");
+    }
+
+    #[test]
+    fn invalid_target_debug() {
+        let err = InvalidTarget::MissingHost;
+        let debug = format!("{err:?}");
+        assert!(debug.contains("MissingHost"));
+
+        let malformed = InvalidTarget::Malformed("test error".to_owned());
+        let debug = format!("{malformed:?}");
+        assert!(debug.contains("Malformed"));
+        assert!(debug.contains("test error"));
+
+        let scheme = InvalidTarget::UnsupportedScheme("ws".to_owned());
+        let debug = format!("{scheme:?}");
+        assert!(debug.contains("UnsupportedScheme"));
+        assert!(debug.contains("ws"));
+    }
+
+    #[test]
+    fn parsed_target_debug_redacts_query() {
+        let p = parse_ok("https://api.example.com/v1/models?token=secret123&key=value");
+        let debug = format!("{p:?}");
+        assert!(debug.contains("ParsedTarget"));
+        assert!(debug.contains("is_tls"));
+        assert!(debug.contains("true"));
+        assert!(debug.contains("api.example.com"));
+        assert!(debug.contains("/v1/models"), "path should be visible");
+        assert!(
+            !debug.contains("token=secret123"),
+            "query should be redacted from Debug"
+        );
+        assert!(!debug.contains("key=value"), "query should be redacted from Debug");
+    }
+
+    #[test]
+    fn prepared_target_debug_redacts_query() {
+        let t = target(true, "api.example.com:443", "api.example.com", &["93.184.216.34:443"]);
+        let debug = format!("{t:?}");
+        assert!(debug.contains("PreparedTarget"));
+        assert!(debug.contains("is_tls"));
+        assert!(debug.contains("true"));
+        assert!(debug.contains("api.example.com"));
+        assert!(debug.contains("/p"), "path should be visible");
+        assert!(!debug.contains("q=1"), "query should be redacted from Debug");
+    }
+
+    #[test]
+    fn validate_url_target_success() {
+        assert!(validate_url_target("http://example.com/").is_ok());
+        assert!(validate_url_target("https://api.example.com:8443/path").is_ok());
+        assert!(validate_url_target("http://127.0.0.1:9000/").is_ok());
+        assert!(validate_url_target("https://[::1]/").is_ok());
+    }
+
+    #[test]
+    fn validate_url_target_failures() {
+        assert!(validate_url_target("ftp://example.com/").is_err());
+        assert!(validate_url_target("http://user@host/").is_err());
+        assert!(validate_url_target("http://host/#fragment").is_err());
+        assert!(validate_url_target("http://:80/").is_err());
+        assert!(validate_url_target("http://host:99999/").is_err());
+    }
+
+    #[tokio::test]
+    async fn deadline_checkpoint_after_parse() {
+        tokio::time::pause();
+        let deadline = Instant::now() + Duration::from_millis(10);
+        tokio::time::advance(Duration::from_millis(11)).await;
+        let fake = FakeResolver::ok(vec![]);
+        let err = prepare_url_target_with_resolver("http://127.0.0.1/", deadline, |_| Ok(()), &fake)
+            .await
+            .expect_err("checkpoint 2 should fire");
+        assert!(matches!(err, UrlTargetError::DeadlineExceeded));
+        assert_eq!(fake.call_count(), 0, "checkpoint 2 happens before DNS");
+    }
+
+    #[tokio::test]
+    async fn prepared_subrequest_addresses_accessor() {
+        let t = target(false, "h", "", &["10.0.0.1:80", "10.0.0.2:80"]);
+        let prepared = t.bind(req_with_host("ignored"));
+        let addrs = prepared.addresses();
+        assert_eq!(addrs.len(), 2);
+        assert_eq!(addrs[0].to_string(), "10.0.0.1:80");
+        assert_eq!(addrs[1].to_string(), "10.0.0.2:80");
+    }
+
+    #[tokio::test]
+    async fn prepared_subrequest_request_accessor() {
+        let t = target(true, "api.example.com:443", "api.example.com", &["93.184.216.34:443"]);
+        let req = req_with_host("original.example");
+        let prepared = t.bind(req);
+        let bound_req = prepared.request();
+        assert_eq!(
+            bound_req.headers.get(http::header::HOST).unwrap().to_str().unwrap(),
+            "api.example.com:443",
+            "bound request should have URL authority as Host"
+        );
+    }
+
+    #[tokio::test]
+    async fn system_resolver_error_path() {
+        let result = SystemResolver
+            .resolve_host("nonexistent-host-12345-abcde.invalid")
+            .await;
+        assert!(result.is_err(), "nonexistent domain should fail to resolve");
+    }
+
+    #[test]
+    fn parses_port_65535() {
+        let p = parse_ok("http://example.com:65535/");
+        assert_eq!(p.effective_port, 65535);
+    }
+
+    #[test]
+    fn parses_ipv6_with_zone_id_rejected() {
+        let err = parse_target("http://[fe80::1%eth0]/").unwrap_err();
+        assert!(
+            matches!(err, InvalidTarget::InvalidHost(_)),
+            "zone IDs should be rejected: {err:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_missing_scheme() {
+        let err = parse_target("example.com/").unwrap_err();
+        assert!(
+            matches!(err, InvalidTarget::Malformed(_)),
+            "missing scheme should be Malformed"
+        );
+    }
+
+    #[test]
+    fn rejects_unterminated_bracket() {
+        let err = parse_target("http://[::1/").unwrap_err();
+        assert!(
+            matches!(err, InvalidTarget::Malformed(_)),
+            "unterminated bracket should be Malformed: {err:?}"
+        );
+    }
+
+    #[test]
+    fn address_resolution_error_converts() {
+        let resolve_err = AddressResolutionError::Empty("test".to_owned());
+        let url_err: UrlTargetError = resolve_err.into();
+        assert!(matches!(url_err, UrlTargetError::Resolve(_)));
+    }
+
+    #[test]
+    fn prepared_target_new_with_http_clears_sni() {
+        let t = PreparedTarget::new(
+            false,
+            http::HeaderValue::from_str("example.com").unwrap(),
+            "example.com".to_owned(),
+            "/".parse().unwrap(),
+            vec!["93.184.216.34:80".parse().unwrap()],
+        );
+        assert_eq!(t.sni(), "", "http target should have empty SNI even if passed");
+    }
+
+    #[test]
+    fn prepared_target_new_with_https_keeps_sni() {
+        let t = PreparedTarget::new(
+            true,
+            http::HeaderValue::from_str("example.com:443").unwrap(),
+            "example.com".to_owned(),
+            "/".parse().unwrap(),
+            vec!["93.184.216.34:443".parse().unwrap()],
+        );
+        assert_eq!(t.sni(), "example.com");
+    }
+
+    #[tokio::test]
+    async fn multiple_addresses_all_reachable_via_peer_at() {
+        let t = target(
+            true,
+            "h:443",
+            "h.example.com",
+            &["10.0.0.1:443", "10.0.0.2:443", "10.0.0.3:443"],
+        );
+        let prepared = t.bind(req_with_host("ignored"));
+        assert_eq!(prepared.peer_at(0).unwrap().address().to_string(), "10.0.0.1:443");
+        assert_eq!(prepared.peer_at(1).unwrap().address().to_string(), "10.0.0.2:443");
+        assert_eq!(prepared.peer_at(2).unwrap().address().to_string(), "10.0.0.3:443");
+        assert!(prepared.peer_at(3).is_none());
+        assert!(prepared.peer_at(999).is_none());
+    }
+
+    #[test]
+    fn parses_query_with_multiple_params() {
+        let p = parse_ok("https://api.example.com/endpoint?a=1&b=2&c=3");
+        assert_eq!(p.origin_form.to_string(), "/endpoint?a=1&b=2&c=3");
+    }
+
+    #[test]
+    fn parses_encoded_characters_in_path() {
+        let p = parse_ok("https://example.com/path%20with%20spaces");
+        assert_eq!(p.origin_form.to_string(), "/path%20with%20spaces");
+    }
+
+    #[tokio::test]
+    async fn policy_rejected_preserves_source() {
+        let source: Box<dyn std::error::Error + Send + Sync> = "policy violation".into();
+        let err = UrlTargetError::PolicyRejected(source);
+        assert!(
+            std::error::Error::source(&err).is_some(),
+            "PolicyRejected should preserve source for programmatic access"
+        );
     }
 }

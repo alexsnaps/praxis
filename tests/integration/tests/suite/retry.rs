@@ -12,7 +12,7 @@ use praxis_test_utils::{
 };
 
 // -----------------------------------------------------------------------------
-// Helpers
+// Utilities
 // -----------------------------------------------------------------------------
 
 fn cluster_yaml(proxy_port: u16, endpoints: &str, retry_policy: &str) -> String {

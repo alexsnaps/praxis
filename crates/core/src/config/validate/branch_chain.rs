@@ -54,16 +54,16 @@ const MAX_TOTAL_BRANCHES: usize = 256;
 
 /// Validate all branch chains across all filter chains.
 pub(crate) fn validate_branch_chains(chains: &[FilterChainConfig]) -> Result<(), ProxyError> {
-    let chain_names: HashSet<&str> = chains.iter().map(|c| c.name.as_str()).collect();
+    let chain_names: HashSet<&str> = chains.iter().map(|chain| chain.name.as_str()).collect();
     let initial_count = chain_names.len();
-    let mut all_names: HashSet<String> = chain_names.iter().map(|s| (*s).to_owned()).collect();
+    let mut all_names: HashSet<String> = chain_names.iter().map(|name| (*name).to_owned()).collect();
 
     for chain in chains {
         validate_filter_names_unique(&chain.filters, &chain.name)?;
         collect_branch_names(&chain.filters, &mut all_names, &chain_names, 0)?;
     }
 
-    let branch_count = all_names.len() - initial_count;
+    let branch_count = all_names.len().saturating_sub(initial_count);
     if branch_count > MAX_TOTAL_BRANCHES {
         return Err(ProxyError::Config(format!(
             "total branch count ({branch_count}) exceeds maximum ({MAX_TOTAL_BRANCHES})"
@@ -113,11 +113,11 @@ pub fn validate_chain_entries_branch_chains(
 ) -> Result<usize, ProxyError> {
     validate_filter_names_unique(entries, chain_name)?;
     let initial_count = known_chains.len();
-    let mut all_names: HashSet<String> = known_chains.iter().map(|s| (*s).to_owned()).collect();
+    let mut all_names: HashSet<String> = known_chains.iter().map(|name| (*name).to_owned()).collect();
     collect_branch_names(entries, &mut all_names, known_chains, 0)?;
 
-    let branch_count = all_names.len() - initial_count;
-    let total = prior_branch_count + branch_count;
+    let branch_count = all_names.len().saturating_sub(initial_count);
+    let total = prior_branch_count.saturating_add(branch_count);
     if total > MAX_TOTAL_BRANCHES {
         return Err(ProxyError::Config(format!(
             "total branch count ({total}) exceeds maximum ({MAX_TOTAL_BRANCHES})"
@@ -151,7 +151,7 @@ pub fn validate_chain_entries_branch_chains(
 /// already validated.
 pub fn count_build_branches(entries: &[FilterEntry], chains: &[&[FilterEntry]], known_chains: &HashSet<&str>) -> usize {
     let initial_count = known_chains.len();
-    let mut all_names: HashSet<String> = known_chains.iter().map(|s| (*s).to_owned()).collect();
+    let mut all_names: HashSet<String> = known_chains.iter().map(|name| (*name).to_owned()).collect();
     count_branch_names(entries, &mut all_names);
     for &chain in chains {
         count_branch_names(chain, &mut all_names);
@@ -202,7 +202,7 @@ fn validate_filter_name_chars(name: &str) -> Result<(), ProxyError> {
     }
     if !name
         .bytes()
-        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
     {
         return Err(ProxyError::Config(format!(
             "filter name '{name}' must be ASCII alphanumeric, '_', or '-'"
@@ -298,7 +298,7 @@ fn validate_on_result_filter_name(branch: &BranchChainConfig) -> Result<(), Prox
     if !cond
         .filter
         .bytes()
-        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
     {
         return Err(ProxyError::Config(format!(
             "branch '{bname}': on_result.filter '{filter}' must be ASCII alphanumeric, '_', or '-'"
@@ -330,7 +330,10 @@ fn validate_on_result_key_value(branch: &BranchChainConfig) -> Result<(), ProxyE
 
 /// Validate a single `on_result` field uses safe characters.
 fn validate_on_result_field(val: &str, field: &str, branch_name: &str) -> Result<(), ProxyError> {
-    if !val.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
+    if !val
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+    {
         return Err(ProxyError::Config(format!(
             "branch '{branch_name}': on_result.{field} '{val}' must be ASCII alphanumeric, '_', or '-'"
         )));
@@ -366,7 +369,7 @@ fn validate_chain_ref(
         },
         ChainRef::Inline { name, filters } => {
             super::validate_name_chars(name, "inline chain")?;
-            if depth + 1 > MAX_BRANCH_DEPTH {
+            if depth.saturating_add(1) > MAX_BRANCH_DEPTH {
                 return Err(ProxyError::Config(format!(
                     "branch nesting depth exceeds maximum ({MAX_BRANCH_DEPTH})"
                 )));
@@ -381,7 +384,7 @@ fn validate_chain_ref(
             if !all_names.insert(name.clone()) {
                 return Err(ProxyError::Config(format!("duplicate inline chain name '{name}'")));
             }
-            collect_branch_names(filters, all_names, chain_names, depth + 1)?;
+            collect_branch_names(filters, all_names, chain_names, depth.saturating_add(1))?;
         },
     }
     Ok(())

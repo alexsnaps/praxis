@@ -180,7 +180,7 @@ impl ShutdownSignalWatch for NotifyShutdownWatch {
 
 /// RAII guard that shuts down a Pingora proxy server when
 /// dropped. Returned by [`start_proxy_with_registry`] and
-/// related helpers so that test threads do not leak.
+/// related utilities so that test threads do not leak.
 pub struct ProxyGuard {
     /// The address the proxy is listening on.
     addr: String,
@@ -325,7 +325,7 @@ fn build_full_server(config: &Config) -> praxis_core::PingoraServerRuntime {
 /// registry, HTTP and TCP protocols, and background health probes.
 ///
 /// [`PingoraServerRuntime`]: praxis_core::PingoraServerRuntime
-#[expect(clippy::too_many_lines, reason = "test helper wiring")]
+#[expect(clippy::too_many_lines, reason = "test utility wiring")]
 fn build_full_server_with_registry(config: &Config, registry: &FilterRegistry) -> praxis_core::PingoraServerRuntime {
     let health_registry = build_health_registry(&config.clusters);
     let kv_stores = praxis_core::kv::KvStoreRegistry::new();

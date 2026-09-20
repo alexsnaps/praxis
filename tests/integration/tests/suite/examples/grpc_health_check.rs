@@ -16,7 +16,7 @@ use praxis_test_utils::{
 };
 
 // -----------------------------------------------------------------------------
-// Helpers
+// Utilities
 // -----------------------------------------------------------------------------
 
 /// Load the example config, pointing it at two backends and a free

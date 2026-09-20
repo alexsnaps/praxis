@@ -22,7 +22,7 @@
 mod body;
 /// Hardened sub-request client and executor.
 mod client;
-/// Connector, circuit guard, header sanitization, and shared helpers.
+/// Connector, circuit guard, header sanitization, and shared utilities.
 pub(crate) mod internals;
 /// Data types for sub-request exchanges.
 mod types;

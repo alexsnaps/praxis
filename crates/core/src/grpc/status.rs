@@ -335,8 +335,8 @@ impl GrpcCompletion {
     pub fn from_headers(headers: &http::HeaderMap) -> Option<Self> {
         let raw_code = headers
             .get("grpc-status")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.trim().parse::<u32>().ok())?;
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.trim().parse::<u32>().ok())?;
 
         Some(Self {
             code: GrpcStatusCode::try_from(raw_code).ok(),
@@ -392,7 +392,7 @@ impl GrpcCompletion {
 }
 
 // -----------------------------------------------------------------------------
-// Helpers
+// Utilities
 // -----------------------------------------------------------------------------
 
 /// Percent-encode text for a `grpc-message` header.

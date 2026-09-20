@@ -217,9 +217,9 @@ mod tests {
     // Test Utilities
     // -------------------------------------------------------------------------
 
-    /// Run `f` under a thread-local subscriber that records everything
+    /// Run `func` under a thread-local subscriber that records everything
     /// logged at WARN or above, returning the value and captured output.
-    fn capture_warnings<T, F: FnOnce() -> T>(f: F) -> (T, String) {
+    fn capture_warnings<T, F: FnOnce() -> T>(func: F) -> (T, String) {
         use std::sync::{Arc, Mutex};
 
         #[derive(Clone)]
@@ -243,7 +243,7 @@ mod tests {
             .with_ansi(false)
             .with_max_level(tracing::Level::WARN)
             .finish();
-        let out = tracing::subscriber::with_default(subscriber, f);
+        let out = tracing::subscriber::with_default(subscriber, func);
         let bytes = buffer.0.lock().expect("buffer lock").clone();
 
         (out, String::from_utf8_lossy(&bytes).into_owned())

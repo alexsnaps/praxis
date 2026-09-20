@@ -334,7 +334,17 @@ fn method_not_allowed() -> Response<Vec<u8>> {
 }
 
 #[cfg(test)]
-#[expect(clippy::expect_used, clippy::indexing_slicing, reason = "tests")]
+#[expect(clippy::allow_attributes, reason = "blanket test suppressions")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::disallowed_methods,
+    clippy::significant_drop_tightening,
+    clippy::too_many_lines,
+    unused_comparisons,
+    reason = "tests"
+)]
 mod tests {
     use praxis_core::health::{ClusterHealthEntry, EndpointHealth};
 
@@ -459,5 +469,519 @@ filter_chains:
             resolve_health_registry(Some(&startup), Some(&state), &state.meta).is_none(),
             "must not fall back to the stale startup registry when pipelines are live"
         );
+    }
+
+    #[test]
+    fn resolve_health_registry_returns_none_when_no_admin_registry() {
+        let empty_meta = new_listener_meta_store(std::collections::HashMap::new());
+        let result = resolve_health_registry(None, None, &empty_meta);
+        assert!(result.is_none(), "should return None when no admin registry");
+    }
+
+    #[test]
+    fn stats_post_method_not_allowed() {
+        let state = sample_state();
+        let resp = stats_response(None, &state, "POST");
+        assert_eq!(resp.status().as_u16(), 405, "POST should return 405");
+        assert_eq!(
+            resp.headers().get("Allow").and_then(|v| v.to_str().ok()),
+            Some("GET, HEAD"),
+            "405 response should include Allow header"
+        );
+        let json: serde_json::Value = serde_json::from_slice(resp.body()).expect("valid JSON");
+        assert_eq!(json["error"], "method not allowed");
+    }
+
+    #[test]
+    fn stats_put_method_not_allowed() {
+        let state = sample_state();
+        let resp = stats_response(None, &state, "PUT");
+        assert_eq!(resp.status().as_u16(), 405, "PUT should return 405");
+    }
+
+    #[test]
+    fn stats_delete_method_not_allowed() {
+        let state = sample_state();
+        let resp = stats_response(None, &state, "DELETE");
+        assert_eq!(resp.status().as_u16(), 405, "DELETE should return 405");
+    }
+
+    #[test]
+    fn stats_patch_method_not_allowed() {
+        let state = sample_state();
+        let resp = stats_response(None, &state, "PATCH");
+        assert_eq!(resp.status().as_u16(), 405, "PATCH should return 405");
+    }
+
+    #[test]
+    fn stats_options_method_not_allowed() {
+        let state = sample_state();
+        let resp = stats_response(None, &state, "OPTIONS");
+        assert_eq!(resp.status().as_u16(), 405, "OPTIONS should return 405");
+    }
+
+    #[test]
+    fn stats_get_includes_uptime() {
+        let state = sample_state();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let resp = stats_response(None, &state, "GET");
+        let json: serde_json::Value = serde_json::from_slice(resp.body()).expect("valid JSON");
+        let _uptime = json["uptime_secs"].as_u64().expect("uptime should be u64");
+    }
+
+    #[test]
+    fn stats_get_with_git_sha() {
+        let mut state = sample_state();
+        state.version = ProcessVersionInfo {
+            semver: "1.2.3".to_owned(),
+            display: "1.2.3 (abc1234)".to_owned(),
+            git_sha: Some("abc1234".to_owned()),
+        };
+        let resp = stats_response(None, &state, "GET");
+        let json: serde_json::Value = serde_json::from_slice(resp.body()).expect("valid JSON");
+        assert_eq!(json["version"]["semver"], "1.2.3");
+        assert_eq!(json["version"]["display"], "1.2.3 (abc1234)");
+        assert_eq!(json["version"]["git_sha"], "abc1234");
+    }
+
+    #[test]
+    fn stats_gaps_http_active_aggregate_only() {
+        let snapshot = metrics::StatsMetricsSnapshot {
+            http_active_by_listener: std::collections::HashMap::new(),
+            http_active_aggregate: Some(42),
+            tcp_active_by_listener: std::collections::HashMap::new(),
+            tcp_active_aggregate: None,
+            upstream_requests_by_cluster: std::collections::HashMap::new(),
+            upstream_requests_aggregate: None,
+            connect_failures_by_cluster: std::collections::HashMap::new(),
+            connect_failures_aggregate: None,
+        };
+        let gaps = stats_gaps(&snapshot);
+        assert!(
+            gaps.contains_key("per_listener_http_active"),
+            "should document per-listener HTTP active gap"
+        );
+        assert!(
+            gaps.contains_key("per_listener_http_requests"),
+            "should always document per-listener HTTP requests gap"
+        );
+    }
+
+    #[test]
+    fn stats_gaps_tcp_active_aggregate_only() {
+        let snapshot = metrics::StatsMetricsSnapshot {
+            http_active_by_listener: std::collections::HashMap::new(),
+            http_active_aggregate: None,
+            tcp_active_by_listener: std::collections::HashMap::new(),
+            tcp_active_aggregate: Some(10),
+            upstream_requests_by_cluster: std::collections::HashMap::new(),
+            upstream_requests_aggregate: None,
+            connect_failures_by_cluster: std::collections::HashMap::new(),
+            connect_failures_aggregate: None,
+        };
+        let gaps = stats_gaps(&snapshot);
+        assert!(
+            gaps.contains_key("per_listener_tcp_active"),
+            "should document per-listener TCP active gap"
+        );
+    }
+
+    #[test]
+    fn stats_gaps_upstream_requests_aggregate_only() {
+        let snapshot = metrics::StatsMetricsSnapshot {
+            http_active_by_listener: std::collections::HashMap::new(),
+            http_active_aggregate: None,
+            tcp_active_by_listener: std::collections::HashMap::new(),
+            tcp_active_aggregate: None,
+            upstream_requests_by_cluster: std::collections::HashMap::new(),
+            upstream_requests_aggregate: Some(100),
+            connect_failures_by_cluster: std::collections::HashMap::new(),
+            connect_failures_aggregate: None,
+        };
+        let gaps = stats_gaps(&snapshot);
+        assert!(
+            gaps.contains_key("per_cluster_upstream_requests"),
+            "should document per-cluster upstream requests gap"
+        );
+    }
+
+    #[test]
+    fn stats_gaps_connect_failures_aggregate_only() {
+        let snapshot = metrics::StatsMetricsSnapshot {
+            http_active_by_listener: std::collections::HashMap::new(),
+            http_active_aggregate: None,
+            tcp_active_by_listener: std::collections::HashMap::new(),
+            tcp_active_aggregate: None,
+            upstream_requests_by_cluster: std::collections::HashMap::new(),
+            upstream_requests_aggregate: None,
+            connect_failures_by_cluster: std::collections::HashMap::new(),
+            connect_failures_aggregate: Some(5),
+        };
+        let gaps = stats_gaps(&snapshot);
+        assert!(
+            gaps.contains_key("per_cluster_upstream_connect_failures"),
+            "should document per-cluster connect failures gap"
+        );
+    }
+
+    #[test]
+    fn stats_gaps_all_aggregates() {
+        let snapshot = metrics::StatsMetricsSnapshot {
+            http_active_by_listener: std::collections::HashMap::new(),
+            http_active_aggregate: Some(10),
+            tcp_active_by_listener: std::collections::HashMap::new(),
+            tcp_active_aggregate: Some(5),
+            upstream_requests_by_cluster: std::collections::HashMap::new(),
+            upstream_requests_aggregate: Some(100),
+            connect_failures_by_cluster: std::collections::HashMap::new(),
+            connect_failures_aggregate: Some(2),
+        };
+        let gaps = stats_gaps(&snapshot);
+        assert_eq!(gaps.len(), 5, "should have all 5 gap entries");
+        assert!(gaps.contains_key("per_listener_http_requests"));
+        assert!(gaps.contains_key("per_listener_http_active"));
+        assert!(gaps.contains_key("per_listener_tcp_active"));
+        assert!(gaps.contains_key("per_cluster_upstream_requests"));
+        assert!(gaps.contains_key("per_cluster_upstream_connect_failures"));
+    }
+
+    #[test]
+    fn listener_stats_view_tcp_protocol() {
+        let meta = ListenerMeta {
+            name: "tcp_listener".to_owned(),
+            address: "127.0.0.1:8080".to_owned(),
+            protocol: ProtocolKind::Tcp,
+            tls: true,
+            chain_names: vec![],
+        };
+        let mut snapshot = metrics::StatsMetricsSnapshot::default();
+        snapshot.tcp_active_by_listener.insert("tcp_listener".to_owned(), 15);
+
+        let view = listener_stats_view(&meta, &snapshot);
+        assert_eq!(view.name, "tcp_listener");
+        assert_eq!(view.protocol, ProtocolKind::Tcp);
+        assert!(view.tls, "TLS should be enabled");
+        assert_eq!(view.active_connections, 15);
+    }
+
+    #[test]
+    fn listener_stats_view_http_protocol() {
+        let meta = ListenerMeta {
+            name: "http_listener".to_owned(),
+            address: "127.0.0.1:8081".to_owned(),
+            protocol: ProtocolKind::Http,
+            tls: false,
+            chain_names: vec![],
+        };
+        let mut snapshot = metrics::StatsMetricsSnapshot::default();
+        snapshot.http_active_by_listener.insert("http_listener".to_owned(), 25);
+
+        let view = listener_stats_view(&meta, &snapshot);
+        assert_eq!(view.name, "http_listener");
+        assert_eq!(view.protocol, ProtocolKind::Http);
+        assert!(!view.tls, "TLS should be disabled");
+        assert_eq!(view.active_connections, 25);
+    }
+
+    #[test]
+    fn listener_stats_view_missing_metrics() {
+        let meta = ListenerMeta {
+            name: "new_listener".to_owned(),
+            address: "127.0.0.1:8082".to_owned(),
+            protocol: ProtocolKind::Http,
+            tls: false,
+            chain_names: vec![],
+        };
+        let snapshot = metrics::StatsMetricsSnapshot::default();
+
+        let view = listener_stats_view(&meta, &snapshot);
+        assert_eq!(view.active_connections, 0, "missing metrics should default to 0");
+    }
+
+    #[test]
+    fn cluster_stats_view_with_metrics() {
+        let meta = ClusterMeta {
+            name: "cluster1".to_owned(),
+            endpoints: vec!["10.0.0.1:80".to_owned()],
+        };
+        let mut snapshot = metrics::StatsMetricsSnapshot::default();
+        snapshot
+            .upstream_requests_by_cluster
+            .insert("cluster1".to_owned(), 1000);
+        snapshot.connect_failures_by_cluster.insert("cluster1".to_owned(), 5);
+
+        let view = cluster_stats_view(&meta, None, &snapshot);
+        assert_eq!(view.name, "cluster1");
+        assert_eq!(view.total_endpoints, 1);
+        assert_eq!(view.upstream_requests_total, 1000);
+        assert_eq!(view.upstream_connect_failures_total, 5);
+    }
+
+    #[test]
+    fn cluster_stats_view_missing_metrics() {
+        let meta = ClusterMeta {
+            name: "cluster2".to_owned(),
+            endpoints: vec!["10.0.0.1:80".to_owned(), "10.0.0.2:80".to_owned()],
+        };
+        let snapshot = metrics::StatsMetricsSnapshot::default();
+
+        let view = cluster_stats_view(&meta, None, &snapshot);
+        assert_eq!(view.upstream_requests_total, 0, "missing metrics should default to 0");
+        assert_eq!(view.upstream_connect_failures_total, 0);
+    }
+
+    #[test]
+    fn endpoint_rows_no_registry_all_healthy() {
+        let meta = ClusterMeta {
+            name: "cluster".to_owned(),
+            endpoints: vec![
+                "10.0.0.1:80".to_owned(),
+                "10.0.0.2:80".to_owned(),
+                "10.0.0.3:80".to_owned(),
+            ],
+        };
+
+        let rows = endpoint_rows(&meta, None);
+        assert_eq!(rows.len(), 3);
+        for row in &rows {
+            assert!(row.healthy, "all endpoints should be healthy without registry");
+        }
+    }
+
+    #[test]
+    fn endpoint_rows_registry_missing_cluster() {
+        let meta = ClusterMeta {
+            name: "other_cluster".to_owned(),
+            endpoints: vec!["10.0.0.1:80".to_owned()],
+        };
+        let entry = ClusterHealthEntry::new(vec![EndpointHealth::new()], vec![Arc::from("10.0.0.1:80")], None, None);
+        let registry: HealthRegistry = Arc::new(
+            [(Arc::from("different_cluster"), Arc::new(entry))]
+                .into_iter()
+                .collect(),
+        );
+
+        let rows = endpoint_rows(&meta, Some(&registry));
+        assert_eq!(rows.len(), 1);
+        assert!(
+            rows[0].healthy,
+            "should default to healthy when registry exists but cluster missing"
+        );
+    }
+
+    #[test]
+    fn endpoint_rows_sorted_by_address() {
+        let meta = ClusterMeta {
+            name: "backend".to_owned(),
+            endpoints: vec![
+                "10.0.0.3:80".to_owned(),
+                "10.0.0.1:80".to_owned(),
+                "10.0.0.2:80".to_owned(),
+            ],
+        };
+        let entry = ClusterHealthEntry::new(
+            vec![EndpointHealth::new(), EndpointHealth::new(), EndpointHealth::new()],
+            vec![
+                Arc::from("10.0.0.3:80"),
+                Arc::from("10.0.0.1:80"),
+                Arc::from("10.0.0.2:80"),
+            ],
+            None,
+            None,
+        );
+        let registry: HealthRegistry = Arc::new([(Arc::from("backend"), Arc::new(entry))].into_iter().collect());
+
+        let rows = endpoint_rows(&meta, Some(&registry));
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].address, "10.0.0.1:80", "should be sorted");
+        assert_eq!(rows[1].address, "10.0.0.2:80");
+        assert_eq!(rows[2].address, "10.0.0.3:80");
+    }
+
+    #[test]
+    fn endpoint_rows_missing_from_registry() {
+        let meta = ClusterMeta {
+            name: "backend".to_owned(),
+            endpoints: vec![
+                "10.0.0.1:80".to_owned(),
+                "10.0.0.2:80".to_owned(),
+                "10.0.0.99:80".to_owned(),
+            ],
+        };
+        let entry = ClusterHealthEntry::new(
+            vec![EndpointHealth::new(), EndpointHealth::new()],
+            vec![Arc::from("10.0.0.1:80"), Arc::from("10.0.0.2:80")],
+            None,
+            None,
+        );
+        let registry: HealthRegistry = Arc::new([(Arc::from("backend"), Arc::new(entry))].into_iter().collect());
+
+        let rows = endpoint_rows(&meta, Some(&registry));
+        assert_eq!(rows.len(), 3);
+        let missing = rows
+            .iter()
+            .find(|r| r.address == "10.0.0.99:80")
+            .expect("missing endpoint should be in rows");
+        assert!(missing.healthy, "endpoint not in registry should default to healthy");
+    }
+
+    #[test]
+    fn as_head_response_clears_body_and_content_length() {
+        let body = br#"{"some":"data"}"#;
+        let resp = Response::builder()
+            .status(200)
+            .header("Content-Type", "application/json")
+            .header("Content-Length", body.len())
+            .body(body.to_vec())
+            .expect("valid response");
+
+        let head_resp = as_head_response(resp);
+        assert!(head_resp.body().is_empty(), "body should be empty");
+        assert_eq!(
+            head_resp.headers().get(http::header::CONTENT_LENGTH),
+            None,
+            "Content-Length should be removed"
+        );
+        assert_eq!(
+            head_resp.headers().get("Content-Type").and_then(|v| v.to_str().ok()),
+            Some("application/json"),
+            "other headers should remain"
+        );
+    }
+
+    #[test]
+    fn method_not_allowed_response_structure() {
+        let resp = method_not_allowed();
+        assert_eq!(resp.status().as_u16(), 405);
+        assert_eq!(
+            resp.headers().get("Content-Type").and_then(|v| v.to_str().ok()),
+            Some("application/json")
+        );
+        assert_eq!(
+            resp.headers().get("Allow").and_then(|v| v.to_str().ok()),
+            Some("GET, HEAD")
+        );
+        let json: serde_json::Value = serde_json::from_slice(resp.body()).expect("valid JSON");
+        assert_eq!(json["error"], "method not allowed");
+    }
+
+    #[test]
+    fn process_version_info_without_git_sha() {
+        let version = ProcessVersionInfo {
+            semver: "0.1.0".to_owned(),
+            display: "0.1.0".to_owned(),
+            git_sha: None,
+        };
+        let json = serde_json::to_value(&version).expect("should serialize");
+        assert_eq!(json["semver"], "0.1.0");
+        assert_eq!(json["display"], "0.1.0");
+        assert!(json.get("git_sha").is_none(), "git_sha should be skipped when None");
+    }
+
+    #[test]
+    fn process_version_info_with_git_sha() {
+        let version = ProcessVersionInfo {
+            semver: "0.2.0".to_owned(),
+            display: "0.2.0 (deadbeef)".to_owned(),
+            git_sha: Some("deadbeef".to_owned()),
+        };
+        let json = serde_json::to_value(&version).expect("should serialize");
+        assert_eq!(json["semver"], "0.2.0");
+        assert_eq!(json["display"], "0.2.0 (deadbeef)");
+        assert_eq!(json["git_sha"], "deadbeef");
+    }
+
+    #[test]
+    fn stats_response_multiple_listeners_sorted() {
+        let config = praxis_core::config::Config::from_yaml(
+            r#"
+insecure_options:
+  allow_private_endpoints: true
+listeners:
+  - name: zebra
+    address: "127.0.0.1:8083"
+    filter_chains: [main]
+  - name: alpha
+    address: "127.0.0.1:8081"
+    filter_chains: [main]
+  - name: beta
+    address: "127.0.0.1:8082"
+    filter_chains: [main]
+clusters:
+  - name: backend
+    endpoints:
+      - address: "127.0.0.1:9000"
+filter_chains:
+  - name: main
+    filters: [{ filter: static_response, status: 200 }]
+"#,
+        )
+        .expect("config should parse");
+
+        let state = StatsAdminState {
+            started_at: Instant::now(),
+            version: ProcessVersionInfo {
+                semver: "0.0.0".to_owned(),
+                display: "0.0.0".to_owned(),
+                git_sha: None,
+            },
+            listener_meta: new_listener_meta_store(listener_meta_from_config(&config)),
+            cluster_meta: new_cluster_meta_store(cluster_meta_from_config(&config)),
+        };
+
+        let resp = stats_response(None, &state, "GET");
+        let json: serde_json::Value = serde_json::from_slice(resp.body()).expect("valid JSON");
+        let listeners = json["listeners"].as_array().expect("listeners should be array");
+        assert_eq!(listeners.len(), 3);
+        assert_eq!(listeners[0]["name"], "alpha", "listeners should be sorted");
+        assert_eq!(listeners[1]["name"], "beta");
+        assert_eq!(listeners[2]["name"], "zebra");
+    }
+
+    #[test]
+    fn stats_response_multiple_clusters_sorted() {
+        let config = praxis_core::config::Config::from_yaml(
+            r#"
+insecure_options:
+  allow_private_endpoints: true
+listeners:
+  - name: web
+    address: "127.0.0.1:8080"
+    filter_chains: [main]
+clusters:
+  - name: zoo
+    endpoints:
+      - address: "127.0.0.1:9003"
+  - name: apple
+    endpoints:
+      - address: "127.0.0.1:9001"
+  - name: banana
+    endpoints:
+      - address: "127.0.0.1:9002"
+filter_chains:
+  - name: main
+    filters: [{ filter: static_response, status: 200 }]
+"#,
+        )
+        .expect("config should parse");
+
+        let state = StatsAdminState {
+            started_at: Instant::now(),
+            version: ProcessVersionInfo {
+                semver: "0.0.0".to_owned(),
+                display: "0.0.0".to_owned(),
+                git_sha: None,
+            },
+            listener_meta: new_listener_meta_store(listener_meta_from_config(&config)),
+            cluster_meta: new_cluster_meta_store(cluster_meta_from_config(&config)),
+        };
+
+        let resp = stats_response(None, &state, "GET");
+        let json: serde_json::Value = serde_json::from_slice(resp.body()).expect("valid JSON");
+        let clusters = json["clusters"].as_array().expect("clusters should be array");
+        assert_eq!(clusters.len(), 3);
+        assert_eq!(clusters[0]["name"], "apple", "clusters should be sorted");
+        assert_eq!(clusters[1]["name"], "banana");
+        assert_eq!(clusters[2]["name"], "zoo");
     }
 }

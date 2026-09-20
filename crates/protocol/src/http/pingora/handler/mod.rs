@@ -43,7 +43,7 @@ mod normalize;
 mod request_body_filter;
 /// Request filter hook.
 mod request_filter;
-/// Reserved internal header helpers.
+/// Reserved internal header utilities.
 mod reserved_headers;
 /// Response body filter hook.
 mod response_body_filter;
@@ -172,7 +172,7 @@ where
 ///
 /// `baseline` is the mode established before request/response-phase filter hooks
 /// run (typically from pipeline capabilities + global body limits). Runtime
-/// `set_*_body_mode` calls may widen limits; this helper preserves the original
+/// `set_*_body_mode` calls may widen limits; this utility preserves the original
 /// ceiling while still allowing upgrades between body mode variants.
 ///
 /// `Stream` mode passes through unconditionally: it delivers chunks as they
@@ -1681,7 +1681,7 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
-    // Span Attribute Helpers
+    // Span Attribute Utilities
     // -------------------------------------------------------------------------
 
     #[test]

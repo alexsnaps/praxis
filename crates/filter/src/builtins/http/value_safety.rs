@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Praxis Contributors
 
-//! Shared value-safety helpers for HTTP body-derived data promotion.
+//! Shared value-safety utilities for HTTP body-derived data promotion.
 
 // -----------------------------------------------------------------------------
 // Header Value Safety

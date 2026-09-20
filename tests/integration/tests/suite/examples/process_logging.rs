@@ -13,7 +13,7 @@ use std::{
 use praxis_test_utils::{example_config_path, free_port, patch_yaml, praxis_bin, wait_for_http};
 
 // -----------------------------------------------------------------------------
-// Helpers
+// Utilities
 // -----------------------------------------------------------------------------
 
 fn stop_child(mut child: std::process::Child) {

@@ -9,7 +9,7 @@ use praxis_core::config::Config;
 use praxis_test_utils::{free_port, http_get, http_post, start_backend_with_shutdown, start_proxy, wait_for_tcp};
 
 // -----------------------------------------------------------------------------
-// Helpers
+// Utilities
 // -----------------------------------------------------------------------------
 
 fn error_count(body: &str, error_type: &str) -> Option<f64> {

@@ -71,9 +71,9 @@ fn validate_entry(chain_name: &str, entry: &FilterEntry, insecure_options: &Inse
     if CLUSTER_BEARING_FILTERS.contains(&entry.filter_type.as_str()) {
         let clusters = extract_clusters(chain_name, entry)?;
         validate_inline_names(chain_name, &entry.filter_type, &clusters)?;
-        validate_clusters(&clusters, insecure_options).map_err(|e| {
+        validate_clusters(&clusters, insecure_options).map_err(|err| {
             ProxyError::Config(format!(
-                "chain '{chain_name}': filter '{}': inline {e}",
+                "chain '{chain_name}': filter '{}': inline {err}",
                 entry.filter_type
             ))
         })?;
@@ -111,7 +111,7 @@ pub(super) fn validate_tcp_listener_clusters(
     // Chain names are unique (validated elsewhere), so index once
     // instead of scanning the chain list per listener reference.
     let chains_by_name: std::collections::HashMap<&str, &FilterChainConfig> =
-        chains.iter().map(|c| (c.name.as_str(), c)).collect();
+        chains.iter().map(|chain| (chain.name.as_str(), chain)).collect();
 
     for listener in listeners {
         if listener.protocol != ProtocolKind::Tcp {
@@ -183,9 +183,9 @@ pub(super) fn extract_step_filters(chain_name: &str, entry: &FilterEntry) -> Res
         let Some(step_filters) = step_map.get("filters") else {
             continue;
         };
-        let parsed: Vec<FilterEntry> = serde_yaml::from_value(step_filters.clone()).map_err(|e| {
+        let parsed: Vec<FilterEntry> = serde_yaml::from_value(step_filters.clone()).map_err(|err| {
             ProxyError::Config(format!(
-                "chain '{chain_name}': filter '{}': invalid step filters: {e}",
+                "chain '{chain_name}': filter '{}': invalid step filters: {err}",
                 entry.filter_type
             ))
         })?;
@@ -205,9 +205,9 @@ fn extract_clusters(chain_name: &str, entry: &FilterEntry) -> Result<Vec<Cluster
     let Some(clusters_value) = mapping.get("clusters") else {
         return Ok(Vec::new());
     };
-    serde_yaml::from_value(clusters_value.clone()).map_err(|e| {
+    serde_yaml::from_value(clusters_value.clone()).map_err(|err| {
         ProxyError::Config(format!(
-            "chain '{chain_name}': filter '{}': invalid inline clusters: {e}",
+            "chain '{chain_name}': filter '{}': invalid inline clusters: {err}",
             entry.filter_type
         ))
     })
@@ -236,7 +236,9 @@ fn validate_inline_names(chain_name: &str, filter_type: &str, clusters: &[Cluste
 #[allow(
     clippy::unwrap_used,
     clippy::expect_used,
-    reason = "tests use unwrap/expect for brevity"
+    clippy::str_to_string,
+    clippy::indexing_slicing,
+    reason = "tests use unwrap/expect/indexing for brevity"
 )]
 mod tests {
     use crate::config::{Config, FilterChainConfig, Listener};
@@ -359,6 +361,289 @@ mod tests {
         assert!(
             err.to_string().contains("weight"),
             "branch-chain inline clusters must be validated too: {err}"
+        );
+    }
+
+    #[test]
+    fn extract_step_filters_with_non_mapping_config() {
+        use serde_yaml::Value;
+
+        use crate::config::FilterEntry;
+
+        let entry = FilterEntry {
+            filter_type: super::STEP_BEARING_FILTER.to_string(),
+            config: Value::String("not-a-mapping".to_string()),
+            name: None,
+            conditions: Vec::new(),
+            response_conditions: Vec::new(),
+            failure_mode: crate::config::filters::FailureMode::default(),
+            branch_chains: None,
+        };
+
+        let result = super::extract_step_filters("test_chain", &entry);
+        assert!(
+            result.is_ok(),
+            "non-mapping config should return empty vec without error"
+        );
+        assert!(
+            result.unwrap().is_empty(),
+            "should return empty vec for non-mapping config"
+        );
+    }
+
+    #[test]
+    fn extract_step_filters_with_non_sequence_steps() {
+        use serde_yaml::{Mapping, Value};
+
+        use crate::config::FilterEntry;
+
+        let mut mapping = Mapping::new();
+        mapping.insert(
+            Value::String("steps".to_string()),
+            Value::String("not-a-sequence".to_string()),
+        );
+
+        let entry = FilterEntry {
+            filter_type: super::STEP_BEARING_FILTER.to_string(),
+            config: Value::Mapping(mapping),
+            name: None,
+            conditions: Vec::new(),
+            response_conditions: Vec::new(),
+            failure_mode: crate::config::filters::FailureMode::default(),
+            branch_chains: None,
+        };
+
+        let result = super::extract_step_filters("test_chain", &entry);
+        assert!(result.is_ok(), "should handle non-sequence steps");
+        assert!(result.unwrap().is_empty(), "should return empty vec");
+    }
+
+    #[test]
+    fn extract_step_filters_with_non_mapping_step() {
+        use serde_yaml::{Mapping, Value};
+
+        use crate::config::FilterEntry;
+
+        let mut mapping = Mapping::new();
+        let steps = vec![Value::String("not-a-mapping".to_string())];
+        mapping.insert(Value::String("steps".to_string()), Value::Sequence(steps));
+
+        let entry = FilterEntry {
+            filter_type: super::STEP_BEARING_FILTER.to_string(),
+            config: Value::Mapping(mapping),
+            name: None,
+            conditions: Vec::new(),
+            response_conditions: Vec::new(),
+            failure_mode: crate::config::filters::FailureMode::default(),
+            branch_chains: None,
+        };
+
+        let result = super::extract_step_filters("test_chain", &entry);
+        assert!(result.is_ok(), "should skip non-mapping steps");
+        assert!(result.unwrap().is_empty(), "should return empty vec");
+    }
+
+    #[test]
+    fn extract_step_filters_with_missing_filters_key() {
+        use serde_yaml::{Mapping, Value};
+
+        use crate::config::FilterEntry;
+
+        let mut step_map = Mapping::new();
+        step_map.insert(Value::String("name".to_string()), Value::String("step1".to_string()));
+
+        let mut mapping = Mapping::new();
+        let steps = vec![Value::Mapping(step_map)];
+        mapping.insert(Value::String("steps".to_string()), Value::Sequence(steps));
+
+        let entry = FilterEntry {
+            filter_type: super::STEP_BEARING_FILTER.to_string(),
+            config: Value::Mapping(mapping),
+            name: None,
+            conditions: Vec::new(),
+            response_conditions: Vec::new(),
+            failure_mode: crate::config::filters::FailureMode::default(),
+            branch_chains: None,
+        };
+
+        let result = super::extract_step_filters("test_chain", &entry);
+        assert!(result.is_ok(), "should skip steps without filters key");
+        assert!(result.unwrap().is_empty(), "should return empty vec");
+    }
+
+    #[test]
+    fn extract_clusters_with_non_mapping_config() {
+        use serde_yaml::Value;
+
+        use crate::config::FilterEntry;
+
+        let entry = FilterEntry {
+            filter_type: "load_balancer".to_string(),
+            config: Value::String("not-a-mapping".to_string()),
+            name: None,
+            conditions: Vec::new(),
+            response_conditions: Vec::new(),
+            failure_mode: crate::config::filters::FailureMode::default(),
+            branch_chains: None,
+        };
+
+        let result = super::extract_clusters("test_chain", &entry);
+        assert!(result.is_ok(), "non-mapping config should return empty vec");
+        assert!(result.unwrap().is_empty(), "should return empty vec");
+    }
+
+    #[test]
+    fn extract_clusters_with_missing_clusters_key() {
+        use serde_yaml::{Mapping, Value};
+
+        use crate::config::FilterEntry;
+
+        let mut mapping = Mapping::new();
+        mapping.insert(Value::String("other".to_string()), Value::String("value".to_string()));
+
+        let entry = FilterEntry {
+            filter_type: "load_balancer".to_string(),
+            config: Value::Mapping(mapping),
+            name: None,
+            conditions: Vec::new(),
+            response_conditions: Vec::new(),
+            failure_mode: crate::config::filters::FailureMode::default(),
+            branch_chains: None,
+        };
+
+        let result = super::extract_clusters("test_chain", &entry);
+        assert!(result.is_ok(), "missing clusters key should return empty vec");
+        assert!(result.unwrap().is_empty(), "should return empty vec");
+    }
+
+    #[test]
+    fn tcp_listener_without_cluster_field() {
+        let yaml = "listeners:\n  - name: tcp_no_cluster\n    address: \"127.0.0.1:19000\"\n    protocol: tcp\n    filter_chains: [tcp_lb]\nfilter_chains:\n  - name: tcp_lb\n    filters:\n      - filter: tcp_load_balancer\n        clusters:\n          - name: backend\n            endpoints: [\"10.0.0.1:5000\"]\ninsecure_options:\n  allow_private_endpoints: true\n";
+        let config = Config::from_yaml(yaml).expect("should parse TCP listener without cluster field");
+        assert_eq!(config.listeners.len(), 1);
+        assert!(config.listeners[0].cluster.is_none());
+    }
+
+    #[test]
+    fn http_listener_skipped_in_tcp_validation() {
+        let yaml = "listeners:\n  - name: http_listener\n    address: \"127.0.0.1:18080\"\n    protocol: http\n    cluster: should_be_ignored\n    filter_chains: [chain]\nfilter_chains:\n  - name: chain\n    filters:\n      - filter: load_balancer\n        clusters:\n          - name: web\n            endpoints: [\"192.0.2.1:80\"]\n";
+        Config::from_yaml(yaml).expect("HTTP listener with cluster field should be ignored in TCP validation");
+    }
+
+    #[test]
+    fn tcp_listener_referencing_missing_chain() {
+        let yaml = "listeners:\n  - name: tcp_listener\n    address: \"127.0.0.1:19000\"\n    protocol: tcp\n    cluster: backend\n    filter_chains: [missing_chain]\nfilter_chains:\n  - name: different_chain\n    filters:\n      - filter: tcp_load_balancer\n        clusters:\n          - name: backend\n            endpoints: [\"10.0.0.1:5000\"]\ninsecure_options:\n  allow_private_endpoints: true\n";
+        let err = Config::from_yaml(yaml).unwrap_err();
+        assert!(
+            err.to_string().contains("missing_chain"),
+            "should report the missing chain name: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_inline_clusters_with_empty_chains() {
+        use super::{InsecureOptions, validate_inline_clusters};
+
+        let chains = vec![];
+        let insecure_options = InsecureOptions::default();
+        let result = validate_inline_clusters(&chains, &insecure_options);
+        assert!(result.is_ok(), "empty chains should validate successfully");
+    }
+
+    #[test]
+    fn tcp_load_balancer_filter_validated() {
+        let yaml = "listeners:\n  - name: tcp_listener\n    address: \"127.0.0.1:19000\"\n    protocol: tcp\n    cluster: backend\n    filter_chains: [tcp_chain]\nfilter_chains:\n  - name: tcp_chain\n    filters:\n      - filter: tcp_load_balancer\n        clusters:\n          - name: backend\n            endpoints:\n              - address: \"192.0.2.1:80\"\n                weight: 2000000000\ninsecure_options:\n  allow_private_endpoints: true\n";
+        let err = Config::from_yaml(yaml).unwrap_err();
+        assert!(
+            err.to_string().contains("weight"),
+            "tcp_load_balancer inline clusters must be validated: {err}"
+        );
+    }
+
+    #[test]
+    fn branch_chain_with_named_reference() {
+        let yaml = "listeners:\n  - name: main\n    address: \"127.0.0.1:18080\"\n    protocol: http\n    filter_chains: [chain]\nfilter_chains:\n  - name: chain\n    filters:\n      - filter: header_static\n        headers:\n          x-test: value\n        branch_chains:\n          - name: br\n            chains: [other_chain]\n            rejoin: next\n  - name: other_chain\n    filters:\n      - filter: load_balancer\n        clusters:\n          - name: web\n            endpoints: [\"192.0.2.1:80\"]\n";
+        Config::from_yaml(yaml).expect("branch chain with named reference should be valid");
+    }
+
+    #[test]
+    fn validate_chain_entries_empty_entries() {
+        use super::{InsecureOptions, validate_chain_entries_inline_clusters};
+
+        let entries = vec![];
+        let insecure_options = InsecureOptions::default();
+        let result = validate_chain_entries_inline_clusters("test_chain", &entries, &insecure_options);
+        assert!(result.is_ok(), "empty entries should validate successfully");
+    }
+
+    #[test]
+    fn extract_step_filters_with_valid_filters() {
+        use serde_yaml::{Mapping, Value};
+
+        use crate::config::FilterEntry;
+
+        let mut step_map = Mapping::new();
+        let filters_yaml = r#"
+- filter: load_balancer
+  clusters:
+    - name: web
+      endpoints: ["192.0.2.1:80"]
+"#;
+        let filters_value: Value = serde_yaml::from_str(filters_yaml).unwrap();
+        step_map.insert(Value::String("filters".to_string()), filters_value);
+
+        let mut mapping = Mapping::new();
+        let steps = vec![Value::Mapping(step_map)];
+        mapping.insert(Value::String("steps".to_string()), Value::Sequence(steps));
+
+        let entry = FilterEntry {
+            filter_type: super::STEP_BEARING_FILTER.to_string(),
+            config: Value::Mapping(mapping),
+            name: None,
+            conditions: Vec::new(),
+            response_conditions: Vec::new(),
+            failure_mode: crate::config::filters::FailureMode::default(),
+            branch_chains: None,
+        };
+
+        let result = super::extract_step_filters("test_chain", &entry);
+        assert!(result.is_ok(), "should parse valid step filters");
+        let filters = result.unwrap();
+        assert_eq!(filters.len(), 1, "should extract one filter");
+        assert_eq!(filters[0].filter_type, "load_balancer");
+    }
+
+    #[test]
+    fn extract_step_filters_with_malformed_filters() {
+        use serde_yaml::{Mapping, Value};
+
+        use crate::config::FilterEntry;
+
+        let mut step_map = Mapping::new();
+        step_map.insert(
+            Value::String("filters".to_string()),
+            Value::String("not-valid-filters".to_string()),
+        );
+
+        let mut mapping = Mapping::new();
+        let steps = vec![Value::Mapping(step_map)];
+        mapping.insert(Value::String("steps".to_string()), Value::Sequence(steps));
+
+        let entry = FilterEntry {
+            filter_type: super::STEP_BEARING_FILTER.to_string(),
+            config: Value::Mapping(mapping),
+            name: None,
+            conditions: Vec::new(),
+            response_conditions: Vec::new(),
+            failure_mode: crate::config::filters::FailureMode::default(),
+            branch_chains: None,
+        };
+
+        let result = super::extract_step_filters("test_chain", &entry);
+        assert!(result.is_err(), "malformed filters should return error");
+        assert!(
+            result.unwrap_err().to_string().contains("invalid step filters"),
+            "error should mention invalid step filters"
         );
     }
 }

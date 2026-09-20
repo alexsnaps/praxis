@@ -13,69 +13,72 @@ use praxis_core::config::Config;
 /// Emit startup warnings for every active insecure option.
 #[expect(clippy::too_many_lines, reason = "one line per insecure flag")]
 pub(crate) fn warn_insecure_options(config: &Config) {
-    let o = &config.insecure_options;
+    let opts = &config.insecure_options;
     insecure_warn(
-        o.allow_unbounded_body,
+        opts.allow_unbounded_body,
         "allow_unbounded_body: body size ceiling relaxed",
     );
     insecure_warn(
-        o.allow_open_security_filters,
+        opts.allow_open_security_filters,
         "allow_open_security_filters: open failure_mode allowed",
     );
     insecure_warn(
-        o.allow_private_endpoints,
+        opts.allow_private_endpoints,
         "allow_private_endpoints: SSRF-sensitive endpoint addresses allowed",
     );
     insecure_warn(
-        o.allow_private_health_checks,
+        opts.allow_private_health_checks,
         "allow_private_health_checks: loopback health checks allowed",
     );
     insecure_warn(
-        o.allow_private_upstreams,
+        opts.allow_private_upstreams,
         "allow_private_upstreams: runtime SSRF protection disabled for upstream connections",
     );
     insecure_warn(
-        o.allow_public_admin,
+        opts.allow_public_admin,
         "allow_public_admin: admin may bind non-loopback addresses",
     );
     insecure_warn(
-        o.allow_tls_no_verify,
+        opts.allow_tls_no_verify,
         "allow_tls_no_verify: upstream TLS certificate verification disabled",
     );
     insecure_warn(
-        o.allow_tls_without_sni,
+        opts.allow_tls_without_sni,
         "allow_tls_without_sni: TLS hostname verification weakened",
     );
-    insecure_warn(o.csrf_log_only, "csrf_log_only: CSRF violations logged, not rejected");
     insecure_warn(
-        o.skip_pipeline_validation,
+        opts.csrf_log_only,
+        "csrf_log_only: CSRF violations logged, not rejected",
+    );
+    insecure_warn(
+        opts.skip_pipeline_validation,
         "skip_pipeline_validation: pipeline errors demoted to warnings",
     );
-    warn_pipeline_check_skips(&o.skip_pipeline_checks);
+    warn_pipeline_check_skips(&opts.skip_pipeline_checks);
 }
 
 /// Emit startup warnings for active granular pipeline check skip flags.
-fn warn_pipeline_check_skips(s: &praxis_core::config::SkipPipelineChecks) {
-    if !s.any() {
+fn warn_pipeline_check_skips(skips: &praxis_core::config::SkipPipelineChecks) {
+    if !skips.any() {
         return;
     }
-    insecure_warn(s.conditional_security, "skip_pipeline_checks.conditional_security");
+    insecure_warn(skips.conditional_security, "skip_pipeline_checks.conditional_security");
     insecure_warn(
-        s.conflicting_cluster_selectors,
+        skips.conflicting_cluster_selectors,
         "skip_pipeline_checks.conflicting_cluster_selectors",
     );
     insecure_warn(
-        s.duplicate_load_balancers,
+        skips.duplicate_load_balancers,
         "skip_pipeline_checks.duplicate_load_balancers",
     );
     insecure_warn(
-        s.duplicate_rewrite_filters,
+        skips.duplicate_rewrite_filters,
         "skip_pipeline_checks.duplicate_rewrite_filters",
     );
-    insecure_warn(s.duplicate_routers, "skip_pipeline_checks.duplicate_routers");
-    insecure_warn(s.lb_without_router, "skip_pipeline_checks.lb_without_router");
-    insecure_warn(s.misaligned_clusters, "skip_pipeline_checks.misaligned_clusters");
-    insecure_warn(s.unreachable_filters, "skip_pipeline_checks.unreachable_filters");
+    insecure_warn(skips.duplicate_routers, "skip_pipeline_checks.duplicate_routers");
+    insecure_warn(skips.lb_without_router, "skip_pipeline_checks.lb_without_router");
+    insecure_warn(skips.misaligned_clusters, "skip_pipeline_checks.misaligned_clusters");
+    insecure_warn(skips.unreachable_filters, "skip_pipeline_checks.unreachable_filters");
 }
 
 /// Log a warning if an insecure option is active.
@@ -377,6 +380,7 @@ pub(crate) fn warn_policy_filter_without_feature(registry: &praxis_filter::Filte
     clippy::needless_raw_strings,
     clippy::needless_raw_string_hashes,
     clippy::too_many_lines,
+    clippy::semicolon_if_nothing_returned,
     reason = "tests use unwrap/expect/indexing/raw strings for brevity"
 )]
 mod tests {
@@ -416,16 +420,20 @@ mod tests {
     fn warn_insecure_options_each_flag_produces_one_warning() {
         #[expect(clippy::type_complexity, reason = "test-local inline table")]
         let flags: &[(&str, fn(&mut InsecureOptions))] = &[
-            ("allow_unbounded_body", |o| o.allow_unbounded_body = true),
-            ("allow_open_security_filters", |o| o.allow_open_security_filters = true),
-            ("allow_private_endpoints", |o| o.allow_private_endpoints = true),
-            ("allow_private_health_checks", |o| o.allow_private_health_checks = true),
-            ("allow_private_upstreams", |o| o.allow_private_upstreams = true),
-            ("allow_public_admin", |o| o.allow_public_admin = true),
-            ("allow_tls_no_verify", |o| o.allow_tls_no_verify = true),
-            ("allow_tls_without_sni", |o| o.allow_tls_without_sni = true),
-            ("csrf_log_only", |o| o.csrf_log_only = true),
-            ("skip_pipeline_validation", |o| o.skip_pipeline_validation = true),
+            ("allow_unbounded_body", |opts| opts.allow_unbounded_body = true),
+            ("allow_open_security_filters", |opts| {
+                opts.allow_open_security_filters = true
+            }),
+            ("allow_private_endpoints", |opts| opts.allow_private_endpoints = true),
+            ("allow_private_health_checks", |opts| {
+                opts.allow_private_health_checks = true
+            }),
+            ("allow_private_upstreams", |opts| opts.allow_private_upstreams = true),
+            ("allow_public_admin", |opts| opts.allow_public_admin = true),
+            ("allow_tls_no_verify", |opts| opts.allow_tls_no_verify = true),
+            ("allow_tls_without_sni", |opts| opts.allow_tls_without_sni = true),
+            ("csrf_log_only", |opts| opts.csrf_log_only = true),
+            ("skip_pipeline_validation", |opts| opts.skip_pipeline_validation = true),
         ];
 
         for (name, setter) in flags {
@@ -461,16 +469,20 @@ mod tests {
     fn warn_insecure_options_pipeline_check_flags_each_produce_warning() {
         #[expect(clippy::type_complexity, reason = "test-local inline table")]
         let flags: &[(&str, fn(&mut SkipPipelineChecks))] = &[
-            ("conditional_security", |s| s.conditional_security = true),
-            ("conflicting_cluster_selectors", |s| {
-                s.conflicting_cluster_selectors = true;
+            ("conditional_security", |skips| skips.conditional_security = true),
+            ("conflicting_cluster_selectors", |skips| {
+                skips.conflicting_cluster_selectors = true;
             }),
-            ("duplicate_load_balancers", |s| s.duplicate_load_balancers = true),
-            ("duplicate_rewrite_filters", |s| s.duplicate_rewrite_filters = true),
-            ("duplicate_routers", |s| s.duplicate_routers = true),
-            ("lb_without_router", |s| s.lb_without_router = true),
-            ("misaligned_clusters", |s| s.misaligned_clusters = true),
-            ("unreachable_filters", |s| s.unreachable_filters = true),
+            ("duplicate_load_balancers", |skips| {
+                skips.duplicate_load_balancers = true
+            }),
+            ("duplicate_rewrite_filters", |skips| {
+                skips.duplicate_rewrite_filters = true
+            }),
+            ("duplicate_routers", |skips| skips.duplicate_routers = true),
+            ("lb_without_router", |skips| skips.lb_without_router = true),
+            ("misaligned_clusters", |skips| skips.misaligned_clusters = true),
+            ("unreachable_filters", |skips| skips.unreachable_filters = true),
         ];
 
         for (name, setter) in flags {
@@ -941,11 +953,11 @@ filter_chains:
         .expect("test config should parse")
     }
 
-    fn capture_warnings<F: FnOnce()>(f: F) -> Vec<String> {
+    fn capture_warnings<F: FnOnce()>(run: F) -> Vec<String> {
         let messages = Arc::new(Mutex::new(Vec::<String>::new()));
         let capture = WarningCapture(Arc::clone(&messages));
         let subscriber = tracing_subscriber::registry().with(capture);
-        tracing::subscriber::with_default(subscriber, f);
+        tracing::subscriber::with_default(subscriber, run);
         std::mem::take(&mut *messages.lock().unwrap())
     }
 

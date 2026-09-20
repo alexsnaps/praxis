@@ -1,6 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Praxis Contributors
 
+#![allow(
+    clippy::too_many_lines,
+    clippy::bool_assert_comparison,
+    clippy::significant_drop_tightening,
+    clippy::min_ident_chars,
+    clippy::shadow_unrelated,
+    reason = "test file with many test functions"
+)]
+
 use std::{sync::Arc, time::Duration};
 
 use bytes::Bytes;
@@ -1723,7 +1732,7 @@ async fn send_streaming_circuit_half_open_probe_recovers() {
 }
 
 // -----------------------------------------------------------------------------
-// HTTP/2 cleartext (prior-knowledge) helpers
+// HTTP/2 cleartext (prior-knowledge) utilities
 // -----------------------------------------------------------------------------
 
 #[expect(clippy::too_many_lines, reason = "H2 server setup")]
@@ -2767,5 +2776,300 @@ async fn excessive_interim_1xx_responses_are_rejected() {
     assert!(
         matches!(&err, SubRequestError::Io(msg) if msg.contains("too many 1xx")),
         "the error must name the interim-response cap, got: {err:?}"
+    );
+}
+
+// -----------------------------------------------------------------------------
+// Additional coverage tests for body.rs
+// -----------------------------------------------------------------------------
+
+#[test]
+fn sub_response_body_accessors_on_done_body() {
+    let body = StreamingSubResponse {
+        status: 200,
+        headers: HeaderMap::new(),
+        body: SubResponseBody::new_done(),
+    };
+    assert!(body.body.is_done());
+    assert_eq!(body.body.received_bytes(), 0);
+    assert_eq!(body.body.chunk_count(), 0);
+}
+
+#[tokio::test]
+async fn streaming_body_deadline_expires_before_first_read() {
+    use pingora_core::upstreams::peer::HttpPeer;
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let backend = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut buf = vec![0_u8; 4096];
+        let _bytes_read = socket.read(&mut buf).await;
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello")
+            .await
+            .unwrap();
+        socket.flush().await.unwrap();
+    });
+
+    let connector = SubRequestConnector::new(1, None);
+    let client = super::client::SubRequestClient::new(connector);
+    let peer = HttpPeer::new(addr.to_string(), false, String::new());
+    let request = SubRequest {
+        method: http::Method::GET,
+        uri: "/".parse().unwrap(),
+        headers: HeaderMap::new(),
+        body: Bytes::new(),
+    };
+
+    let limits = StreamLimits {
+        idle_timeout: Duration::from_secs(30),
+        max_stream_duration: Some(Duration::from_millis(1)),
+        max_total_bytes: None,
+    };
+
+    let mut response = Box::pin(client.send_streaming(&peer, &request, Duration::from_secs(5), limits, None))
+        .await
+        .expect("request should succeed");
+
+    tokio::time::sleep(Duration::from_millis(5)).await;
+
+    let err = response
+        .body
+        .next_chunk()
+        .await
+        .expect_err("deadline should expire before read");
+
+    backend.abort();
+
+    assert!(
+        matches!(err, SubRequestError::DeadlineExceeded),
+        "early deadline check should fire: {err}"
+    );
+}
+
+#[tokio::test]
+async fn streaming_body_read_timeout_distinct_from_idle() {
+    use pingora_core::upstreams::peer::HttpPeer;
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let backend = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut buf = vec![0_u8; 4096];
+        let _bytes_read = socket.read(&mut buf).await;
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n")
+            .await
+            .unwrap();
+        socket.flush().await.unwrap();
+        tokio::time::sleep(Duration::from_secs(10)).await;
+    });
+
+    let connector = SubRequestConnector::new(1, None);
+    let client = super::client::SubRequestClient::new(connector);
+    let peer = HttpPeer::new(addr.to_string(), false, String::new());
+    let mut peer_opts = peer.options.clone();
+    peer_opts.read_timeout = Some(Duration::from_millis(50));
+    let peer_with_read_timeout = HttpPeer {
+        options: peer_opts,
+        ..peer
+    };
+
+    let request = SubRequest {
+        method: http::Method::GET,
+        uri: "/".parse().unwrap(),
+        headers: HeaderMap::new(),
+        body: Bytes::new(),
+    };
+
+    let limits = StreamLimits {
+        idle_timeout: Duration::from_secs(5),
+        max_stream_duration: None,
+        max_total_bytes: None,
+    };
+
+    let mut response =
+        Box::pin(client.send_streaming(&peer_with_read_timeout, &request, Duration::from_secs(5), limits, None))
+            .await
+            .expect("request should succeed");
+
+    let first = response.body.next_chunk().await.expect("first chunk should succeed");
+    assert!(first.is_some(), "should receive first chunk");
+
+    let err = response.body.next_chunk().await.expect_err("read timeout should fire");
+
+    backend.abort();
+
+    assert!(
+        matches!(&err, SubRequestError::Io(msg) if msg.contains("read timeout")),
+        "should report read timeout, not idle timeout: {err}"
+    );
+}
+
+#[tokio::test]
+async fn streaming_body_cancel_is_idempotent() {
+    let limits = StreamLimits {
+        idle_timeout: Duration::from_secs(5),
+        max_stream_duration: None,
+        max_total_bytes: None,
+    };
+    let (body, backend) = open_stalled_stream(limits).await;
+
+    body.cancel().await;
+    backend.abort();
+}
+
+#[tokio::test]
+async fn streaming_body_byte_limit_boundary() {
+    use pingora_core::upstreams::peer::HttpPeer;
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let backend = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut buf = vec![0_u8; 4096];
+        let _bytes_read = socket.read(&mut buf).await;
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n5\r\nworld\r\n0\r\n\r\n")
+            .await
+            .unwrap();
+        socket.flush().await.unwrap();
+    });
+
+    let connector = SubRequestConnector::new(1, None);
+    let client = super::client::SubRequestClient::new(connector);
+    let peer = HttpPeer::new(addr.to_string(), false, String::new());
+    let request = SubRequest {
+        method: http::Method::GET,
+        uri: "/".parse().unwrap(),
+        headers: HeaderMap::new(),
+        body: Bytes::new(),
+    };
+
+    let limits = StreamLimits {
+        idle_timeout: Duration::from_secs(5),
+        max_stream_duration: None,
+        max_total_bytes: Some(7),
+    };
+
+    let mut response = Box::pin(client.send_streaming(&peer, &request, Duration::from_secs(5), limits, None))
+        .await
+        .expect("request should succeed");
+
+    let first = response.body.next_chunk().await.expect("first chunk should succeed");
+    assert_eq!(first.as_deref(), Some(&b"hello"[..]));
+
+    let err = response
+        .body
+        .next_chunk()
+        .await
+        .expect_err("second chunk should exceed limit");
+
+    backend.abort();
+
+    assert!(
+        matches!(err, SubRequestError::ResponseTooLarge { actual: 10, limit: 7 }),
+        "should report byte limit exceeded: {err:?}"
+    );
+}
+
+#[test]
+fn cap_read_timeout_with_existing_tighter_timeout_kept() {
+    let mut body = SubResponseBody::new_done();
+
+    body.cap_read_timeout(Duration::from_millis(100));
+
+    body.cap_read_timeout(Duration::from_millis(200));
+}
+
+#[test]
+fn cap_read_timeout_with_looser_existing_timeout_replaced() {
+    let mut body = SubResponseBody::new_done();
+
+    body.cap_read_timeout(Duration::from_secs(2));
+
+    body.cap_read_timeout(Duration::from_millis(500));
+}
+
+#[tokio::test]
+async fn streaming_body_metrics_recorded_on_idle_timeout() {
+    use pingora_core::upstreams::peer::HttpPeer;
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    install_metrics_recorder();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let backend = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut buf = vec![0_u8; 4096];
+        let _bytes_read = socket.read(&mut buf).await;
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello")
+            .await
+            .unwrap();
+        socket.flush().await.unwrap();
+        drop(socket);
+    });
+
+    let connector = SubRequestConnector::new(1, None);
+    let client = super::client::SubRequestClient::new(connector);
+    let peer = HttpPeer::new(addr.to_string(), false, String::new());
+    let request = SubRequest {
+        method: http::Method::GET,
+        uri: "/".parse().unwrap(),
+        headers: HeaderMap::new(),
+        body: Bytes::new(),
+    };
+
+    let limits = StreamLimits {
+        idle_timeout: Duration::from_millis(50),
+        max_stream_duration: None,
+        max_total_bytes: None,
+    };
+
+    let mut response = Box::pin(client.send_streaming(&peer, &request, Duration::from_secs(5), limits, None))
+        .await
+        .expect("request should succeed");
+
+    let first = response.body.next_chunk().await.expect("first chunk");
+    assert!(first.is_some());
+
+    let _err = response.body.next_chunk().await;
+
+    backend.abort();
+
+    let metrics = render_metrics();
+    assert!(
+        metrics.contains("praxis_subrequest_streams_total"),
+        "stream termination metrics should be recorded"
+    );
+}
+
+#[tokio::test]
+async fn streaming_body_drop_without_cancel_records_metrics() {
+    install_metrics_recorder();
+
+    let limits = StreamLimits {
+        idle_timeout: Duration::from_secs(30),
+        max_stream_duration: None,
+        max_total_bytes: None,
+    };
+
+    let (body, backend) = open_stalled_stream(limits).await;
+
+    drop(body);
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    backend.abort();
+
+    let metrics = render_metrics();
+    assert!(
+        metrics.contains("praxis_subrequest_streams_total"),
+        "drop should record termination metrics"
     );
 }

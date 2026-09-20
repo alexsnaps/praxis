@@ -116,7 +116,7 @@ pub fn start_postgres() -> PostgresGuard {
 }
 
 // -----------------------------------------------------------------------------
-// Internal Helpers
+// Internal Utilities
 // -----------------------------------------------------------------------------
 
 /// Spawn a detached `PostgreSQL` container on the given port.

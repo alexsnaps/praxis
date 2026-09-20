@@ -4,7 +4,7 @@
 //! Benchmark orchestration: runs selected benchmarks across
 //! proxies and assembles the final report.
 
-use benchmarks::{report::BenchmarkReport, result::ScenarioResults, runner::Runner};
+use praxis_proxy_benchmarks::{report::BenchmarkReport, result::ScenarioResults, runner::Runner};
 
 use super::{cli::Args, compare, proxy, report, resolve};
 
@@ -47,7 +47,7 @@ fn resolve_praxis_image(args: &Args) -> String {
 /// Execute all scenarios across all proxies.
 async fn run_all_scenarios(
     proxy_names: &[String],
-    scenarios: &[benchmarks::scenario::Scenario],
+    scenarios: &[praxis_proxy_benchmarks::scenario::Scenario],
     args: &Args,
     praxis_image: &str,
 ) -> Vec<ScenarioResults> {
@@ -74,18 +74,18 @@ async fn run_all_scenarios(
 
 /// Assemble the final [`BenchmarkReport`] from collected results.
 ///
-/// [`BenchmarkReport`]: benchmarks::report::BenchmarkReport
+/// [`BenchmarkReport`]: praxis_proxy_benchmarks::report::BenchmarkReport
 fn build_report(
     results: Vec<ScenarioResults>,
     proxy_names: &[String],
-    scenarios: &[benchmarks::scenario::Scenario],
+    scenarios: &[praxis_proxy_benchmarks::scenario::Scenario],
     threshold: f64,
 ) -> BenchmarkReport {
     let comparisons = compare::compute_comparisons(&results, proxy_names, threshold);
-    let settings = benchmarks::scenario::settings_map(scenarios);
+    let settings = praxis_proxy_benchmarks::scenario::settings_map(scenarios);
     BenchmarkReport {
         timestamp: chrono::Utc::now().to_rfc3339(),
-        commit: benchmarks::net::detect_commit(),
+        commit: praxis_proxy_benchmarks::net::detect_commit(),
         proxies: proxy_names.to_vec(),
         settings,
         results,

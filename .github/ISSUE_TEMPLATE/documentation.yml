@@ -1,0 +1,49 @@
+name: Documentation
+description: Improve documentation, fix typos, or clarify usage
+labels: ["documentation", "triage/needs-triage"]
+body:
+  - type: textarea
+    id: issue
+    attributes:
+      label: Issue
+      description: What documentation needs improvement?
+      placeholder: |
+        Examples:
+        - Missing usage example for X filter
+        - Outdated configuration in getting-started.md
+        - Typo in API docs
+        - Unclear explanation of Y feature
+    validations:
+      required: true
+  - type: textarea
+    id: location
+    attributes:
+      label: Location
+      description: Where is this documentation?
+      placeholder: |
+        File path, URL, or rustdoc location:
+        - docs/filters/http/security/policy.md
+        - https://praxis-proxy.dev/docs/architecture/overview
+        - crates/core/src/config/mod.rs (rustdoc)
+    validations:
+      required: true
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: Suggested Improvement
+      description: How should it be fixed or improved?
+      placeholder: |
+        - Add example showing...
+        - Update section X to clarify...
+        - Fix typo: "recieve" → "receive"
+  - type: dropdown
+    id: doc-type
+    attributes:
+      label: Documentation Type
+      options:
+        - API / Rustdoc
+        - User Guide
+        - Architecture / Design
+        - Examples / Tutorials
+        - README
+        - Other

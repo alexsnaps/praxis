@@ -39,7 +39,7 @@ pub(crate) const MAX_CONNECTIONS: u32 = 1_000_000;
 pub(crate) fn validate_name_chars(name: &str, kind: &str) -> Result<(), ProxyError> {
     if !name
         .bytes()
-        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
     {
         return Err(ProxyError::Config(format!(
             "{kind} name '{name}' must contain only ASCII alphanumeric, '_', or '-'"

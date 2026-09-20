@@ -38,7 +38,7 @@ fn next_random(rng: &AtomicU64) -> u64 {
 }
 
 // -----------------------------------------------------------------------------
-// Shared Helpers
+// Shared Utilities
 // -----------------------------------------------------------------------------
 
 /// Whether `addr` appears in a retry-exclusion list.

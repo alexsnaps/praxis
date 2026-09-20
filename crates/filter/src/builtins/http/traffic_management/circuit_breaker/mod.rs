@@ -55,7 +55,7 @@ struct ActiveCircuitToken {
 /// Per-cluster breaker that publishes `praxis_circuit_breaker_open`.
 ///
 /// Wraps [`CircuitBreaker`] from `praxis_core` so gauge updates stay in
-/// the filter crate (where the Prometheus helpers live) without changing
+/// the filter crate (where the Prometheus utilities live) without changing
 /// the shared state machine.
 struct InstrumentedCircuitBreaker {
     /// Cluster name for the gauge label.

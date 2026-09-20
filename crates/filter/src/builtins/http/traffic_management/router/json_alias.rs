@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2024 Praxis Contributors
 
-//! JSON alias pattern matching and resolution helpers.
+//! JSON alias pattern matching and resolution utilities.
 //!
 //! Groundwork for body-field routing. Nothing in the request path calls
 //! into this module yet, and `json_aliases` is rejected at startup for
-//! that reason — see `reject_unimplemented_json_aliases`. These helpers
+//! that reason — see `reject_unimplemented_json_aliases`. These utilities
 //! operate on the raw [`RouterRouteConfig`] rather than the resolved
 //! route table, so wiring the feature up does not require the routing
 //! table to carry alias state it never reads.

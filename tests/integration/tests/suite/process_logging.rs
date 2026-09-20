@@ -12,7 +12,7 @@ use std::{
 use praxis_test_utils::{free_port, praxis_bin, wait_for_tcp};
 
 // -----------------------------------------------------------------------------
-// Helpers
+// Utilities
 // -----------------------------------------------------------------------------
 
 fn terminate_gracefully(mut child: std::process::Child) {

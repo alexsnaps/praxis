@@ -49,13 +49,13 @@ pub(super) fn validate_listener_timeouts(listener: &Listener) -> Result<(), Prox
         ("tcp_session_timeout_ms", listener.tcp_session_timeout_ms),
         ("downstream_read_timeout_ms", listener.downstream_read_timeout_ms),
     ] {
-        if let Some(v) = value {
-            if v == 0 {
+        if let Some(millis) = value {
+            if millis == 0 {
                 return Err(ProxyError::Config(format!("listener '{name}': {field} must be > 0")));
             }
-            if v > MAX_TIMEOUT_MS {
+            if millis > MAX_TIMEOUT_MS {
                 return Err(ProxyError::Config(format!(
-                    "listener '{name}': {field} ({v} ms) exceeds maximum ({MAX_TIMEOUT_MS} ms / 1 hour)"
+                    "listener '{name}': {field} ({millis} ms) exceeds maximum ({MAX_TIMEOUT_MS} ms / 1 hour)"
                 )));
             }
         }

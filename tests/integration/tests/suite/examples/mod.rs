@@ -38,9 +38,13 @@ mod header_manipulation;
 mod health_checks;
 mod hostname_upstream;
 mod http_active_requests;
+#[cfg(feature = "iterative-request-router")]
 mod iterative_request_router_circuit_breaker;
+#[cfg(feature = "iterative-request-router")]
 mod iterative_request_router_failover;
+#[cfg(feature = "iterative-request-router")]
 mod iterative_request_router_origin_failover;
+#[cfg(feature = "iterative-request-router")]
 mod iterative_request_router_sequence;
 mod json_rpc;
 mod least_connections;
@@ -55,6 +59,7 @@ mod path_based_routing;
 mod path_rewriting;
 mod payload_examples;
 mod payload_processing;
+#[cfg(feature = "spiffe")]
 mod peer_identity_trust;
 mod pipeline;
 #[cfg(feature = "policy-engine")]

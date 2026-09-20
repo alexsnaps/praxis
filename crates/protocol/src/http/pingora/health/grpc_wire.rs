@@ -134,7 +134,7 @@ pub(crate) fn decode_serving_status(frame: &[u8]) -> Option<ServingStatus> {
 }
 
 // -----------------------------------------------------------------------------
-// Helpers
+// Utilities
 // -----------------------------------------------------------------------------
 
 /// Map a protobuf enum value onto a serving status.

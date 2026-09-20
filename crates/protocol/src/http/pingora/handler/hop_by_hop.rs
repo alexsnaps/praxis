@@ -185,7 +185,7 @@ pub(crate) fn strip_connection_tokens<R: RemoveHeader>(
 /// from a standalone [`HeaderMap`].
 ///
 /// Terminal responses are created outside Pingora's normal upstream response
-/// path, so they use this helper before downstream commitment.
+/// path, so they use this utility before downstream commitment.
 pub(crate) fn strip_hop_by_hop_header_map(headers: &mut HeaderMap, static_list: &[&str]) {
     let connection_values = snapshot_connection_values(headers);
     for name in static_list {

@@ -93,8 +93,8 @@ impl TimeSource for FixedTimeSource {
 ///
 /// Returns [`Duration::ZERO`] when the system clock is before 1970.
 pub(crate) fn duration_since_epoch(time: SystemTime) -> Duration {
-    if let Ok(d) = time.duration_since(UNIX_EPOCH) {
-        d
+    if let Ok(dur) = time.duration_since(UNIX_EPOCH) {
+        dur
     } else {
         static WARN_ONCE: Once = Once::new();
         WARN_ONCE.call_once(|| {
@@ -125,9 +125,9 @@ mod tests {
 
     #[test]
     fn fixed_time_source_returns_exact_value() {
-        let d = Duration::from_secs(1_700_000_000);
-        let ts = FixedTimeSource::new(d);
-        assert_eq!(ts.now(), d, "should return the fixed duration");
+        let duration = Duration::from_secs(1_700_000_000);
+        let ts = FixedTimeSource::new(duration);
+        assert_eq!(ts.now(), duration, "should return the fixed duration");
     }
 
     #[test]

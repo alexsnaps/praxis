@@ -2868,6 +2868,7 @@ impl rustls::client::danger::ServerCertVerifier for NoHostnameVerifier {
 // -----------------------------------------------------------------------------
 
 /// Verify that a client cert with a matching org is allowed through.
+#[cfg(feature = "spiffe")]
 #[test]
 fn peer_identity_trust_allows_matching_org() {
     let certs = TestCertificates::generate();
@@ -2928,6 +2929,7 @@ insecure_options:
 }
 
 /// Verify that a cert signed by the same CA but with a non-matching org is rejected.
+#[cfg(feature = "spiffe")]
 #[test]
 fn peer_identity_trust_rejects_wrong_org() {
     let certs = TestCertificates::generate();
@@ -2987,6 +2989,7 @@ insecure_options:
 }
 
 /// Verify that a connection without a client cert (request mode) is rejected by the filter.
+#[cfg(feature = "spiffe")]
 #[test]
 fn peer_identity_trust_rejects_no_peer_identity() {
     let certs = TestCertificates::generate();

@@ -23,16 +23,20 @@ pub use payload_processing::{
 };
 #[cfg(feature = "basic-auth-filter")]
 pub use security::BasicAuthFilter;
+#[cfg(feature = "spiffe")]
+pub use security::PeerIdentityTrustFilter;
 pub use security::{
     ContainsValue, CorsFilter, CredentialInjectionFilter, CsrfFilter, DisallowedOriginMode, ForwardedHeadersFilter,
-    GuardrailsAction, GuardrailsFilter, IpAclFilter, PeerIdentityTrustFilter, PiiKind, RuleTargetKind,
+    GuardrailsAction, GuardrailsFilter, IpAclFilter, PiiKind, RuleTargetKind,
 };
 #[cfg(feature = "policy-engine")]
 pub use security::{PolicyFilter, PolicyPluginFactoryFn, register_policy_plugin_factory};
+#[cfg(feature = "iterative-request-router")]
+pub use traffic_management::IterativeRequestRouterFilter;
 pub use traffic_management::{
     CircuitBreakerFilter, EndpointReselector, EndpointSelectorFilter, GrpcDetectionFilter, GrpcTimeoutFilter,
-    IterativeRequestRouterFilter, LoadBalancerFilter, RateLimitFilter, RateLimitMode, RedirectFilter, RedirectStatus,
-    RouterFilter, StaticResponseFilter, StickySessionsFilter, TimeoutFilter,
+    LoadBalancerFilter, RateLimitFilter, RateLimitMode, RedirectFilter, RedirectStatus, RouterFilter,
+    StaticResponseFilter, StickySessionsFilter, TimeoutFilter,
     sticky_sessions::{SessionStore, SessionStoreRegistry},
 };
 pub use transformation::{

@@ -85,6 +85,13 @@ proxy, starting a Fortio echo backend, warming up,
 executing multiple measurement runs, and selecting the
 median result.
 
+The load-test harness itself is the published
+[`praxis-proxy-benchmarks`](https://crates.io/crates/praxis-proxy-benchmarks)
+crate (developed in the
+[benchmarks repository](https://github.com/praxis-proxy/benchmarks));
+`cargo xtask benchmark` wraps it for local runs against
+the in-tree comparison configs.
+
 ### Workloads
 
 Eight workload types cover different traffic patterns:
@@ -278,7 +285,7 @@ Default images:
 ### Comparison Configs
 
 All proxy configs live in
-`benchmarks/comparison/configs/` and implement the
+`xtask/comparison/configs/` and implement the
 same topology: listen on a dedicated port, route
 `/` to the Fortio echo backend at `127.0.0.1:18080`.
 
@@ -290,13 +297,13 @@ same topology: listen on a dedicated port, route
 | HAProxy | `haproxy.cfg` | 18093 |
 
 The Docker Compose file
-(`benchmarks/comparison/docker-compose.yml`) can also
+(`xtask/comparison/docker-compose.yml`) can also
 be used directly:
 
 ```console
-docker compose -f benchmarks/comparison/docker-compose.yml \
+docker compose -f xtask/comparison/docker-compose.yml \
     up -d backend
-docker compose -f benchmarks/comparison/docker-compose.yml \
+docker compose -f xtask/comparison/docker-compose.yml \
     up -d envoy
 ```
 

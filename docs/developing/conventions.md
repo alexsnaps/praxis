@@ -30,8 +30,9 @@
 - **rustdoc**: Generate the API documentation
 - **cargo xtask**: Developer task runner for benchmarks,
   flamegraphs, and debug utilities
-- **benchmarks**: Scenario-based load tests
-  ([Fortio], [Vegeta])
+- **praxis-proxy-benchmarks**: Scenario-based load tests
+  ([Fortio], [Vegeta]), a published crate driven by
+  `cargo xtask benchmark`
 - **praxis-tests-benches**: Criterion microbenchmarks
   (`tests/benches`)
 
@@ -394,7 +395,7 @@ patterns and data modeling examples.
   2. Public types, impls, and functions
   3. Private types and impls (below their public
      consumers)
-  4. Private utility/helper functions (with separator)
+  4. Private utility/utility functions (with separator)
   5. `#[cfg(test)] mod tests` block (always last)
 - **Field and method ordering**: Alphabetical, with
   `name` pinned first on structs and `new()`/`name()`
@@ -461,8 +462,8 @@ Never: `// --- Section Name ---`
   a separator comment for each test citing the RFC
   number and section.
 - Use "Test Utilities" in separator comments, not
-  "Helpers". Test utility modules should use doc
-  comments that say "test utilities", not "helpers".
+  "Utilities". Test utility modules should use doc
+  comments that say "test utilities", not "utilities".
 - Test utilities must stay inside the `#[cfg(test)]`
   block so they compile only during testing.
 - Name tests after the behavior they prove. Do not use

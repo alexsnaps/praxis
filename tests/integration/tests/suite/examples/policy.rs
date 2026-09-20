@@ -59,7 +59,7 @@ fn mint_fixture_jwt(subject: &str) -> String {
 }
 
 // -----------------------------------------------------------------------------
-// Helpers
+// Utilities
 // -----------------------------------------------------------------------------
 
 /// Load the policy praxis example, patch the relative `config_path`

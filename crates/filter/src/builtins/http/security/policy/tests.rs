@@ -157,7 +157,7 @@ global:
 /// attributes (the enrichment). `entity_routes = true`.
 #[expect(
     clippy::too_many_lines,
-    reason = "test fixture — the YAML literal is the bulk; splitting helpers would obscure the shape under test"
+    reason = "test fixture — the YAML literal is the bulk; splitting utilities would obscure the shape under test"
 )]
 fn write_http_entity_config() -> (TempDir, String) {
     let dir = TempDir::new().expect("create tempdir");
@@ -207,7 +207,7 @@ routes:
 /// classifier.
 #[expect(
     clippy::too_many_lines,
-    reason = "test fixture — the YAML literal is the bulk; splitting helpers would obscure the shape under test"
+    reason = "test fixture — the YAML literal is the bulk; splitting utilities would obscure the shape under test"
 )]
 fn write_l7_global_config() -> (TempDir, String) {
     let dir = TempDir::new().expect("create tempdir");
@@ -251,7 +251,7 @@ global:
 /// `(http_global = true, entity_routes = true)`.
 #[expect(
     clippy::too_many_lines,
-    reason = "test fixture — the YAML literal is the bulk; splitting helpers would obscure the shape under test"
+    reason = "test fixture — the YAML literal is the bulk; splitting utilities would obscure the shape under test"
 )]
 fn write_combined_global_and_routes_config() -> (TempDir, String) {
     let dir = TempDir::new().expect("create tempdir");
@@ -303,7 +303,7 @@ routes:
 /// end-to-end through the filter's CMF dispatch.
 #[expect(
     clippy::too_many_lines,
-    reason = "test fixture — the YAML literal is the bulk; splitting helpers would obscure the shape under test"
+    reason = "test fixture — the YAML literal is the bulk; splitting utilities would obscure the shape under test"
 )]
 fn write_cel_policy_config() -> (TempDir, String) {
     let dir = TempDir::new().expect("create tempdir");
@@ -385,7 +385,7 @@ async fn dispatch_echo_method(filter: &PolicyFilter, subject: &str, method: Meth
 /// store keyed by the resolved session id.
 #[expect(
     clippy::too_many_lines,
-    reason = "test fixture — the YAML literal is the bulk; splitting helpers would obscure the shape under test"
+    reason = "test fixture — the YAML literal is the bulk; splitting utilities would obscure the shape under test"
 )]
 fn write_taint_config() -> (TempDir, String) {
     let dir = TempDir::new().expect("create tempdir");
@@ -465,7 +465,7 @@ async fn dispatch_tool_session(filter: &PolicyFilter, subject: &str, tool: &str,
 /// both validated, both contributing to a typed `Extensions` context.
 #[expect(
     clippy::too_many_lines,
-    reason = "test fixture — the YAML literal is the bulk; splitting helpers would obscure the shape under test"
+    reason = "test fixture — the YAML literal is the bulk; splitting utilities would obscure the shape under test"
 )]
 fn write_multi_source_config() -> (TempDir, String) {
     let dir = TempDir::new().expect("create tempdir");
@@ -532,7 +532,7 @@ global:
 /// route-scoping must select on.
 #[expect(
     clippy::too_many_lines,
-    reason = "test fixture — the YAML literal is the bulk; splitting helpers would obscure the shape under test"
+    reason = "test fixture — the YAML literal is the bulk; splitting utilities would obscure the shape under test"
 )]
 fn write_route_scoped_identity_config() -> (TempDir, String) {
     let dir = TempDir::new().expect("create tempdir");
@@ -761,7 +761,7 @@ async fn route_scoped_identity_is_published_only_after_authoritative_resolution(
 /// and the flat `session_store` block parses and resolves.
 #[expect(
     clippy::too_many_lines,
-    reason = "test fixture — the YAML literal is the bulk; splitting helpers would obscure the shape under test"
+    reason = "test fixture — the YAML literal is the bulk; splitting utilities would obscure the shape under test"
 )]
 fn write_valkey_session_store_config() -> (TempDir, String) {
     let dir = TempDir::new().expect("create tempdir");
@@ -3599,7 +3599,7 @@ async fn the_response_half_is_gated_on_the_policy_declaring_one() {
 /// Write a policy with named and catch-all inference routes.
 #[expect(
     clippy::too_many_lines,
-    reason = "test fixture — the YAML literal is the bulk; splitting helpers would obscure the shape under test"
+    reason = "test fixture — the YAML literal is the bulk; splitting utilities would obscure the shape under test"
 )]
 fn write_llm_route_config() -> (TempDir, String) {
     let dir = TempDir::new().expect("create tempdir");
@@ -3643,7 +3643,7 @@ routes:
 /// Write a policy with inference and MCP tool routes.
 #[expect(
     clippy::too_many_lines,
-    reason = "test fixture — the YAML literal is the bulk; splitting helpers would obscure the shape under test"
+    reason = "test fixture — the YAML literal is the bulk; splitting utilities would obscure the shape under test"
 )]
 fn write_llm_and_tool_config() -> (TempDir, String) {
     let dir = TempDir::new().expect("create tempdir");
@@ -3688,11 +3688,10 @@ routes:
     (dir, cfg_path.to_str().expect("utf8 path").to_owned())
 }
 
-
 /// Write a policy with only an inference response hook.
 #[expect(
     clippy::too_many_lines,
-    reason = "test fixture — the YAML literal is the bulk; splitting helpers would obscure the shape under test"
+    reason = "test fixture — the YAML literal is the bulk; splitting utilities would obscure the shape under test"
 )]
 fn write_llm_post_only_config() -> (TempDir, String) {
     let dir = TempDir::new().expect("create tempdir");
@@ -3732,7 +3731,7 @@ routes:
 /// Write an inference policy with request and response field mutators.
 #[expect(
     clippy::too_many_lines,
-    reason = "test fixture — the YAML literal is the bulk; splitting helpers would obscure the shape under test"
+    reason = "test fixture — the YAML literal is the bulk; splitting utilities would obscure the shape under test"
 )]
 fn write_llm_mutator_config() -> (TempDir, String) {
     let dir = TempDir::new().expect("create tempdir");
@@ -3776,7 +3775,7 @@ routes:
 /// Write a policy that denies a configured inference provider.
 #[expect(
     clippy::too_many_lines,
-    reason = "test fixture — the YAML literal is the bulk; splitting helpers would obscure the shape under test"
+    reason = "test fixture — the YAML literal is the bulk; splitting utilities would obscure the shape under test"
 )]
 fn write_llm_provider_config() -> (TempDir, String) {
     let dir = TempDir::new().expect("create tempdir");
@@ -3816,7 +3815,7 @@ routes:
 /// Write a policy with one named inference route and no catch-all.
 #[expect(
     clippy::too_many_lines,
-    reason = "test fixture — the YAML literal is the bulk; splitting helpers would obscure the shape under test"
+    reason = "test fixture — the YAML literal is the bulk; splitting utilities would obscure the shape under test"
 )]
 fn write_llm_and_tool_config_without_catch_all() -> (TempDir, String) {
     let dir = TempDir::new().expect("create tempdir");
@@ -3856,7 +3855,7 @@ routes:
 /// Write a policy that denies large inference responses.
 #[expect(
     clippy::too_many_lines,
-    reason = "test fixture — the YAML literal is the bulk; splitting helpers would obscure the shape under test"
+    reason = "test fixture — the YAML literal is the bulk; splitting utilities would obscure the shape under test"
 )]
 fn write_llm_post_config() -> (TempDir, String) {
     let dir = TempDir::new().expect("create tempdir");
@@ -4507,7 +4506,6 @@ async fn a_field_mutator_leaves_an_inference_response_untouched() {
         "the client must receive the upstream body, not a partial redaction",
     );
 }
-
 
 #[test]
 fn a_post_only_inference_policy_is_active() {

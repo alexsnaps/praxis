@@ -67,6 +67,7 @@ pub struct Upstream {
     clippy::indexing_slicing,
     clippy::needless_raw_strings,
     clippy::needless_raw_string_hashes,
+    clippy::min_ident_chars,
     reason = "tests use unwrap/expect/indexing/raw strings for brevity"
 )]
 mod tests {

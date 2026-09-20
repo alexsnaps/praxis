@@ -622,7 +622,7 @@ step; the pending chunks are bounded together with the retained
 `IterationState`, so exceeding that limit returns an error and
 enqueues nothing.
 
-`SubRequestResponseMode` and the streaming helpers are exported
+`SubRequestResponseMode` and the streaming utilities are exported
 from `praxis_filter` for external filter crates.
 
 See the

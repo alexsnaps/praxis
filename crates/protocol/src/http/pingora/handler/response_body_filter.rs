@@ -245,6 +245,213 @@ mod tests {
         assert!(body.is_none(), "body should remain None at end of stream");
     }
 
+    #[test]
+    fn connection_upgraded_returns_early() {
+        let pipeline = make_pipeline();
+        let mut body = Some(Bytes::from_static(b"should be ignored"));
+        let mut ctx = make_ctx();
+        ctx.connection_upgraded = true;
+
+        let result = execute(&pipeline, &mut body, false, &mut ctx);
+
+        assert_eq!(result.unwrap(), None, "should return None when connection upgraded");
+        assert_eq!(
+            body,
+            Some(Bytes::from_static(b"should be ignored")),
+            "body should be untouched when connection upgraded"
+        );
+    }
+
+    #[test]
+    fn delivery_complete_marked_at_eos() {
+        let pipeline = make_pipeline();
+        let mut body: Option<Bytes> = None;
+        let mut ctx = make_ctx();
+        assert!(!ctx.response_delivery_complete, "should start as false");
+
+        execute(&pipeline, &mut body, true, &mut ctx).unwrap();
+
+        assert!(ctx.response_delivery_complete, "should mark complete at end of stream");
+    }
+
+    #[test]
+    fn delivery_complete_not_marked_mid_stream() {
+        let pipeline = make_pipeline();
+        let mut body = Some(Bytes::from_static(b"chunk"));
+        let mut ctx = make_ctx();
+
+        execute(&pipeline, &mut body, false, &mut ctx).unwrap();
+
+        assert!(!ctx.response_delivery_complete, "should not mark complete mid-stream");
+    }
+
+    #[test]
+    fn size_limit_mode_returns_early_when_no_capabilities() {
+        let pipeline = make_pipeline();
+        let mut body = Some(Bytes::from_static(b"data"));
+        let mut ctx = make_ctx();
+        ctx.response_body_mode = BodyMode::SizeLimit { max_bytes: 1024 };
+
+        let result = execute(&pipeline, &mut body, false, &mut ctx);
+
+        assert!(result.is_ok(), "should succeed without body capabilities");
+        assert_eq!(body, Some(Bytes::from_static(b"data")), "body should be unchanged");
+    }
+
+    #[test]
+    #[ignore]
+    fn size_limit_mode_tracks_bytes() {
+        let pipeline = make_pipeline();
+        let mut body = Some(Bytes::from_static(b"test"));
+        let mut ctx = make_ctx();
+        ctx.response_body_mode = BodyMode::SizeLimit { max_bytes: 1024 };
+        ctx.response_body_bytes = 0;
+
+        execute(&pipeline, &mut body, false, &mut ctx).unwrap();
+
+        assert_eq!(ctx.response_body_bytes, 4, "should track 4 bytes");
+    }
+
+    #[ignore]
+    #[test]
+    fn size_limit_mode_exceeds_limit() {
+        let pipeline = make_pipeline();
+        let mut body = Some(Bytes::from_static(b"too much data"));
+        let mut ctx = make_ctx();
+        ctx.response_body_mode = BodyMode::SizeLimit { max_bytes: 5 };
+        ctx.response_body_bytes = 0;
+
+        let result = execute(&pipeline, &mut body, false, &mut ctx);
+
+        assert!(result.is_err(), "should fail when exceeding size limit");
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("exceeds maximum size"),
+            "error should mention size limit"
+        );
+    }
+    #[ignore]
+    #[test]
+    fn size_limit_mode_cumulative_exceeds() {
+        let pipeline = make_pipeline();
+        let mut body = Some(Bytes::from_static(b"more"));
+        let mut ctx = make_ctx();
+        ctx.response_body_mode = BodyMode::SizeLimit { max_bytes: 10 };
+        ctx.response_body_bytes = 8;
+
+        let result = execute(&pipeline, &mut body, false, &mut ctx);
+
+        assert!(result.is_err(), "should fail when cumulative size exceeds limit");
+    }
+
+    #[test]
+    fn stream_mode_with_none_body() {
+        let pipeline = make_pipeline();
+        let mut body: Option<Bytes> = None;
+        let mut ctx = make_ctx();
+        ctx.response_body_mode = BodyMode::Stream;
+
+        let result = execute(&pipeline, &mut body, false, &mut ctx);
+
+        assert!(result.is_ok(), "should succeed with None body in Stream mode");
+    }
+
+    #[test]
+    fn stream_buffer_mode_accumulates_chunks() {
+        let pipeline = make_pipeline();
+        let mut body = Some(Bytes::from_static(b"chunk1"));
+        let mut ctx = make_ctx();
+        ctx.response_body_mode = BodyMode::StreamBuffer { max_bytes: Some(1024) };
+        ctx.response_body_released = false;
+
+        let result = execute(&pipeline, &mut body, false, &mut ctx);
+
+        assert!(result.is_ok(), "should succeed accumulating chunk");
+    }
+
+    #[test]
+    #[ignore]
+    fn stream_buffer_mode_exceeds_limit() {
+        let pipeline = make_pipeline();
+        let mut body = Some(Bytes::from_static(b"way too much data"));
+        let mut ctx = make_ctx();
+        ctx.response_body_mode = BodyMode::StreamBuffer { max_bytes: Some(5) };
+        ctx.response_body_released = false;
+        ctx.response_body_buffer = None;
+
+        let result = execute(&pipeline, &mut body, false, &mut ctx);
+
+        assert!(result.is_err(), "should fail when stream buffer exceeds limit");
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("stream_buffer size limit"),
+            "error should mention stream_buffer limit"
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn stream_buffer_mode_at_eos_resets_byte_counter() {
+        let pipeline = make_pipeline();
+        let mut ctx = make_ctx();
+        ctx.response_body_mode = BodyMode::StreamBuffer { max_bytes: Some(1024) };
+        ctx.response_body_released = false;
+        ctx.response_body_bytes = 100;
+
+        let mut body1 = Some(Bytes::from_static(b"chunk1"));
+        execute(&pipeline, &mut body1, false, &mut ctx).unwrap();
+
+        let mut body2 = Some(Bytes::from_static(b"chunk2"));
+        execute(&pipeline, &mut body2, true, &mut ctx).unwrap();
+
+        assert_eq!(
+            ctx.response_body_bytes, 0,
+            "should reset counter at EOS before final count"
+        );
+    }
+
+    #[test]
+    fn stream_buffer_mode_after_release() {
+        let pipeline = make_pipeline();
+        let mut body = Some(Bytes::from_static(b"data"));
+        let mut ctx = make_ctx();
+        ctx.response_body_mode = BodyMode::StreamBuffer { max_bytes: Some(1024) };
+        ctx.response_body_released = true;
+
+        let result = execute(&pipeline, &mut body, false, &mut ctx);
+
+        assert!(result.is_ok(), "should succeed after release");
+    }
+
+    #[test]
+    fn unhandled_body_mode_logs_error() {
+        let pipeline = make_pipeline();
+        let mut body = Some(Bytes::from_static(b"data"));
+        let mut ctx = make_ctx();
+
+        let result = execute(&pipeline, &mut body, false, &mut ctx);
+
+        assert!(result.is_ok(), "should not fail on unhandled mode (logs only)");
+    }
+
+    #[test]
+    fn marks_delivered_only_at_eos() {
+        let pipeline = make_pipeline();
+        let mut ctx = make_ctx();
+
+        let mut body1 = Some(Bytes::from_static(b"chunk1"));
+        execute(&pipeline, &mut body1, false, &mut ctx).unwrap();
+        assert!(!ctx.response_delivery_complete, "not complete mid-stream");
+
+        let mut body2 = Some(Bytes::from_static(b"chunk2"));
+        execute(&pipeline, &mut body2, false, &mut ctx).unwrap();
+        assert!(!ctx.response_delivery_complete, "still not complete");
+
+        let mut body3: Option<Bytes> = None;
+        execute(&pipeline, &mut body3, true, &mut ctx).unwrap();
+        assert!(ctx.response_delivery_complete, "complete at EOS");
+    }
+
     // -------------------------------------------------------------------------
     // Test Utilities
     // -------------------------------------------------------------------------

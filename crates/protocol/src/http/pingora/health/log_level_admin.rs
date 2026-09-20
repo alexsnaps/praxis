@@ -179,7 +179,7 @@ fn from_hex(byte: u8) -> Option<u8> {
 }
 
 // -----------------------------------------------------------------------------
-// Response helpers
+// Response utilities
 // -----------------------------------------------------------------------------
 
 /// Build a JSON `400` response.
@@ -283,5 +283,249 @@ mod tests {
             resp.headers().get("Allow").map(http::HeaderValue::as_bytes),
             Some(b"DELETE, GET, HEAD, PUT".as_slice())
         );
+    }
+
+    // Additional tests for comprehensive coverage
+
+    #[test]
+    fn from_hex_digits() {
+        assert_eq!(from_hex(b'0'), Some(0));
+        assert_eq!(from_hex(b'5'), Some(5));
+        assert_eq!(from_hex(b'9'), Some(9));
+    }
+
+    #[test]
+    fn from_hex_lowercase() {
+        assert_eq!(from_hex(b'a'), Some(10));
+        assert_eq!(from_hex(b'c'), Some(12));
+        assert_eq!(from_hex(b'f'), Some(15));
+    }
+
+    #[test]
+    fn from_hex_uppercase() {
+        assert_eq!(from_hex(b'A'), Some(10));
+        assert_eq!(from_hex(b'C'), Some(12));
+        assert_eq!(from_hex(b'F'), Some(15));
+    }
+
+    #[test]
+    fn from_hex_invalid() {
+        assert_eq!(from_hex(b'G'), None);
+        assert_eq!(from_hex(b'g'), None);
+        assert_eq!(from_hex(b'z'), None);
+        assert_eq!(from_hex(b'@'), None);
+        assert_eq!(from_hex(b' '), None);
+        assert_eq!(from_hex(b'/'), None);
+        assert_eq!(from_hex(b':'), None);
+    }
+
+    #[test]
+    fn percent_decode_basic_handles_malformed() {
+        // Incomplete percent sequence at end
+        assert_eq!(percent_decode_basic("test%2"), "test%2");
+        assert_eq!(percent_decode_basic("test%"), "test%");
+
+        // Invalid hex digits
+        assert_eq!(percent_decode_basic("test%ZZ"), "test%ZZ");
+        assert_eq!(percent_decode_basic("test%GG"), "test%GG");
+
+        // Mixed valid and invalid
+        assert_eq!(percent_decode_basic("test%20%ZZ"), "test %ZZ");
+    }
+
+    #[test]
+    fn percent_decode_basic_valid() {
+        // Space encoding
+        assert_eq!(percent_decode_basic("test%20value"), "test value");
+        assert_eq!(percent_decode_basic("hello+world"), "hello world");
+
+        // Special characters
+        assert_eq!(percent_decode_basic("test%2Fpath"), "test/path");
+        assert_eq!(percent_decode_basic("test%3Avalue"), "test:value");
+        assert_eq!(percent_decode_basic("test%40email"), "test@email");
+
+        // No encoding
+        assert_eq!(percent_decode_basic("simple"), "simple");
+
+        // Multiple encodings
+        assert_eq!(percent_decode_basic("a%20b%20c"), "a b c");
+    }
+
+    #[test]
+    fn percent_decode_basic_edge_cases() {
+        // Empty string
+        assert_eq!(percent_decode_basic(""), "");
+
+        // Only percent signs
+        assert_eq!(percent_decode_basic("%"), "%");
+        assert_eq!(percent_decode_basic("%%"), "%%");
+
+        // Percent at various positions
+        assert_eq!(percent_decode_basic("%20start"), " start");
+        assert_eq!(percent_decode_basic("end%20"), "end ");
+        assert_eq!(percent_decode_basic("mid%20dle"), "mid dle");
+
+        // Plus signs
+        assert_eq!(percent_decode_basic("a+b+c"), "a b c");
+        assert_eq!(percent_decode_basic("+++"), "   ");
+    }
+
+    #[test]
+    fn parse_delete_query_none() {
+        let (module, all) = parse_delete_query(None).expect("parse");
+        assert_eq!(module, None);
+        assert!(!all);
+    }
+
+    #[test]
+    fn parse_delete_query_empty() {
+        let (module, all) = parse_delete_query(Some("")).expect("parse");
+        assert_eq!(module, None);
+        assert!(!all);
+    }
+
+    #[test]
+    fn parse_delete_query_all_false() {
+        let (module, all) = parse_delete_query(Some("all=false")).expect("parse");
+        assert_eq!(module, None);
+        assert!(!all);
+    }
+
+    #[test]
+    fn parse_delete_query_all_empty_value() {
+        let (module, all) = parse_delete_query(Some("all=")).expect("parse");
+        assert_eq!(module, None);
+        assert!(!all);
+    }
+
+    #[test]
+    fn parse_delete_query_invalid_all_value() {
+        let err = parse_delete_query(Some("all=maybe")).unwrap_err();
+        assert!(err.contains("must be true or false"));
+
+        let err = parse_delete_query(Some("all=1")).unwrap_err();
+        assert!(err.contains("must be true or false"));
+
+        let err = parse_delete_query(Some("all=yes")).unwrap_err();
+        assert!(err.contains("must be true or false"));
+    }
+
+    #[test]
+    fn parse_delete_query_combined() {
+        let (module, all) = parse_delete_query(Some("module=foo&all=true")).expect("parse");
+        assert_eq!(module, Some("foo".to_owned()));
+        assert!(all);
+
+        let (module, all) = parse_delete_query(Some("all=true&module=bar")).expect("parse");
+        assert_eq!(module, Some("bar".to_owned()));
+        assert!(all);
+    }
+
+    #[test]
+    fn parse_delete_query_unknown_params_ignored() {
+        let (module, all) = parse_delete_query(Some("unknown=value&module=test")).expect("parse");
+        assert_eq!(module, Some("test".to_owned()));
+        assert!(!all);
+
+        let (module, all) = parse_delete_query(Some("module=test&foo=bar&baz=qux")).expect("parse");
+        assert_eq!(module, Some("test".to_owned()));
+        assert!(!all);
+    }
+
+    #[test]
+    fn parse_delete_query_percent_encoded_module() {
+        let (module, all) = parse_delete_query(Some("module=foo%2Fbar")).expect("parse");
+        assert_eq!(module, Some("foo/bar".to_owned()));
+        assert!(!all);
+
+        let (module, all) = parse_delete_query(Some("module=test%3A%3Amodule")).expect("parse");
+        assert_eq!(module, Some("test::module".to_owned()));
+        assert!(!all);
+    }
+
+    #[test]
+    fn parse_delete_query_multiple_ampersands() {
+        let (module, all) = parse_delete_query(Some("module=test&&all=true")).expect("parse");
+        assert_eq!(module, Some("test".to_owned()));
+        assert!(all);
+
+        // Leading/trailing ampersands
+        let (module, all) = parse_delete_query(Some("&module=test&")).expect("parse");
+        assert_eq!(module, Some("test".to_owned()));
+        assert!(!all);
+    }
+
+    #[test]
+    fn parse_delete_query_duplicate_params() {
+        // Last module wins
+        let (module, _) = parse_delete_query(Some("module=first&module=second")).expect("parse");
+        assert_eq!(module, Some("second".to_owned()));
+
+        // all=true sets all, any subsequent all=false is ignored (implementation only flips to true)
+        let (_, all) = parse_delete_query(Some("all=false&all=true")).expect("parse");
+        assert!(all);
+
+        let (_, all) = parse_delete_query(Some("all=true&all=false")).expect("parse");
+        assert!(all); // all stays true, all=false is ignored per implementation
+    }
+
+    #[test]
+    fn bad_request_response() {
+        let resp = bad_request("test error");
+        assert_eq!(resp.status().as_u16(), 400);
+        assert_eq!(
+            resp.headers().get("Content-Type").map(http::HeaderValue::as_bytes),
+            Some(b"application/json".as_slice())
+        );
+        let body_str = String::from_utf8_lossy(resp.body());
+        assert!(body_str.contains("test error"));
+    }
+
+    #[test]
+    fn payload_too_large_response() {
+        let resp = payload_too_large();
+        assert_eq!(resp.status().as_u16(), 413);
+        assert_eq!(
+            resp.headers().get("Content-Type").map(http::HeaderValue::as_bytes),
+            Some(b"application/json".as_slice())
+        );
+        let body_str = String::from_utf8_lossy(resp.body());
+        assert!(body_str.contains("request body too large"));
+    }
+
+    #[test]
+    fn internal_error_response() {
+        let resp = internal_error();
+        assert_eq!(resp.status().as_u16(), 500);
+        assert_eq!(
+            resp.headers().get("Content-Type").map(http::HeaderValue::as_bytes),
+            Some(b"application/json".as_slice())
+        );
+        let body_str = String::from_utf8_lossy(resp.body());
+        assert!(body_str.contains("internal server error"));
+    }
+
+    #[test]
+    fn as_head_response_strips_body() {
+        let original = json_response(200, b"test body");
+        assert!(!original.body().is_empty());
+        assert!(original.headers().contains_key(http::header::CONTENT_LENGTH));
+
+        let head_resp = as_head_response(original);
+        assert!(head_resp.body().is_empty());
+        assert!(!head_resp.headers().contains_key(http::header::CONTENT_LENGTH));
+        assert_eq!(head_resp.status().as_u16(), 200);
+    }
+
+    #[test]
+    fn method_not_allowed_response_content() {
+        let resp = method_not_allowed();
+        assert_eq!(resp.status().as_u16(), 405);
+        assert_eq!(
+            resp.headers().get("Content-Type").map(http::HeaderValue::as_bytes),
+            Some(b"application/json".as_slice())
+        );
+        let body_str = String::from_utf8_lossy(resp.body());
+        assert!(body_str.contains("method not allowed"));
     }
 }

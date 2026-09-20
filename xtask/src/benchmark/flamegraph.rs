@@ -23,7 +23,7 @@ const BACKEND_PORT: u16 = 18080;
 const PRAXIS_ADDR: &str = "127.0.0.1:18090";
 
 /// Embedded Praxis config for profiling runs.
-const LOCAL_CONFIG: &str = include_str!("../../../benchmarks/comparison/configs/praxis.yaml");
+const LOCAL_CONFIG: &str = include_str!("../../comparison/configs/praxis.yaml");
 
 // -----------------------------------------------------------------------------
 // CLI Arguments

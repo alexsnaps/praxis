@@ -182,7 +182,8 @@ impl LogLevelState {
 
         let target = overlay_target_key(request.module.as_deref());
         let level = normalize_level(&request.level);
-        let expires_at = Utc::now() + chrono::Duration::seconds(i64::try_from(duration_secs).unwrap_or(i64::MAX));
+        let ttl = chrono::Duration::seconds(i64::try_from(duration_secs).unwrap_or(i64::MAX));
+        let expires_at = Utc::now().checked_add_signed(ttl).unwrap_or(DateTime::<Utc>::MAX_UTC);
 
         let mut guard = self.inner.lock().expect("log level state lock poisoned");
         let previous = guard.overlays.remove(&target);
@@ -411,7 +412,7 @@ fn snapshot_locked(guard: &LogLevelInner) -> LogLevelStateResponse {
             expires_at: entry.expires_at.to_rfc3339(),
         })
         .collect();
-    overlays.sort_by(|a, b| a.module.cmp(&b.module));
+    overlays.sort_by(|left, right| left.module.cmp(&right.module));
 
     let effective_directive = build_effective_directive(&guard.baseline_directive, &guard.overlays);
     LogLevelStateResponse {
@@ -453,7 +454,15 @@ fn spawn_revert_task(state: Arc<LogLevelState>, target: String, duration_secs: u
 
 #[cfg(test)]
 #[expect(clippy::allow_attributes, reason = "blanket test suppressions")]
-#[allow(clippy::unwrap_used, clippy::expect_used, reason = "tests")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::too_many_lines,
+    clippy::indexing_slicing,
+    clippy::min_ident_chars,
+    clippy::shadow_unrelated,
+    reason = "tests"
+)]
 mod tests {
     use std::sync::OnceLock;
 
@@ -644,5 +653,493 @@ mod tests {
             "overlay should revert after duration: {snap:?}"
         );
         assert_eq!(snap.effective_directive, "info");
+    }
+
+    #[test]
+    fn log_level_error_display() {
+        let bad_request = LogLevelError::BadRequest("invalid input".to_owned());
+        assert_eq!(bad_request.to_string(), "invalid input");
+
+        let internal = LogLevelError::Internal("reload failed".to_owned());
+        assert_eq!(internal.to_string(), "reload failed");
+    }
+
+    #[test]
+    fn log_level_error_equality() {
+        let err1 = LogLevelError::BadRequest("test".to_owned());
+        let err2 = LogLevelError::BadRequest("test".to_owned());
+        let err3 = LogLevelError::BadRequest("other".to_owned());
+        let err4 = LogLevelError::Internal("test".to_owned());
+
+        assert_eq!(err1, err2);
+        assert_ne!(err1, err3);
+        assert_ne!(err1, err4);
+    }
+
+    #[test]
+    fn log_level_error_clone() {
+        let original = LogLevelError::BadRequest("test".to_owned());
+        let cloned = original.clone();
+        assert_eq!(original, cloned);
+    }
+
+    #[test]
+    fn validate_put_rejects_invalid_log_level() {
+        let err = validate_put_request(None, "verbose", 300).unwrap_err();
+        assert!(err.to_string().contains("invalid level"));
+        assert!(err.to_string().contains("verbose"));
+
+        let err = validate_put_request(None, "warning", 300).unwrap_err();
+        assert!(err.to_string().contains("invalid level"));
+
+        let err = validate_put_request(None, "", 300).unwrap_err();
+        assert!(err.to_string().contains("invalid level"));
+
+        let err = validate_put_request(None, "invalid", 300).unwrap_err();
+        assert!(err.to_string().contains("invalid level"));
+    }
+
+    #[test]
+    fn validate_put_accepts_all_valid_levels() {
+        validate_put_request(None, "error", 60).expect("error should be valid");
+        validate_put_request(None, "warn", 60).expect("warn should be valid");
+        validate_put_request(None, "info", 60).expect("info should be valid");
+        validate_put_request(None, "debug", 60).expect("debug should be valid");
+        validate_put_request(None, "trace", 60).expect("trace should be valid");
+        validate_put_request(None, "off", 60).expect("off should be valid");
+    }
+
+    #[test]
+    fn validate_put_accepts_case_insensitive_levels() {
+        validate_put_request(None, "ERROR", 60).expect("ERROR should be valid");
+        validate_put_request(None, "Debug", 60).expect("Debug should be valid");
+        validate_put_request(None, "TRACE", 60).expect("TRACE should be valid");
+        validate_put_request(None, "OfF", 60).expect("OfF should be valid");
+    }
+
+    #[test]
+    fn validate_put_rejects_invalid_module_paths() {
+        // Empty is checked separately
+        let err = validate_put_request(Some("invalid path"), "info", 60).unwrap_err();
+        assert!(err.to_string().contains("invalid module path"));
+
+        let err = validate_put_request(Some("123invalid"), "info", 60).unwrap_err();
+        assert!(err.to_string().contains("invalid module path"));
+
+        let err = validate_put_request(Some("::praxis"), "info", 60).unwrap_err();
+        assert!(err.to_string().contains("invalid module path"));
+
+        let err = validate_put_request(Some("praxis::"), "info", 60).unwrap_err();
+        assert!(err.to_string().contains("invalid module path"));
+
+        let err = validate_put_request(Some("praxis:::filter"), "info", 60).unwrap_err();
+        assert!(err.to_string().contains("invalid module path"));
+    }
+
+    #[test]
+    fn validate_put_accepts_valid_module_paths() {
+        validate_put_request(Some("praxis"), "info", 60).expect("simple module");
+        validate_put_request(Some("praxis_core"), "info", 60).expect("underscore module");
+        validate_put_request(Some("praxis::filter"), "info", 60).expect("nested module");
+        validate_put_request(Some("praxis_core::logging"), "info", 60).expect("mixed module");
+        validate_put_request(Some("_internal"), "info", 60).expect("leading underscore");
+    }
+
+    #[test]
+    fn normalize_level_lowercases() {
+        assert_eq!(normalize_level("ERROR"), "error");
+        assert_eq!(normalize_level("Warn"), "warn");
+        assert_eq!(normalize_level("INFO"), "info");
+        assert_eq!(normalize_level("DeBuG"), "debug");
+        assert_eq!(normalize_level("trace"), "trace");
+        assert_eq!(normalize_level("OFF"), "off");
+    }
+
+    #[test]
+    fn overlay_target_key_mapping() {
+        assert_eq!(overlay_target_key(None), GLOBAL_OVERLAY_KEY);
+        assert_eq!(overlay_target_key(Some("praxis")), "praxis");
+        assert_eq!(overlay_target_key(Some("praxis::filter")), "praxis::filter");
+        assert_eq!(overlay_target_key(Some("")), "");
+    }
+
+    #[test]
+    fn build_effective_directive_empty_overlays() {
+        let overlays = HashMap::new();
+        let directive = build_effective_directive("info", &overlays);
+        assert_eq!(directive, "info");
+    }
+
+    #[tokio::test]
+    async fn build_effective_directive_single_global() {
+        let mut overlays = HashMap::new();
+        overlays.insert(
+            GLOBAL_OVERLAY_KEY.to_owned(),
+            OverlayEntry {
+                level: "debug".to_owned(),
+                expires_at: Utc::now() + chrono::Duration::seconds(300),
+                revert_abort: tokio::spawn(async {}).abort_handle(),
+                generation: 0,
+            },
+        );
+        let directive = build_effective_directive("info", &overlays);
+        assert_eq!(directive, "info,debug");
+    }
+
+    #[tokio::test]
+    async fn build_effective_directive_multiple_modules() {
+        let mut overlays = HashMap::new();
+        overlays.insert(
+            "praxis_filter".to_owned(),
+            OverlayEntry {
+                level: "trace".to_owned(),
+                expires_at: Utc::now() + chrono::Duration::seconds(300),
+                revert_abort: tokio::spawn(async {}).abort_handle(),
+                generation: 0,
+            },
+        );
+        overlays.insert(
+            "praxis_core".to_owned(),
+            OverlayEntry {
+                level: "debug".to_owned(),
+                expires_at: Utc::now() + chrono::Duration::seconds(300),
+                revert_abort: tokio::spawn(async {}).abort_handle(),
+                generation: 1,
+            },
+        );
+        let directive = build_effective_directive("info", &overlays);
+        // Keys are sorted
+        assert!(
+            directive == "info,praxis_core=debug,praxis_filter=trace"
+                || directive == "info,praxis_filter=trace,praxis_core=debug",
+            "got: {directive}"
+        );
+    }
+
+    #[tokio::test]
+    async fn build_effective_directive_global_and_module() {
+        let mut overlays = HashMap::new();
+        overlays.insert(
+            GLOBAL_OVERLAY_KEY.to_owned(),
+            OverlayEntry {
+                level: "warn".to_owned(),
+                expires_at: Utc::now() + chrono::Duration::seconds(300),
+                revert_abort: tokio::spawn(async {}).abort_handle(),
+                generation: 0,
+            },
+        );
+        overlays.insert(
+            "praxis".to_owned(),
+            OverlayEntry {
+                level: "trace".to_owned(),
+                expires_at: Utc::now() + chrono::Duration::seconds(300),
+                revert_abort: tokio::spawn(async {}).abort_handle(),
+                generation: 1,
+            },
+        );
+        let directive = build_effective_directive("info", &overlays);
+        // Empty key comes first after sorting
+        assert!(
+            directive == "info,warn,praxis=trace" || directive == "info,praxis=trace,warn",
+            "got: {directive}"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn delete_overlays_nonexistent_module() {
+        let _lock = OVERLAY_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let state = shared_test_state();
+        reset_overlays(&state);
+
+        // Deleting a non-existent module should succeed (no-op)
+        let result = state
+            .delete_overlays(Some("nonexistent"), false)
+            .expect("should succeed even if module doesn't exist");
+        assert!(result.overlays.is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn delete_overlays_empty_state() {
+        let _lock = OVERLAY_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let state = shared_test_state();
+        reset_overlays(&state);
+
+        // Deleting all from empty state should succeed
+        let result = state.delete_overlays(None, true).expect("delete all from empty");
+        assert!(result.overlays.is_empty());
+
+        // Deleting specific module from empty state should succeed
+        let result = state
+            .delete_overlays(Some("praxis"), false)
+            .expect("delete specific from empty");
+        assert!(result.overlays.is_empty());
+
+        // Deleting global from empty state should succeed
+        let result = state.delete_overlays(None, false).expect("delete global from empty");
+        assert!(result.overlays.is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn delete_specific_module_leaves_others() {
+        let _lock = OVERLAY_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let state = shared_test_state();
+        reset_overlays(&state);
+
+        state
+            .apply_put(&PutLogLevelRequest {
+                level: "debug".to_owned(),
+                module: None,
+                duration_secs: Some(300),
+            })
+            .expect("global overlay");
+        state
+            .apply_put(&PutLogLevelRequest {
+                level: "trace".to_owned(),
+                module: Some("praxis_filter".to_owned()),
+                duration_secs: Some(300),
+            })
+            .expect("module overlay");
+        state
+            .apply_put(&PutLogLevelRequest {
+                level: "debug".to_owned(),
+                module: Some("praxis_core".to_owned()),
+                duration_secs: Some(300),
+            })
+            .expect("another module overlay");
+
+        let snap = state.snapshot();
+        assert_eq!(snap.overlays.len(), 3);
+
+        // Delete just praxis_filter
+        let result = state
+            .delete_overlays(Some("praxis_filter"), false)
+            .expect("delete specific module");
+        assert_eq!(result.overlays.len(), 2);
+        assert!(
+            result
+                .overlays
+                .iter()
+                .all(|o| o.module.as_deref() != Some("praxis_filter")),
+            "praxis_filter should be removed"
+        );
+        assert!(
+            result.overlays.iter().any(|o| o.module.is_none()),
+            "global should remain"
+        );
+        assert!(
+            result
+                .overlays
+                .iter()
+                .any(|o| o.module.as_deref() == Some("praxis_core")),
+            "praxis_core should remain"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn delete_global_overlay_leaves_modules() {
+        let _lock = OVERLAY_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let state = shared_test_state();
+        reset_overlays(&state);
+
+        state
+            .apply_put(&PutLogLevelRequest {
+                level: "debug".to_owned(),
+                module: None,
+                duration_secs: Some(300),
+            })
+            .expect("global overlay");
+        state
+            .apply_put(&PutLogLevelRequest {
+                level: "trace".to_owned(),
+                module: Some("praxis_filter".to_owned()),
+                duration_secs: Some(300),
+            })
+            .expect("module overlay");
+
+        // Delete just the global overlay
+        let result = state.delete_overlays(None, false).expect("delete global");
+        assert_eq!(result.overlays.len(), 1);
+        assert_eq!(result.overlays[0].module, Some("praxis_filter".to_owned()));
+    }
+
+    #[test]
+    fn log_level_inner_generation_wraps() {
+        let mut inner = LogLevelInner {
+            baseline_directive: "info".to_owned(),
+            overlays: HashMap::new(),
+            reload_handle: {
+                let (layer, handle) = reload::Layer::new(EnvFilter::new("info"));
+                drop(layer);
+                handle
+            },
+            next_generation: u64::MAX - 1,
+        };
+
+        assert_eq!(inner.take_generation(), u64::MAX - 1);
+        assert_eq!(inner.take_generation(), u64::MAX);
+        // Wraps to 0
+        assert_eq!(inner.take_generation(), 0);
+        assert_eq!(inner.take_generation(), 1);
+    }
+
+    #[test]
+    fn put_log_level_request_deserialize() {
+        let yaml = "
+level: debug
+module: praxis_filter
+duration_secs: 600
+";
+        let req: PutLogLevelRequest = serde_yaml::from_str(yaml).expect("should deserialize");
+        assert_eq!(req.level, "debug");
+        assert_eq!(req.module, Some("praxis_filter".to_owned()));
+        assert_eq!(req.duration_secs, Some(600));
+    }
+
+    #[test]
+    fn put_log_level_request_deserialize_minimal() {
+        let yaml = "
+level: info
+";
+        let req: PutLogLevelRequest = serde_yaml::from_str(yaml).expect("should deserialize");
+        assert_eq!(req.level, "info");
+        assert_eq!(req.module, None);
+        assert_eq!(req.duration_secs, None);
+    }
+
+    #[test]
+    fn log_level_overlay_view_serialize() {
+        let view = LogLevelOverlayView {
+            module: Some("praxis".to_owned()),
+            level: "debug".to_owned(),
+            expires_at: "2026-09-19T12:00:00Z".to_owned(),
+        };
+        let yaml = serde_yaml::to_string(&view).expect("should serialize");
+        assert!(yaml.contains("module: praxis"));
+        assert!(yaml.contains("level: debug"));
+        assert!(yaml.contains("expires_at"));
+    }
+
+    #[test]
+    fn log_level_overlay_view_serialize_no_module() {
+        let view = LogLevelOverlayView {
+            module: None,
+            level: "warn".to_owned(),
+            expires_at: "2026-09-19T12:00:00Z".to_owned(),
+        };
+        let yaml = serde_yaml::to_string(&view).expect("should serialize");
+        assert!(!yaml.contains("module:"));
+        assert!(yaml.contains("level: warn"));
+    }
+
+    #[test]
+    fn log_level_state_response_serialize() {
+        let response = LogLevelStateResponse {
+            baseline_directive: "info".to_owned(),
+            overlays: vec![LogLevelOverlayView {
+                module: Some("praxis".to_owned()),
+                level: "debug".to_owned(),
+                expires_at: "2026-09-19T12:00:00Z".to_owned(),
+            }],
+            effective_directive: "info,praxis=debug".to_owned(),
+        };
+        let yaml = serde_yaml::to_string(&response).expect("should serialize");
+        assert!(yaml.contains("baseline_directive: info"));
+        assert!(yaml.contains("effective_directive"));
+    }
+
+    #[test]
+    fn env_filter_from_directive_valid() {
+        env_filter_from_directive("info").expect("simple directive");
+        env_filter_from_directive("debug,praxis=trace").expect("with module override");
+        env_filter_from_directive("warn,praxis::filter=debug,praxis::core=info").expect("multiple overrides");
+    }
+
+    #[test]
+    fn env_filter_from_directive_invalid() {
+        let err = env_filter_from_directive("[invalid").expect_err("malformed directive");
+        assert!(err.to_string().contains("invalid log filter directive"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn apply_put_supersedes_previous_overlay() {
+        let _lock = OVERLAY_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let state = shared_test_state();
+        reset_overlays(&state);
+
+        // First overlay
+        state
+            .apply_put(&PutLogLevelRequest {
+                level: "debug".to_owned(),
+                module: Some("praxis".to_owned()),
+                duration_secs: Some(300),
+            })
+            .expect("first overlay");
+        let snap = state.snapshot();
+        assert_eq!(snap.overlays.len(), 1);
+        assert_eq!(snap.overlays[0].level, "debug");
+
+        // Second overlay to same target
+        state
+            .apply_put(&PutLogLevelRequest {
+                level: "trace".to_owned(),
+                module: Some("praxis".to_owned()),
+                duration_secs: Some(300),
+            })
+            .expect("second overlay");
+        let snap = state.snapshot();
+        assert_eq!(snap.overlays.len(), 1);
+        assert_eq!(snap.overlays[0].level, "trace");
+
+        // Clean up
+        reset_overlays(&state);
+    }
+
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn refresh_baseline_preserves_overlays() {
+        let _lock = OVERLAY_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let state = shared_test_state();
+        reset_overlays(&state);
+
+        state
+            .apply_put(&PutLogLevelRequest {
+                level: "trace".to_owned(),
+                module: Some("praxis_test".to_owned()),
+                duration_secs: Some(300),
+            })
+            .expect("overlay before refresh");
+
+        let config_yaml = "
+listeners:
+  - name: test
+    address: 127.0.0.1:0
+    protocol: http
+    filter_chains:
+      - test_chain
+filter_chains:
+  - name: test_chain
+    filters: []
+";
+        let config = Config::load(None, config_yaml).expect("valid config");
+        state.refresh_baseline(&config).expect("refresh baseline");
+
+        let snap = state.snapshot();
+        assert_eq!(snap.overlays.len(), 1, "overlay should survive baseline refresh");
+        assert_eq!(snap.overlays[0].level, "trace");
+        assert_eq!(snap.overlays[0].module, Some("praxis_test".to_owned()));
+
+        // Clean up to avoid interfering with other tests
+        reset_overlays(&state);
     }
 }

@@ -161,7 +161,7 @@ fn validate_single_listener(listener: &mut Listener) -> Result<(), ProxyError> {
 
     if let Some(tls) = &listener.tls {
         tls.validate()
-            .map_err(|e| ProxyError::Config(format!("listener '{name}': {e}", name = listener.name)))?;
+            .map_err(|err| ProxyError::Config(format!("listener '{name}': {err}", name = listener.name)))?;
     }
 
     super::timeouts::validate_listener_timeouts(listener)?;
@@ -175,18 +175,18 @@ fn validate_single_listener(listener: &mut Listener) -> Result<(), ProxyError> {
 
 /// Validate `max_connections` is at least 1 and within the allowed ceiling.
 fn validate_max_connections(listener: &Listener) -> Result<(), ProxyError> {
-    let Some(v) = listener.max_connections else {
+    let Some(count) = listener.max_connections else {
         return Ok(());
     };
     let name = &listener.name;
-    if v == 0 {
+    if count == 0 {
         return Err(ProxyError::Config(format!(
             "listener '{name}': max_connections must be >= 1",
         )));
     }
-    if v > crate::config::validate::MAX_CONNECTIONS {
+    if count > crate::config::validate::MAX_CONNECTIONS {
         return Err(ProxyError::Config(format!(
-            "listener '{name}': max_connections ({v}) exceeds maximum ({})",
+            "listener '{name}': max_connections ({count}) exceeds maximum ({})",
             crate::config::validate::MAX_CONNECTIONS,
         )));
     }

@@ -25,7 +25,7 @@ pub(super) fn h2c_get(addr: &str, path: &str) -> (http::Response<()>, String) {
 }
 
 /// Perform the h2c GET request asynchronously.
-#[expect(clippy::large_stack_frames, reason = "test helper with H2 handshake structs")]
+#[expect(clippy::large_stack_frames, reason = "test utility with H2 handshake structs")]
 async fn h2c_get_async(addr: &str, path: &str) -> (http::Response<()>, String) {
     let tcp = tokio::net::TcpStream::connect(addr).await.expect("TCP connect for h2c");
 

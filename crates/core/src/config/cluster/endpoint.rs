@@ -140,9 +140,10 @@ impl Endpoint {
     /// let simple: Endpoint = "10.0.0.1:8080".into();
     /// assert_eq!(simple.address(), "10.0.0.1:8080");
     /// ```
+    #[expect(clippy::match_same_arms, reason = "arms differ in pattern, not body")]
     pub fn address(&self) -> &str {
         match self {
-            Self::Simple(s) => s,
+            Self::Simple(address) => address,
             Self::Weighted { address, .. } => address,
         }
     }
@@ -189,14 +190,14 @@ impl Endpoint {
 }
 
 impl From<String> for Endpoint {
-    fn from(s: String) -> Self {
-        Self::Simple(s)
+    fn from(value: String) -> Self {
+        Self::Simple(value)
     }
 }
 
 impl From<&str> for Endpoint {
-    fn from(s: &str) -> Self {
-        Self::Simple(s.to_owned())
+    fn from(value: &str) -> Self {
+        Self::Simple(value.to_owned())
     }
 }
 

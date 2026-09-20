@@ -447,11 +447,11 @@ impl RetryPolicy {
             if let Some(0) = value {
                 return Err(format!("{context}: {field} is 0 (must be > 0)"));
             }
-            if let Some(v) = value
-                && v > super::super::validate::cluster::MAX_TIMEOUT_MS
+            if let Some(timeout_ms) = value
+                && timeout_ms > super::super::validate::cluster::MAX_TIMEOUT_MS
             {
                 return Err(format!(
-                    "{context}: {field} ({v} ms) exceeds maximum ({} ms / 1 hour)",
+                    "{context}: {field} ({timeout_ms} ms) exceeds maximum ({} ms / 1 hour)",
                     super::super::validate::cluster::MAX_TIMEOUT_MS
                 ));
             }
@@ -543,7 +543,7 @@ allow_non_idempotent: true
         let policy: RetryPolicy = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(policy.effective_max_retries(), 3);
         assert_eq!(policy.retriable_status_codes.len(), 3);
-        assert_eq!(policy.retriable_status_codes.get(1).map(|c| c.get()), Some(503));
+        assert_eq!(policy.retriable_status_codes.get(1).map(|code| code.get()), Some(503));
         assert_eq!(policy.retriable_conditions.len(), 4);
         assert_eq!(policy.per_try_timeout_ms, Some(2000));
         assert_eq!(policy.request_timeout_ms, Some(10_000));

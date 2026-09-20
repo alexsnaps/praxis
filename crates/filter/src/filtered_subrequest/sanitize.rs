@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Praxis Contributors
 
-//! Header and body forwarding-boundary helpers for filtered sub-requests.
+//! Header and body forwarding-boundary utilities for filtered sub-requests.
 //!
 //! These enforce the same hop-by-hop, reserved-header, and message-framing
 //! boundary as the normal upstream path, and translate filter rejections

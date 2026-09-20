@@ -216,7 +216,7 @@ pub enum SseBuildError {
 }
 
 // -----------------------------------------------------------------------------
-// Private helpers
+// Private utilities
 // -----------------------------------------------------------------------------
 
 /// Parse an SSE `retry` value: all-ASCII-digit `u64`, else `None`.

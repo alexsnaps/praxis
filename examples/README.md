@@ -16,6 +16,23 @@ use `static_response` (see
 or run Praxis with no config file for a built-in welcome
 page.
 
+## Quick Test Utilities
+
+**Echo server** for testing without configuration:
+
+```console
+cargo xtask echo
+curl http://127.0.0.1:8080/
+```
+
+**Debug mode** runs examples with dev-friendly settings (debug logs, admin API on :9090, single-threaded):
+
+```console
+cargo xtask debug examples/configs/security/guardrails-per-model.yaml
+```
+
+See [Quickstart](../docs/quickstart.md#quick-test-servers) for full options.
+
 ## Configs
 
 ### Branching

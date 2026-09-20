@@ -706,7 +706,7 @@ impl PolicyFilter {
 
     /// Record successful admission when executing through a pipeline. Direct
     /// unit-test calls have no current filter ID and intentionally skip the
-    /// marker rather than emitting the context helper's warning.
+    /// marker rather than emitting the context utility's warning.
     fn mark_admission_complete(ctx: &mut HttpFilterContext<'_>) {
         if ctx.current_filter_id.is_none() {
             return;

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Praxis Contributors
 
-//! Shared gRPC protocol helpers.
+//! Shared gRPC protocol utilities.
 //!
 //! gRPC is carried over HTTP, so several Praxis layers need the same
 //! answers about a request: is this gRPC, and which codec does it use?

@@ -167,11 +167,11 @@ impl Config {
     /// ```
     ///
     /// [`ProxyError::Config`]: crate::errors::ProxyError::Config
-    pub fn from_yaml(s: &str) -> Result<Self, crate::errors::ProxyError> {
-        check_yaml_safety(s)?;
+    pub fn from_yaml(yaml: &str) -> Result<Self, crate::errors::ProxyError> {
+        check_yaml_safety(yaml)?;
 
-        let mut config: Config =
-            serde_yaml::from_str(s).map_err(|e| crate::errors::ProxyError::Config(format!("invalid YAML: {e}")))?;
+        let mut config: Config = serde_yaml::from_str(yaml)
+            .map_err(|err| crate::errors::ProxyError::Config(format!("invalid YAML: {err}")))?;
 
         config.validate()?;
 
@@ -574,7 +574,7 @@ filter_chains:
             if entry.file_name().is_some_and(|n| n == "tls-mtls-spiffe.yaml") {
                 continue;
             }
-            Config::from_file(&entry).unwrap_or_else(|e| panic!("{}: {e}", entry.display()));
+            Config::from_file(&entry).unwrap_or_else(|err| panic!("{}: {err}", entry.display()));
             count += 1;
         }
         assert!(count > 0, "no YAML files found in {root}");
@@ -721,7 +721,7 @@ filter_chains:
                 let path = entry.unwrap().path();
                 if path.is_dir() {
                     dirs.push(path);
-                } else if path.extension().is_some_and(|e| e == "yaml") {
+                } else if path.extension().is_some_and(|ext| ext == "yaml") {
                     files.push(path);
                 }
             }

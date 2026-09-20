@@ -27,10 +27,10 @@ pub(super) fn validate_authority(authority: &str, cluster_name: &str) -> Result<
         )));
     }
 
-    let parsed = http::uri::Authority::from_str(authority).map_err(|e| {
+    let parsed = http::uri::Authority::from_str(authority).map_err(|err| {
         ProxyError::Config(format!(
             "cluster '{cluster_name}': authority {authority:?} is not a valid HTTP authority \
-             (expected host[:port] or [ipv6][:port]): {e}"
+             (expected host[:port] or [ipv6][:port]): {err}"
         ))
     })?;
 
@@ -77,7 +77,8 @@ mod tests {
     use super::*;
 
     fn ok(authority: &str) {
-        validate_authority(authority, "test").unwrap_or_else(|e| panic!("expected Ok for {authority:?}, got: {e}"));
+        validate_authority(authority, "test")
+            .unwrap_or_else(|error| panic!("expected Ok for {authority:?}, got: {error}"));
     }
 
     fn err(authority: &str) -> String {

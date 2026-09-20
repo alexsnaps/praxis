@@ -8,11 +8,9 @@ members = [
     "crates/core",
     "crates/filter",
     "crates/protocol",
-    "crates/simd-scan",
     "crates/tls",
 
     # Praxis Developer Tooling
-    "benchmarks",
     "xtask",
 
     # Praxis Testing
@@ -28,7 +26,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.5.6"
+version = "0.6.0"
 edition = "2024"
 rust-version = "1.96"
 authors = ["Shane Utt <shaneutt@linux.com>"]
@@ -39,7 +37,6 @@ repository = "https://github.com/praxis-proxy/praxis"
 arc-swap = "1.9.2"
 async-trait = "0.1.92"
 base64 = "0.23.1"
-benchmarks = { path = "benchmarks" }
 bytes = "1.12.1"
 cargo_metadata = "0.23.1"
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
@@ -73,12 +70,12 @@ portable-atomic = "1.15.0"
 proptest = "1.11.0"
 quote = "1.0.47"
 praxis = { path = "crates/server", package = "praxis-proxy" }
-praxis-core = { version = "0.5.6", path = "crates/core", package = "praxis-proxy-core" }
-praxis-filter = { version = "0.5.6", path = "crates/filter", package = "praxis-proxy-filter" }
-praxis-protocol = { version = "0.5.6", path = "crates/protocol", package = "praxis-proxy-protocol" }
-praxis-tls = { version = "0.5.6", path = "crates/tls", package = "praxis-proxy-tls" }
-praxis-simd-scan = { version = "0.5.6", path = "crates/simd-scan" }
+praxis-core = { version = "0.6.0", path = "crates/core", package = "praxis-proxy-core" }
+praxis-filter = { version = "0.6.0", path = "crates/filter", package = "praxis-proxy-filter" }
+praxis-protocol = { version = "0.6.0", path = "crates/protocol", package = "praxis-proxy-protocol" }
+praxis-tls = { version = "0.6.0", path = "crates/tls", package = "praxis-proxy-tls" }
 praxis-test-utils = { path = "tests/utils" }
+praxis-proxy-benchmarks = "0.2.1"
 secrecy = { version = "0.10.3", features = ["serde"] }
 serde = { version = "1.0.229", features = ["derive", "rc"] }
 smallvec = "1.16.1"

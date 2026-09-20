@@ -1,11 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2024 Praxis Contributors
 
-#![expect(
-    clippy::min_ident_chars,
-    reason = "TODO(conventions-sync): fix violations and remove"
-)]
-
 //! Praxis server entry point.
 //!
 //! Loads configuration, initializes tracing (with optional JSON output and
@@ -58,26 +53,27 @@ fn main() {
     let explicit = cli.config.or_else(|| std::env::var("PRAXIS_CONFIG").ok());
 
     if cli.validate {
-        if let Err(e) = commands::load_and_validate_for_cli(explicit.as_deref()) {
-            eprintln!("invalid configuration: {e}");
+        if let Err(error) = commands::load_and_validate_for_cli(explicit.as_deref()) {
+            eprintln!("invalid configuration: {error}");
             std::process::exit(1);
         }
         return;
     }
 
     if cli.dump {
-        if let Err(e) = commands::run_dump(explicit.as_deref()) {
-            eprintln!("dump failed: {e}");
+        if let Err(error) = commands::run_dump(explicit.as_deref()) {
+            eprintln!("dump failed: {error}");
             std::process::exit(1);
         }
         return;
     }
 
     let config_path = praxis::resolve_config_path(explicit.as_deref());
-    let config = praxis::load_config(explicit.as_deref()).unwrap_or_else(|e| praxis::fatal(&e));
-    let tracing_guard = praxis::init_tracing(&config).unwrap_or_else(|e| praxis::fatal(&e));
+    let config = praxis::load_config(explicit.as_deref()).unwrap_or_else(|error| praxis::fatal(&error));
+    let tracing_guard = praxis::init_tracing(&config).unwrap_or_else(|error| praxis::fatal(&error));
     let log_level = Some(tracing_guard.log_level_state());
     info!(version = env!("PRAXIS_VERSION"), "starting server");
+
     let _tracing_guard = tracing_guard;
     praxis::run_server(config, config_path, log_level)
 }
@@ -169,7 +165,7 @@ mod tests {
     fn cli_version_flag() {
         let result = Cli::try_parse_from(["praxis", "--version"]);
         assert!(
-            matches!(&result, Err(e) if e.kind() == clap::error::ErrorKind::DisplayVersion),
+            matches!(&result, Err(error) if error.kind() == clap::error::ErrorKind::DisplayVersion),
             "--version should be recognized"
         );
     }
@@ -178,7 +174,7 @@ mod tests {
     fn cli_version_short_flag() {
         let result = Cli::try_parse_from(["praxis", "-V"]);
         assert!(
-            matches!(&result, Err(e) if e.kind() == clap::error::ErrorKind::DisplayVersion),
+            matches!(&result, Err(error) if error.kind() == clap::error::ErrorKind::DisplayVersion),
             "-V should be recognized"
         );
     }

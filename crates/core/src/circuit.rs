@@ -174,7 +174,7 @@ impl CircuitInner {
     fn try_open_to_half_open(&mut self, config: &CircuitBreakerConfig, now: Instant) -> CircuitCheck {
         if self
             .opened_at
-            .is_some_and(|t| now.duration_since(t) >= config.recovery_window)
+            .is_some_and(|opened_at| now.duration_since(opened_at) >= config.recovery_window)
         {
             self.transition_to_half_open(now)
         } else {
@@ -187,7 +187,7 @@ impl CircuitInner {
     fn try_reset_stale_probe(&mut self, config: &CircuitBreakerConfig, now: Instant) -> CircuitCheck {
         if self
             .half_opened_at
-            .is_some_and(|t| now.duration_since(t) >= config.half_open_timeout)
+            .is_some_and(|half_opened_at| now.duration_since(half_opened_at) >= config.half_open_timeout)
         {
             self.state = CircuitState::Open;
             self.opened_at = Some(now);
@@ -239,10 +239,10 @@ impl CircuitBreaker {
             CircuitState::Closed => true,
             CircuitState::Open => inner
                 .opened_at
-                .is_some_and(|t| t.elapsed() >= self.config.recovery_window),
+                .is_some_and(|opened_at| opened_at.elapsed() >= self.config.recovery_window),
             CircuitState::HalfOpen => inner
                 .half_opened_at
-                .is_some_and(|t| t.elapsed() >= self.config.half_open_timeout),
+                .is_some_and(|half_opened_at| half_opened_at.elapsed() >= self.config.half_open_timeout),
         }
     }
 
@@ -414,7 +414,7 @@ impl CircuitBreaker {
         let open_in_recovery_window = inner.state == CircuitState::Open
             && inner
                 .opened_at
-                .is_some_and(|t| t.elapsed() < self.config.recovery_window);
+                .is_some_and(|opened_at| opened_at.elapsed() < self.config.recovery_window);
         inner.in_flight == 0 && !open_in_recovery_window && inner.last_activity.elapsed() >= idle_threshold
     }
 
@@ -585,7 +585,13 @@ impl CircuitBreakerRegistry {
 
 #[cfg(test)]
 #[expect(clippy::allow_attributes, reason = "blanket test suppressions")]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, reason = "tests")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::min_ident_chars,
+    reason = "tests"
+)]
 mod tests {
     use super::*;
 

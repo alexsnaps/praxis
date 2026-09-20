@@ -3,9 +3,10 @@
 This file provides guidance to coding agents when working with code in this
 repository.
 
-AI tools may assist with implementation, but do not add Claude or another AI
-tool as a commit collaborator, co-author, or signatory. Commit sign-off belongs
-to the human contributor responsible for the change.
+AI tools may assist with implementation, but **do not add any AI tool as a commit
+collaborator, co-author, or signatory**. Do not add `Co-Authored-By: Claude` or
+similar trailers. Commit sign-off belongs to the human contributor responsible
+for the change.
 
 ## Requirements
 
@@ -15,6 +16,16 @@ to the human contributor responsible for the change.
 - Docker 29.3.0+ or Podman (for container builds)
 
 ## Quick Reference
+
+### Dev Utilities
+
+```console
+cargo xtask echo              # quick HTTP test server (static responses)
+cargo xtask debug             # run with dev settings (debug logs, single-threaded)
+cargo xtask debug config.yaml # run example with dev settings
+```
+
+### Build & Test
 
 ```console
 make setup-hooks    # install git pre-commit hook (fmt + lint)
@@ -29,12 +40,19 @@ make container      # container image build
 cargo run -p praxis-proxy # run the proxy
 ```
 
+### Targeted Testing
+
+**Prefer targeted test runs over full test suites.** Run only the tests relevant
+to your changes unless doing a final verification before commit.
+
 Run a single test:
 
 ```console
 cargo test -p praxis-tests-integration --test suite -- test_name
 make test-integration V=1   # with --nocapture
 ```
+
+Skip tests entirely for documentation-only changes (README, docs/*.md).
 
 Individual test suites:
 
@@ -143,6 +161,12 @@ configured variants.
 
 See `docs/filters/extensions.md` for the full guide.
 
+**Choosing a category**: HTTP filters go under `observability`,
+`payload_processing`, `security`, `traffic_management`, or `transformation`.
+TCP filters use `observability` or `traffic_management`. Review the category
+README files in `examples/configs/<category>/` to understand each category's
+scope and choose the best fit.
+
 1. Create module under
    `crates/filter/src/builtins/<protocol>/<category>/`
 2. Implement `HttpFilter` or `TcpFilter` with a
@@ -151,8 +175,10 @@ See `docs/filters/extensions.md` for the full guide.
 3. Register in `crates/filter/src/registry.rs`
 4. Add unit tests and doctests
 5. Add example config in `examples/configs/<category>/`
+   (follow the header comment format below)
 6. Add functional integration test in
    `tests/integration/tests/suite/examples/`
+   (must exercise actual functionality end-to-end)
 7. Run `cargo xtask sync-example-readme --fix`
 
 ## Adding a Protocol
@@ -198,6 +224,18 @@ These two concepts are distinct, take care to not conflate them.
   processing* a request receives. Branch chains add
   conditional paths within a pipeline.
 
+## Reserved Headers
+
+**Client-unspoofable headers**: Headers with `x-praxis-*` or `x-ext-*` prefixes
+are reserved and automatically stripped from incoming requests. Use these for
+metadata promoted from request bodies or set by trusted filters (like
+`json_body_field`). Clients cannot forge these headers, making them safe for
+security-sensitive routing and filtering decisions.
+
+Example: `json_body_field` promotes a body field to `x-praxis-guard-model`,
+which `guardrails` then uses in a condition. The client cannot bypass guardrails
+by sending an `x-praxis-guard-model` header directly.
+
 ## Key Patterns
 
 - **Classify → route → branch**: classifier filters
@@ -206,12 +244,14 @@ These two concepts are distinct, take care to not conflate them.
   clusters (routing). Branch chains split pipelines
   (pipelining).
 - **The inference path is proxy-parsed, not
-  classified**: the `policy` filter attributes an
+  classified** (AI-specific): the `policy` filter attributes an
   OpenAI-style call to a model by reading the
   top-level `model` out of the buffered body itself
   (no classifier, no header), then dispatches PPE's
   `cmf.llm_input`. Classifier metadata still wins
-  where it exists.
+  where it exists. This pattern is specific to AI workloads;
+  most filters should use `json_body_field` to promote
+  body fields to headers.
 - **Branch on filter results**: branch chains split
   or rejoin request-phase pipelines based on filter
   results (`on_result`). See
@@ -259,10 +299,14 @@ Example configs: `examples/configs/<category>/`.
 Praxis swaps filter pipelines at runtime without
 restarting. Each handler holds
 `Arc<ArcSwap<FilterPipeline>>`; a file watcher
-(500ms debounce) monitors the config file, validates,
+(500ms debounce, hardcoded) monitors the config file, validates,
 rebuilds pipelines, and swaps atomically. Listener
 topology, protocol type, and TLS toggle changes
 cannot be applied dynamically (logged as warnings).
+
+**What reloads**: Filter pipelines, filter configurations, routing rules.
+**What does not reload**: Listener addresses/ports, protocol types (HTTP/TCP),
+TLS on/off state, runtime worker count.
 
 ## CI Workflows
 
@@ -275,12 +319,21 @@ CI workflows that post PR comments must use the
 
 See `docs/operating/security-hardening.md` for details.
 
-Pingora handles: request smuggling prevention, H2
-backpressure, connection pool safety, HTTP/1.1
-upgrade detection and bidirectional forwarding
-(WebSocket, etc.).
+**Pingora handles** (upstream library, do not modify):
+- Request smuggling prevention
+- H2 backpressure
+- Connection pool safety
+- HTTP/1.1 upgrade detection and bidirectional forwarding (WebSocket, etc.)
 
-Praxis handles: hop-by-hop header stripping (with
-conditional preservation for upgrade requests),
-Host validation, X-Forwarded-* injection, retry
-logic.
+**Praxis handles** (our code):
+- Hop-by-hop header stripping (with conditional preservation for upgrade requests)
+- Host validation
+- X-Forwarded-* injection
+- Retry logic
+- Filter pipeline execution
+- Routing and load balancing decisions
+
+**When adding features**: If it's HTTP protocol compliance, connection management,
+or core request/response handling, check if Pingora already provides it before
+implementing in Praxis. If it's business logic, routing, filtering, or
+observability, implement in Praxis.

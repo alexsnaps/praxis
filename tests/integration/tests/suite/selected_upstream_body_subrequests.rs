@@ -162,7 +162,7 @@ impl HttpFilter for ProviderLeakGuardFilter {
 // -----------------------------------------------------------------------------
 
 // `irr_yaml` in iterative_request_router.rs is private to that module; integration
-// modules do not share private helpers, so this file builds its own IRR config
+// modules do not share private utilities, so this file builds its own IRR config
 // strings inline (mirroring the config shapes in iterative_request_router.rs).
 
 fn register(name: &'static str, make: fn() -> Box<dyn HttpFilter>) -> FilterRegistry {

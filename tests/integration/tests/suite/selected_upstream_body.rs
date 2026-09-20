@@ -202,9 +202,9 @@ impl HttpFilter for RejectSelectedUpstreamFilter {
 
 // `registry_with(name, make) -> FilterRegistry` (builtins + one named
 // participant filter) is imported from `praxis_test_utils` — it is a public
-// shared helper used across the suite (e.g. body.rs, error_response.rs), NOT a
-// private module helper, so it is not redefined here. (Contrast the
-// `assert_echoed_header_*` helpers below, which ARE private to json_body_field.rs
+// shared utility used across the suite (e.g. body.rs, error_response.rs), NOT a
+// private module utility, so it is not redefined here. (Contrast the
+// `assert_echoed_header_*` utilities below, which ARE private to json_body_field.rs
 // and so must be copied.)
 
 /// Single-backend pipeline: router -> load_balancer -> participant filter.
@@ -296,8 +296,8 @@ insecure_options:
 
 // Case-insensitive assertions over the header-echo backend's response body,
 // which reflects the upstream request headers one per line. Mirrors the
-// helpers in `json_body_field.rs` (integration modules do not share private
-// helpers, so copy them here).
+// utilities in `json_body_field.rs` (integration modules do not share private
+// utilities, so copy them here).
 
 fn echoed_header_lines<'a>(body: &'a str, name: &str) -> Vec<&'a str> {
     let prefix = format!("{}:", name.to_ascii_lowercase());
