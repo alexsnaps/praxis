@@ -18,7 +18,7 @@ pub(crate) mod metrics;
 /// Bidirectional TCP proxy application.
 pub(crate) mod proxy;
 /// TLS configuration and listener grouping utilities.
-mod tls_setup;
+mod tls;
 
 // -----------------------------------------------------------------------------
 // PingoraTcp
@@ -39,8 +39,8 @@ impl Protocol for PingoraTcp {
         config: &Config,
         pipelines: &ListenerPipelines,
     ) -> Result<Vec<watch::Sender<bool>>, ProxyError> {
-        let groups = tls_setup::group_tcp_listeners(config);
-        tls_setup::validate_tcp_group_consistency(&groups)?;
+        let groups = tls::group_tcp_listeners(config);
+        tls::validate_tcp_group_consistency(&groups)?;
         #[expect(clippy::expect_used, reason = "empty pipeline is infallible")]
         let fallback_pipeline = Arc::new(ArcSwap::from_pointee(
             FilterPipeline::build(&mut [], &FilterRegistry::with_builtins()).expect("empty pipeline is valid"),
@@ -49,7 +49,7 @@ impl Protocol for PingoraTcp {
         let mut cert_watcher_shutdowns = Vec::new();
         for (group_key, listeners) in groups {
             let mut service = build_tcp_service(&group_key, &listeners, pipelines, &fallback_pipeline, config);
-            cert_watcher_shutdowns.extend(tls_setup::register_tcp_listeners(
+            cert_watcher_shutdowns.extend(tls::register_tcp_listeners(
                 &mut service,
                 &listeners,
                 group_key.0.as_deref(),
