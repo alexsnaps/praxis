@@ -3468,6 +3468,7 @@ dependencies = [
  "portable-atomic",
  "praxis-proxy-core",
  "praxis-proxy-filter",
+ "praxis-proxy-tls",
  "serde_json",
  "tokio",
  "yaml_serde",
