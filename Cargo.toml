@@ -130,7 +130,11 @@ opt-level = 2
 # don't trip the unexpected_cfgs lint under `-D warnings`.
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)'] }
 dead_code = "deny"
-unsafe_code = "forbid"
+# Default is "deny" rather than "forbid" so `praxis-proxy-filter` can inherit
+# this whole lint set while letting its `json_ops::simd_scan` SIMD intrinsics
+# opt into unsafe with `#[expect(unsafe_code)]`. Crates that never need unsafe
+# raise it back with a crate-root `#![forbid(unsafe_code)]`.
+unsafe_code = "deny"
 missing_docs = "deny"
 unreachable_pub = "deny"
 unused_imports = "deny"

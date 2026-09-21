@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2024 Praxis Contributors
 
+#![forbid(unsafe_code)]
+
 //! Praxis server entry point.
 //!
 //! Loads configuration, initializes tracing (with optional JSON output and

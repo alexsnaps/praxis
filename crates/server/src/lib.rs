@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2024 Praxis Contributors
 
+#![forbid(unsafe_code)]
+
 //! Server bootstrap for the Praxis proxy.
 //!
 //! `praxis` is the top of the crate dependency flow
