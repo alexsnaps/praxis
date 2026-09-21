@@ -45,7 +45,9 @@ use crate::{
 /// # Errors
 ///
 /// Returns an error if the new config fails validation or pipeline
-/// construction. The running server is unaffected.
+/// construction, or if it changes the protocol of a listener whose
+/// handler is already bound (that change takes effect only on restart).
+/// The running server is unaffected.
 #[expect(
     clippy::too_many_arguments,
     clippy::too_many_lines,
@@ -75,6 +77,11 @@ pub(crate) fn reload_pipelines(
     if let Err(err) = praxis_core::logging::validate_logging(new_config) {
         error!(error = %err, "config reload failed: invalid logging config");
         return Err(err.into());
+    }
+
+    if let Err(err) = reject_protocol_changes(new_config, live) {
+        error!(error = %err, "config reload failed: listener protocol changed; requires restart");
+        return Err(err);
     }
 
     let health_registry = build_health_registry(&new_config.clusters);
@@ -141,15 +148,15 @@ pub(crate) fn reload_pipelines(
     let mut skipped: Vec<&str> = Vec::new();
 
     for name in new_pipelines.listener_names() {
-        if let Some(new_slot) = new_pipelines.get(name) {
-            let new_arc = new_slot.load_full();
-            if live.get(name).is_some() {
-                live.swap(name, new_arc);
-                swapped.push(name);
-            } else {
-                skipped.push(name);
-            }
+        let Some(new_slot) = new_pipelines.get(name) else {
+            continue;
+        };
+        if live.get(name).is_none() {
+            skipped.push(name);
+            continue;
         }
+        live.swap(name, new_slot.load_full());
+        swapped.push(name);
     }
 
     listener_meta.store(Arc::new(
@@ -161,13 +168,36 @@ pub(crate) fn reload_pipelines(
 
     respawn_health_checks(old_config, new_config, &health_registry, health_shutdown);
 
-    info!(
-        swapped = ?swapped,
-        skipped = ?skipped,
-        "config reload complete"
-    );
+    info!(swapped = ?swapped, skipped = ?skipped, "config reload complete");
 
     Ok(())
+}
+
+/// Refuse a config that changes the protocol of a listener whose handler
+/// is already bound.
+///
+/// Each handler is bound once at startup and executes only filters of its
+/// own protocol, so a pipeline resolved for the other protocol would have
+/// every filter skipped (#1113). The reference is the protocol recorded in
+/// the live pipelines, not the previous config: the watcher keeps the
+/// previous config only across `Ok` reloads, and a listener removed by one
+/// reload and re-added by a later one is absent from it while its handler
+/// is still bound. Rejecting the whole reload keeps the live pipelines,
+/// health probes, and admin metadata on one generation.
+fn reject_protocol_changes(
+    new_config: &Config,
+    live: &ListenerPipelines,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let Some((listener, bound)) = new_config.listeners.iter().find_map(|listener| {
+        live.protocol(&listener.name)
+            .filter(|bound| *bound != listener.protocol)
+            .map(|bound| (listener, bound))
+    }) else {
+        return Ok(());
+    };
+    let name = &listener.name;
+    let requested = listener.protocol;
+    Err(format!("listener '{name}' protocol changed from {bound:?} to {requested:?}; a bound handler cannot switch protocols without a restart").into())
 }
 
 // -----------------------------------------------------------------------------
@@ -361,7 +391,7 @@ mod tests {
         sync::atomic::{AtomicUsize, Ordering},
     };
 
-    use praxis_core::config::{InsecureOptions, SkipPipelineChecks};
+    use praxis_core::config::{InsecureOptions, ProtocolKind, SkipPipelineChecks};
     use praxis_filter::{CircuitBreakerFilter, FilterFactory, PipelineExtension, RequestExtensions};
 
     use super::*;
@@ -440,6 +470,369 @@ filter_chains:
             loaded.get("web").unwrap().chain_names,
             ["main"],
             "meta should preserve chain names after reload"
+        );
+    }
+
+    /// Startup bound the `web` handler for HTTP. A reload that turns `web`
+    /// into a TCP listener yields a TCP-validated pipeline; installed behind
+    /// the HTTP handler, every one of its filters would be skipped (#1113).
+    #[test]
+    fn protocol_change_rejects_reload_and_leaves_live_state_untouched() {
+        let (live, old_config, registry, shutdown, meta, cluster_meta) = setup_live_pipelines();
+        let old_ptr = Arc::as_ptr(&live.get("web").unwrap().load());
+        let old_meta = meta.load_full();
+        let old_cluster_meta = cluster_meta.load_full();
+        let old_token = shutdown.lock().unwrap().clone();
+
+        let new_config = tcp_web_config();
+        let result = reload_pipelines(
+            &new_config,
+            &old_config,
+            &registry,
+            &live,
+            &meta,
+            &cluster_meta,
+            &shutdown,
+            &empty_kv_stores(),
+            &empty_session_stores(),
+            &empty_subrequest_client(),
+            None,
+            &PipelineComposition::default(),
+        );
+
+        let err = result.expect_err("a protocol change cannot be applied to a bound handler");
+        assert!(
+            err.to_string().contains("web") && err.to_string().contains("protocol"),
+            "error should name the listener and the cause: {err}"
+        );
+        assert_eq!(
+            Arc::as_ptr(&live.get("web").unwrap().load()),
+            old_ptr,
+            "the HTTP handler must keep executing the HTTP pipeline"
+        );
+        assert!(
+            Arc::ptr_eq(&meta.load_full(), &old_meta),
+            "listener metadata must not advance on a rejected reload"
+        );
+        assert!(
+            Arc::ptr_eq(&cluster_meta.load_full(), &old_cluster_meta),
+            "cluster metadata must not advance on a rejected reload"
+        );
+        assert!(
+            !old_token.is_cancelled(),
+            "the live health probes must keep running on a rejected reload"
+        );
+    }
+
+    /// The watcher keeps the previous config after an `Err`, so the operator
+    /// sees the same rejection on every reload until the edit is reverted.
+    #[test]
+    fn protocol_change_is_rejected_again_on_the_next_reload() {
+        let (live, old_config, registry, shutdown, meta, cluster_meta) = setup_live_pipelines();
+        let old_ptr = Arc::as_ptr(&live.get("web").unwrap().load());
+        let new_config = tcp_web_config();
+
+        for _ in 0..2 {
+            let result = reload_pipelines(
+                &new_config,
+                &old_config,
+                &registry,
+                &live,
+                &meta,
+                &cluster_meta,
+                &shutdown,
+                &empty_kv_stores(),
+                &empty_session_stores(),
+                &empty_subrequest_client(),
+                None,
+                &PipelineComposition::default(),
+            );
+            assert!(result.is_err(), "every reload carrying the protocol change is rejected");
+        }
+        assert_eq!(
+            Arc::as_ptr(&live.get("web").unwrap().load()),
+            old_ptr,
+            "no reload may install the TCP pipeline behind the HTTP handler"
+        );
+    }
+
+    #[test]
+    fn protocol_change_from_tcp_rejects_reload() {
+        let (live, old_config, registry, shutdown, meta, cluster_meta) = setup_live_pipelines_from(tcp_web_config());
+        let old_ptr = Arc::as_ptr(&live.get("web").unwrap().load());
+
+        let new_config = valid_config();
+        let result = reload_pipelines(
+            &new_config,
+            &old_config,
+            &registry,
+            &live,
+            &meta,
+            &cluster_meta,
+            &shutdown,
+            &empty_kv_stores(),
+            &empty_session_stores(),
+            &empty_subrequest_client(),
+            None,
+            &PipelineComposition::default(),
+        );
+
+        assert!(
+            result.is_err(),
+            "a protocol change cannot be applied to a bound handler"
+        );
+        assert_eq!(
+            Arc::as_ptr(&live.get("web").unwrap().load()),
+            old_ptr,
+            "the TCP handler must keep executing the TCP pipeline"
+        );
+        assert_eq!(
+            meta.load().get("web").unwrap().protocol,
+            ProtocolKind::Tcp,
+            "meta must report the protocol the bound socket honors"
+        );
+    }
+
+    /// Removing `web` from the config and adding it back with the other
+    /// protocol must not slip past the check: the handler is still bound,
+    /// and the previous config no longer mentions the listener at all.
+    #[test]
+    fn protocol_change_after_remove_and_readd_rejects_reload() {
+        let (live, old_config, registry, shutdown, meta, cluster_meta) = setup_live_pipelines();
+        let old_ptr = Arc::as_ptr(&live.get("web").unwrap().load());
+
+        let without_web = Config::from_yaml(
+            r#"
+listeners:
+  - name: other
+    address: "127.0.0.1:8081"
+    filter_chains: [main]
+filter_chains:
+  - name: main
+    filters:
+      - filter: static_response
+        status: 200
+"#,
+        )
+        .unwrap();
+        reload_pipelines(
+            &without_web,
+            &old_config,
+            &registry,
+            &live,
+            &meta,
+            &cluster_meta,
+            &shutdown,
+            &empty_kv_stores(),
+            &empty_session_stores(),
+            &empty_subrequest_client(),
+            None,
+            &PipelineComposition::default(),
+        )
+        .expect("removing a listener from the config is accepted");
+        assert!(
+            meta.load().get("web").is_none(),
+            "the removed listener has no metadata entry to compare against"
+        );
+
+        let readded_as_tcp = tcp_web_config();
+        let result = reload_pipelines(
+            &readded_as_tcp,
+            &without_web,
+            &registry,
+            &live,
+            &meta,
+            &cluster_meta,
+            &shutdown,
+            &empty_kv_stores(),
+            &empty_session_stores(),
+            &empty_subrequest_client(),
+            None,
+            &PipelineComposition::default(),
+        );
+
+        assert!(result.is_err(), "the re-added listener still targets the HTTP handler");
+        assert_eq!(
+            Arc::as_ptr(&live.get("web").unwrap().load()),
+            old_ptr,
+            "the HTTP handler must keep executing the HTTP pipeline"
+        );
+    }
+
+    /// One listener switching protocol rejects the whole reload: the other
+    /// listener's pipeline is not swapped either, so the live pipelines and
+    /// both metadata stores stay on a single generation.
+    #[test]
+    fn protocol_change_on_one_listener_rejects_reload_for_all() {
+        let (live, old_config, registry, shutdown, meta, cluster_meta) = setup_live_pipelines_from(
+            Config::from_yaml(
+                r#"
+listeners:
+  - name: web
+    address: "127.0.0.1:8080"
+    filter_chains: [main]
+  - name: api
+    address: "127.0.0.1:8081"
+    filter_chains: [main]
+filter_chains:
+  - name: main
+    filters:
+      - filter: static_response
+        status: 200
+"#,
+            )
+            .unwrap(),
+        );
+        let old_web_ptr = Arc::as_ptr(&live.get("web").unwrap().load());
+        let old_api_ptr = Arc::as_ptr(&live.get("api").unwrap().load());
+        let old_meta = meta.load_full();
+        let old_cluster_meta = cluster_meta.load_full();
+
+        let new_config = Config::from_yaml(
+            r#"
+listeners:
+  - name: web
+    address: "127.0.0.1:8080"
+    protocol: tcp
+    cluster: db_pool
+    filter_chains: [tcp_lb]
+  - name: api
+    address: "127.0.0.1:8081"
+    filter_chains: [main]
+clusters:
+  - name: db_pool
+    endpoints:
+      - "10.0.0.1:5432"
+insecure_options:
+  allow_private_endpoints: true
+  allow_private_upstreams: true
+filter_chains:
+  - name: tcp_lb
+    filters:
+      - filter: tcp_load_balancer
+        clusters:
+          - name: db_pool
+            endpoints:
+              - "10.0.0.1:5432"
+  - name: main
+    filters:
+      - filter: static_response
+        status: 404
+"#,
+        )
+        .unwrap();
+        let result = reload_pipelines(
+            &new_config,
+            &old_config,
+            &registry,
+            &live,
+            &meta,
+            &cluster_meta,
+            &shutdown,
+            &empty_kv_stores(),
+            &empty_session_stores(),
+            &empty_subrequest_client(),
+            None,
+            &PipelineComposition::default(),
+        );
+
+        assert!(
+            result.is_err(),
+            "a protocol change on any bound listener rejects the reload"
+        );
+        assert_eq!(
+            Arc::as_ptr(&live.get("web").unwrap().load()),
+            old_web_ptr,
+            "the changed listener keeps its HTTP pipeline"
+        );
+        assert_eq!(
+            Arc::as_ptr(&live.get("api").unwrap().load()),
+            old_api_ptr,
+            "the unchanged listener is not swapped ahead of the rejected one"
+        );
+        assert!(
+            Arc::ptr_eq(&meta.load_full(), &old_meta),
+            "listener metadata must not advance on a rejected reload"
+        );
+        assert!(
+            Arc::ptr_eq(&cluster_meta.load_full(), &old_cluster_meta),
+            "cluster metadata must not advance on a rejected reload"
+        );
+    }
+
+    /// A listener added by reload has no bound handler and therefore no
+    /// recorded protocol, so its protocol is not compared against anything.
+    /// The reload applies to the bound listener and skips the new one.
+    #[test]
+    fn new_tcp_listener_alongside_bound_http_listener_is_accepted() {
+        let (live, old_config, registry, shutdown, meta, cluster_meta) = setup_live_pipelines();
+        let old_web_ptr = Arc::as_ptr(&live.get("web").unwrap().load());
+
+        let new_config = Config::from_yaml(
+            r#"
+listeners:
+  - name: web
+    address: "127.0.0.1:8080"
+    filter_chains: [main]
+  - name: db
+    address: "127.0.0.1:5432"
+    protocol: tcp
+    cluster: db_pool
+    filter_chains: [tcp_lb]
+clusters:
+  - name: db_pool
+    endpoints:
+      - "10.0.0.1:5432"
+insecure_options:
+  allow_private_endpoints: true
+  allow_private_upstreams: true
+filter_chains:
+  - name: main
+    filters:
+      - filter: static_response
+        status: 404
+  - name: tcp_lb
+    filters:
+      - filter: tcp_load_balancer
+        clusters:
+          - name: db_pool
+            endpoints:
+              - "10.0.0.1:5432"
+"#,
+        )
+        .unwrap();
+        let result = reload_pipelines(
+            &new_config,
+            &old_config,
+            &registry,
+            &live,
+            &meta,
+            &cluster_meta,
+            &shutdown,
+            &empty_kv_stores(),
+            &empty_session_stores(),
+            &empty_subrequest_client(),
+            None,
+            &PipelineComposition::default(),
+        );
+
+        assert!(
+            result.is_ok(),
+            "adding a TCP listener next to a bound HTTP one is accepted: {result:?}"
+        );
+        assert_ne!(
+            Arc::as_ptr(&live.get("web").unwrap().load()),
+            old_web_ptr,
+            "the bound HTTP listener receives its rebuilt pipeline"
+        );
+        assert!(
+            live.get("db").is_none(),
+            "the new TCP listener has no handler to serve it until restart"
+        );
+        assert_eq!(
+            meta.load().get("db").map(|entry| entry.protocol),
+            Some(ProtocolKind::Tcp),
+            "the accepted reload publishes the new listener's metadata"
         );
     }
 
@@ -852,28 +1245,6 @@ listeners:
   - name: web
     address: "127.0.0.1:9999"
     filter_chains: [main]
-filter_chains:
-  - name: main
-    filters:
-      - filter: static_response
-        status: 200
-"#,
-        )
-        .unwrap();
-
-        log_restart_required_changes(&old, &new);
-    }
-
-    #[test]
-    fn protocol_changed_detected() {
-        let old = valid_config();
-        let new = Config::from_yaml(
-            r#"
-listeners:
-  - name: web
-    address: "127.0.0.1:8080"
-    protocol: tcp
-    upstream: "10.0.0.1:80"
 filter_chains:
   - name: main
     filters:
@@ -1668,6 +2039,36 @@ filter_chains:
         .unwrap()
     }
 
+    /// [`valid_config`] with `web` as a TCP listener running a TCP-only chain.
+    fn tcp_web_config() -> Config {
+        Config::from_yaml(
+            r#"
+listeners:
+  - name: web
+    address: "127.0.0.1:8080"
+    protocol: tcp
+    cluster: db_pool
+    filter_chains: [tcp_lb]
+clusters:
+  - name: db_pool
+    endpoints:
+      - "10.0.0.1:5432"
+insecure_options:
+  allow_private_endpoints: true
+  allow_private_upstreams: true
+filter_chains:
+  - name: tcp_lb
+    filters:
+      - filter: tcp_load_balancer
+        clusters:
+          - name: db_pool
+            endpoints:
+              - "10.0.0.1:5432"
+"#,
+        )
+        .unwrap()
+    }
+
     fn health_checked_config() -> Config {
         Config::from_yaml(
             r#"
@@ -1744,7 +2145,20 @@ filter_chains:
         praxis_protocol::http::pingora::health::ListenerMetaStore,
         praxis_protocol::http::pingora::health::ClusterMetaStore,
     ) {
-        let config = valid_config();
+        setup_live_pipelines_from(valid_config())
+    }
+
+    /// Like [`setup_live_pipelines`], with the given config as the startup config.
+    fn setup_live_pipelines_from(
+        config: Config,
+    ) -> (
+        ListenerPipelines,
+        Config,
+        FilterRegistry,
+        Arc<Mutex<CancellationToken>>,
+        praxis_protocol::http::pingora::health::ListenerMetaStore,
+        praxis_protocol::http::pingora::health::ClusterMetaStore,
+    ) {
         let registry = FilterRegistry::with_builtins();
         let health_registry: HealthRegistry = Arc::new(HashMap::new());
         let pipelines = resolve_pipelines(
