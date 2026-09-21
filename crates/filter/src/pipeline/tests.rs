@@ -2424,6 +2424,7 @@ async fn skip_to_excludes_skipped_filters_from_response() {
         session_stores: None,
         subrequest_client: None,
         may_select_streaming_subrequest_response: false,
+        trace_context_filter_indices: Vec::new(),
         pipeline_extensions: Vec::new(),
         time_source: Arc::new(praxis_core::time::SystemTimeSource),
         request_body_ceiling: None,
@@ -2500,6 +2501,7 @@ async fn skip_to_excludes_skipped_filters_from_body_hooks() {
         kv_stores: None,
         session_stores: None,
         may_select_streaming_subrequest_response: false,
+        trace_context_filter_indices: Vec::new(),
         subrequest_client: None,
         pipeline_extensions: Vec::new(),
         time_source: Arc::new(praxis_core::time::SystemTimeSource),
@@ -2574,6 +2576,7 @@ async fn body_hooks_run_for_every_filter_before_the_request_phase() {
         kv_stores: None,
         session_stores: None,
         may_select_streaming_subrequest_response: false,
+        trace_context_filter_indices: Vec::new(),
         subrequest_client: None,
         pipeline_extensions: Vec::new(),
         time_source: Arc::new(praxis_core::time::SystemTimeSource),
@@ -2643,6 +2646,7 @@ async fn all_executed_filters_run_on_response() {
         session_stores: None,
         subrequest_client: None,
         may_select_streaming_subrequest_response: false,
+        trace_context_filter_indices: Vec::new(),
         pipeline_extensions: Vec::new(),
         time_source: Arc::new(praxis_core::time::SystemTimeSource),
         request_body_ceiling: None,
@@ -2848,6 +2852,7 @@ async fn skipped_filter_skips_its_branches() {
         session_stores: None,
         subrequest_client: None,
         may_select_streaming_subrequest_response: false,
+        trace_context_filter_indices: Vec::new(),
         pipeline_extensions: Vec::new(),
         time_source: Arc::new(praxis_core::time::SystemTimeSource),
         request_body_ceiling: None,
@@ -4358,6 +4363,7 @@ fn test_pipeline(body_capabilities: BodyCapabilities, filters: Vec<PipelineFilte
         session_stores: None,
         subrequest_client: None,
         may_select_streaming_subrequest_response: false,
+        trace_context_filter_indices: Vec::new(),
         pipeline_extensions: Vec::new(),
         time_source: Arc::new(praxis_core::time::SystemTimeSource),
         request_body_ceiling: None,
@@ -4670,6 +4676,7 @@ fn make_pipeline(filters: Vec<Box<dyn HttpFilter>>) -> FilterPipeline {
         session_stores: None,
         subrequest_client: None,
         may_select_streaming_subrequest_response: false,
+        trace_context_filter_indices: Vec::new(),
         pipeline_extensions: Vec::new(),
         time_source: Arc::new(praxis_core::time::SystemTimeSource),
         request_body_ceiling: None,
@@ -4705,6 +4712,7 @@ fn make_pipeline_with_conditions(
         session_stores: None,
         subrequest_client: None,
         may_select_streaming_subrequest_response: false,
+        trace_context_filter_indices: Vec::new(),
         pipeline_extensions: Vec::new(),
         time_source: Arc::new(praxis_core::time::SystemTimeSource),
         request_body_ceiling: None,
@@ -4740,6 +4748,7 @@ fn make_pipeline_with_response_conditions(
         session_stores: None,
         subrequest_client: None,
         may_select_streaming_subrequest_response: false,
+        trace_context_filter_indices: Vec::new(),
         pipeline_extensions: Vec::new(),
         time_source: Arc::new(praxis_core::time::SystemTimeSource),
         request_body_ceiling: None,
@@ -5386,6 +5395,7 @@ fn streaming_capability_detected_when_filter_declares_it() {
         route_templates: Arc::default(),
         subrequest_client: None,
         may_select_streaming_subrequest_response: true,
+        trace_context_filter_indices: Vec::new(),
         time_source: Arc::new(praxis_core::time::SystemTimeSource),
         request_body_ceiling: None,
         response_body_ceiling: None,
@@ -5426,6 +5436,43 @@ fn streaming_with_stream_buffer_is_ordering_error() {
             .any(|e| e.contains("streaming sub-request response") && e.contains("StreamBuffer")),
         "should detect streaming + StreamBuffer incompatibility: {errors:?}"
     );
+}
+
+// -----------------------------------------------------------------------------
+// trace_context request matching
+// -----------------------------------------------------------------------------
+
+#[test]
+fn trace_propagation_enabled_for_unconditional_trace_context() {
+    let pipeline = FilterPipeline::from_filters(vec![super::test_filters::noop_filter("trace_context")]);
+    let request = crate::test_utils::make_request(Method::GET, "/");
+    assert!(pipeline.enables_trace_propagation(&request));
+}
+
+#[test]
+fn trace_propagation_honors_trace_context_conditions() {
+    let cond = praxis_core::config::Condition::When(praxis_core::config::ConditionMatch {
+        grpc: None,
+        path: None,
+        path_prefix: Some("/api".to_owned()),
+        methods: None,
+        headers: None,
+    });
+    let pipeline = FilterPipeline::from_filters(vec![super::test_filters::noop_filter_with_conditions(
+        "trace_context",
+        vec![cond],
+    )]);
+    let matching = crate::test_utils::make_request(Method::GET, "/api/models");
+    let skipped = crate::test_utils::make_request(Method::GET, "/healthz");
+    assert!(pipeline.enables_trace_propagation(&matching));
+    assert!(!pipeline.enables_trace_propagation(&skipped));
+}
+
+#[test]
+fn trace_propagation_disabled_when_absent() {
+    let pipeline = FilterPipeline::from_filters(vec![super::test_filters::noop_filter("rate_limit")]);
+    let request = crate::test_utils::make_request(Method::GET, "/");
+    assert!(!pipeline.enables_trace_propagation(&request));
 }
 
 // -----------------------------------------------------------------------------

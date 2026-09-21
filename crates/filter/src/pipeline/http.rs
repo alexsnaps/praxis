@@ -32,7 +32,8 @@ use crate::{
     actions::{FilterAction, Rejection, SelectedUpstreamBodyOutcome},
     any_filter::AnyFilter,
     condition::should_execute,
-    context::HttpFilterContext,
+    context::{EffectiveHeaders, HttpFilterContext},
+    trace_context::{TraceContext, ensure_trace_context},
 };
 
 // -----------------------------------------------------------------------------
@@ -60,6 +61,9 @@ impl FilterPipeline {
     #[expect(clippy::indexing_slicing, reason = "while loop bounds idx")]
     #[expect(clippy::too_many_lines, reason = "filter identity tracking adds lines per branch")]
     pub async fn execute_http_request(&self, ctx: &mut HttpFilterContext<'_>) -> Result<FilterAction, FilterError> {
+        if self.enables_trace_propagation(ctx.request) {
+            ensure_trace_context(ctx);
+        }
         ctx.executed_filter_indices.clear();
         ctx.executed_filter_indices.resize(self.filters.len(), false);
         ctx.body_done_indices.clear();
@@ -214,6 +218,7 @@ impl FilterPipeline {
         // access is a per-filter constant, so non-body filters cost
         // nothing per chunk.
         for &idx in &self.request_body_filter_indices {
+            self.ensure_matching_trace_context(ctx)?;
             let Some(pf) = self.filters.get(idx) else {
                 continue;
             };
@@ -253,7 +258,20 @@ impl FilterPipeline {
                 BodyFilterOutcome::Rejected(r) => return Ok(FilterAction::Reject(r)),
             }
         }
+        self.ensure_matching_trace_context(ctx)?;
         Ok(released_or_continue(released))
+    }
+
+    /// Initialize correlation when a trace filter matches the evolving pre-read headers.
+    fn ensure_matching_trace_context(&self, ctx: &mut HttpFilterContext<'_>) -> Result<(), FilterError> {
+        if ctx.extensions.get::<TraceContext>().is_none()
+            && self
+                .enables_trace_propagation_from(ctx.request, &EffectiveHeaders(ctx))
+                .map_err(|error| FilterError::from(format!("trace_context: {error}")))?
+        {
+            ensure_trace_context(ctx);
+        }
+        Ok(())
     }
 
     /// Run all selected-upstream request body filters in pipeline order.

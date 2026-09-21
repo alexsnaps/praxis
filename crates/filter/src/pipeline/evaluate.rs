@@ -36,6 +36,7 @@ use super::{
 };
 use crate::{
     FilterError, actions::FilterAction, any_filter::AnyFilter, condition::should_execute, context::HttpFilterContext,
+    trace_context::ensure_trace_context,
 };
 
 // -----------------------------------------------------------------------------
@@ -186,6 +187,7 @@ async fn execute_branch_filters(
     filters: &[PipelineFilter],
     ctx: &mut HttpFilterContext<'_>,
 ) -> Result<FilterAction, FilterError> {
+    ensure_branch_trace_context(filters, ctx);
     for pf in filters {
         let http_filter = match &pf.filter {
             AnyFilter::Http(f) => f.as_ref(),
@@ -213,6 +215,16 @@ async fn execute_branch_filters(
         }
     }
     Ok(FilterAction::Continue)
+}
+
+/// Initialize correlation only after a branch is selected and its trace filter matches.
+fn ensure_branch_trace_context(filters: &[PipelineFilter], ctx: &mut HttpFilterContext<'_>) {
+    if filters
+        .iter()
+        .any(|pf| pf.filter.name() == "trace_context" && should_execute(&pf.conditions, ctx.request))
+    {
+        ensure_trace_context(ctx);
+    }
 }
 
 /// Evaluate nested branches and convert their outcome for the parent.
@@ -287,7 +299,7 @@ fn map_nested_outcome(outcome: BranchOutcome) -> Option<FilterAction> {
     reason = "tests"
 )]
 mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use async_trait::async_trait;
     use bytes::Bytes;
@@ -401,6 +413,73 @@ mod tests {
             0,
             "mismatched branch filter should not have executed"
         );
+    }
+
+    #[tokio::test]
+    async fn selected_branch_enables_trace_context_before_earlier_callouts() {
+        let saw_context = Arc::new(AtomicBool::new(false));
+        let branches = vec![make_branch(
+            "selected_trace",
+            None,
+            RejoinTarget::Next,
+            None,
+            vec![
+                trace_probe_pf(Arc::clone(&saw_context)),
+                named_pf("trace_context", vec![]),
+            ],
+        )];
+        let req = crate::test_utils::make_request(Method::GET, "/");
+        let mut ctx = crate::test_utils::make_filter_context(&req);
+
+        drop(evaluate_branches(&branches, &mut ctx).await.unwrap());
+
+        assert!(saw_context.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn unselected_branch_does_not_enable_trace_context() {
+        let branches = vec![make_branch(
+            "skipped_trace",
+            Some(("cache", "status", "hit")),
+            RejoinTarget::Next,
+            None,
+            vec![named_pf("trace_context", vec![])],
+        )];
+        let req = crate::test_utils::make_request(Method::GET, "/");
+        let mut ctx = crate::test_utils::make_filter_context(&req);
+        let mut results = FilterResultSet::new();
+        results.set("status", "miss").unwrap();
+        ctx.filter_results.insert("cache", results);
+
+        drop(evaluate_branches(&branches, &mut ctx).await.unwrap());
+
+        assert!(ctx.extensions.get::<crate::trace_context::TraceContext>().is_none());
+    }
+
+    #[tokio::test]
+    async fn selected_branch_honors_trace_context_filter_conditions() {
+        let conditions = vec![praxis_core::config::Condition::When(
+            praxis_core::config::ConditionMatch {
+                grpc: None,
+                path: None,
+                path_prefix: Some("/api".to_owned()),
+                methods: None,
+                headers: None,
+            },
+        )];
+        let branches = vec![make_branch(
+            "conditional_trace",
+            None,
+            RejoinTarget::Next,
+            None,
+            vec![named_pf("trace_context", conditions)],
+        )];
+        let req = crate::test_utils::make_request(Method::GET, "/healthz");
+        let mut ctx = crate::test_utils::make_filter_context(&req);
+
+        drop(evaluate_branches(&branches, &mut ctx).await.unwrap());
+
+        assert!(ctx.extensions.get::<crate::trace_context::TraceContext>().is_none());
     }
 
     #[tokio::test]
@@ -982,6 +1061,40 @@ mod tests {
         }
     }
 
+    /// Noop filter with a caller-selected type name.
+    struct NamedFilter(&'static str);
+
+    #[async_trait]
+    impl HttpFilter for NamedFilter {
+        fn name(&self) -> &'static str {
+            self.0
+        }
+
+        async fn on_request(&self, _ctx: &mut HttpFilterContext<'_>) -> Result<FilterAction, FilterError> {
+            Ok(FilterAction::Continue)
+        }
+    }
+
+    /// Records whether trace context existed before this branch filter ran.
+    struct TraceContextProbe {
+        saw_context: Arc<AtomicBool>,
+    }
+
+    #[async_trait]
+    impl HttpFilter for TraceContextProbe {
+        fn name(&self) -> &'static str {
+            "trace_context_probe"
+        }
+
+        async fn on_request(&self, ctx: &mut HttpFilterContext<'_>) -> Result<FilterAction, FilterError> {
+            self.saw_context.store(
+                ctx.extensions.get::<crate::trace_context::TraceContext>().is_some(),
+                Ordering::SeqCst,
+            );
+            Ok(FilterAction::Continue)
+        }
+    }
+
     /// HTTP filter that counts on_request invocations.
     struct CountFilter {
         counter: Arc<AtomicUsize>,
@@ -1062,6 +1175,34 @@ mod tests {
             conditions: vec![],
             failure_mode: FailureMode::default(),
             filter: AnyFilter::Http(Box::new(CountFilter { counter })),
+            name: None,
+            response_conditions: vec![],
+        }
+    }
+
+    /// Build a named no-op [`PipelineFilter`] with request conditions.
+    fn named_pf(name: &'static str, conditions: Vec<praxis_core::config::Condition>) -> PipelineFilter {
+        PipelineFilter {
+            filter_id: NEXT_TEST_ID.fetch_add(1, Ordering::SeqCst),
+            is_security: false,
+            branches: vec![],
+            conditions,
+            failure_mode: FailureMode::default(),
+            filter: AnyFilter::Http(Box::new(NamedFilter(name))),
+            name: None,
+            response_conditions: vec![],
+        }
+    }
+
+    /// Build a filter that observes early branch trace initialization.
+    fn trace_probe_pf(saw_context: Arc<AtomicBool>) -> PipelineFilter {
+        PipelineFilter {
+            filter_id: NEXT_TEST_ID.fetch_add(1, Ordering::SeqCst),
+            is_security: false,
+            branches: vec![],
+            conditions: vec![],
+            failure_mode: FailureMode::default(),
+            filter: AnyFilter::Http(Box::new(TraceContextProbe { saw_context })),
             name: None,
             response_conditions: vec![],
         }

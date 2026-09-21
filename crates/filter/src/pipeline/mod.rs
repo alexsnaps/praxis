@@ -138,6 +138,9 @@ pub struct FilterPipeline {
     /// sub-request response.
     may_select_streaming_subrequest_response: bool,
 
+    /// Top-level `trace_context` filters whose conditions gate early propagation.
+    trace_context_filter_indices: Vec<usize>,
+
     /// External pipeline extensions injected after construction.
     pipeline_extensions: Vec<Box<dyn PipelineExtension>>,
 
@@ -339,6 +342,32 @@ impl FilterPipeline {
     /// ```
     pub fn contains_filter(&self, type_name: &str) -> bool {
         self.filters.iter().any(|pf| pf.filter.name() == type_name)
+    }
+
+    /// Whether a top-level `trace_context` filter matches this request.
+    pub(crate) fn enables_trace_propagation(&self, request: &crate::Request) -> bool {
+        self.trace_context_filter_indices.iter().any(|&idx| {
+            self.filters
+                .get(idx)
+                .is_some_and(|pf| crate::condition::should_execute(&pf.conditions, request))
+        })
+    }
+
+    /// Whether a top-level `trace_context` filter matches the supplied header view.
+    pub(crate) fn enables_trace_propagation_from<S: crate::condition::HeaderSource>(
+        &self,
+        request: &crate::Request,
+        headers: &S,
+    ) -> Result<bool, S::Error> {
+        for &idx in &self.trace_context_filter_indices {
+            let Some(pf) = self.filters.get(idx) else {
+                continue;
+            };
+            if crate::condition::should_execute_from(&pf.conditions, request, headers)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// Names of filters in this pipeline whose protocol level is not
