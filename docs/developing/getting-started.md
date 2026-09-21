@@ -3,9 +3,17 @@
 ## Requirements
 
 - Rust stable 1.96+
-- Rust nightly
+- Rust nightly (for `rustfmt`)
 - CMake 3.31+
 - Docker 29.3.0+ or Podman (for container builds)
+- `cargo-machete` (unused dependency detection, `make lint`)
+- `cargo-audit`, `cargo-deny` (supply chain safety, `make audit`)
+- `cargo-llvm-cov` (coverage, `make coverage-check`)
+- `cargo-semver-checks` (SemVer compliance, optional)
+- `cargo-mutants` (mutation testing, optional)
+- `cargo-hack` (feature matrix checks, optional)
+- `typos`, `taplo`, `shellcheck`, `actionlint`
+  (non-Rust lint, `make lint-extra`)
 
 ## Conventions
 
