@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use crate::{
     config::{
         ChainRef, Cluster, Condition, ConditionMatch, FilterChainConfig, FilterEntry, Listener, ResponseCondition,
-        SelectedUpstreamMatch, ResponseConditionMatch,
+        ResponseConditionMatch, SelectedUpstreamMatch,
     },
     errors::ProxyError,
 };

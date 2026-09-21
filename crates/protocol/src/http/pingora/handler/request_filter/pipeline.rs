@@ -155,12 +155,19 @@ pub(in crate::http) async fn execute(
                 ctx.pre_read_mutations = pre_read.mutations;
             },
             Err(PreReadError::Rejected(rejection)) => {
+                // A body-size (or filter) rejection raised while pre-reading a
+                // buffered body is the same proxy error as its streaming
+                // counterpart in request_body_filter::execute, which stamps
+                // FILTER_REJECT. Stamp it here too so buffered filters do not
+                // silently drop the request from praxis_errors_total.
+                ctx.stamp_error_type(crate::http::pingora::metrics::ERROR_TYPE_FILTER_REJECT);
                 ctx.request_snapshot = Some(request);
                 send_rejection_for(session, rejection, ctx).await;
                 return Ok(true);
             },
             Err(PreReadError::Filter(e)) => {
                 error!(error = %e, "body filter error during pre-read");
+                ctx.stamp_error_type(crate::http::pingora::metrics::ERROR_TYPE_INTERNAL);
                 ctx.request_snapshot = Some(request);
                 send_rejection_for(session, Rejection::status(500), ctx).await;
                 return Ok(true);
