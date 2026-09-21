@@ -20,7 +20,10 @@
 
 use std::{
     hint::black_box,
-    sync::{Arc, Barrier, atomic::{AtomicBool, AtomicUsize, Ordering}},
+    sync::{
+        Arc, Barrier,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
     thread,
     time::Instant,
 };

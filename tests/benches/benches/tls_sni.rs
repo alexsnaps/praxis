@@ -156,23 +156,28 @@ fn make_client_hello(target_size: usize, hostname: &str, position: ExtensionPosi
             if !hostname.is_empty() {
                 append_sni_extension(&mut buf, hostname);
             }
-            append_filler_extensions(&mut buf, target_size.saturating_sub(buf.len()));
+            let current_len = buf.len();
+            append_filler_extensions(&mut buf, target_size.saturating_sub(current_len));
         },
         ExtensionPosition::Mid => {
             append_filler_extensions(&mut buf, 60);
             if !hostname.is_empty() {
                 append_sni_extension(&mut buf, hostname);
             }
-            append_filler_extensions(&mut buf, target_size.saturating_sub(buf.len()));
+            let current_len = buf.len();
+            append_filler_extensions(&mut buf, target_size.saturating_sub(current_len));
         },
         ExtensionPosition::Late => {
-            append_filler_extensions(&mut buf, target_size.saturating_sub(buf.len() + hostname.len() + 20));
+            let current_len = buf.len();
+            let sni_size = hostname.len() + 20;
+            append_filler_extensions(&mut buf, target_size.saturating_sub(current_len + sni_size));
             if !hostname.is_empty() {
                 append_sni_extension(&mut buf, hostname);
             }
         },
         ExtensionPosition::NoSni => {
-            append_filler_extensions(&mut buf, target_size.saturating_sub(buf.len()));
+            let current_len = buf.len();
+            append_filler_extensions(&mut buf, target_size.saturating_sub(current_len));
         },
     }
 

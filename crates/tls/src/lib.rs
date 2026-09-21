@@ -40,7 +40,12 @@ pub mod sni_name;
 pub(crate) mod spiffe;
 #[cfg(any(test, feature = "bench-utils"))]
 #[expect(clippy::allow_attributes, reason = "blanket test suppressions")]
-#[allow(clippy::unwrap_used, clippy::expect_used, reason = "test utilities")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    dead_code,
+    reason = "test utilities not all used in every context"
+)]
 pub mod test_utils;
 #[cfg(feature = "config-reload")]
 pub mod watcher;

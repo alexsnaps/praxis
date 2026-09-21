@@ -21,7 +21,6 @@
 use std::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-
 use praxis_tls::{CertKeyPair, setup::sni, test_utils::gen_test_certs};
 
 // -----------------------------------------------------------------------------
@@ -45,9 +44,13 @@ fn bench_exact_hostname_lookup(c: &mut Criterion) {
         let resolver = build_resolver_with_exact_hostnames(count);
         let target = format!("host-{}.example.com", count / 2);
 
-        group.bench_with_input(BenchmarkId::from_parameter(label), &(resolver, target), |b, (resolver, target)| {
-            b.iter(|| black_box(resolver.lookup(black_box(Some(target))).unwrap()));
-        });
+        group.bench_with_input(
+            BenchmarkId::from_parameter(label),
+            &(resolver, target),
+            |b, (resolver, target)| {
+                b.iter(|| black_box(resolver.lookup(black_box(Some(target))).unwrap()));
+            },
+        );
     }
 
     group.finish();
@@ -61,9 +64,13 @@ fn bench_wildcard_lookup(c: &mut Criterion) {
         let resolver = build_resolver_with_wildcards(count);
         let target = format!("app-{}.domain-{}.com", count / 2, count / 2);
 
-        group.bench_with_input(BenchmarkId::from_parameter(label), &(resolver, target), |b, (resolver, target)| {
-            b.iter(|| black_box(resolver.lookup(black_box(Some(target))).unwrap()));
-        });
+        group.bench_with_input(
+            BenchmarkId::from_parameter(label),
+            &(resolver, target),
+            |b, (resolver, target)| {
+                b.iter(|| black_box(resolver.lookup(black_box(Some(target))).unwrap()));
+            },
+        );
     }
 
     // Wildcard miss path (multi-level subdomain should not match single-level wildcard)

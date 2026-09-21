@@ -23,7 +23,7 @@ mod common;
 use std::hint::black_box;
 
 use common::{bench_runtime, make_ctx, make_request};
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main, BatchSize};
+use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use praxis_core::config::{BranchChainConfig, ChainRef, ConditionMatch, OnResult, RejoinTarget};
 use praxis_filter::{FilterEntry, FilterPipeline, FilterRegistry, FilterResultSet, HttpFilter as _};
 
@@ -45,7 +45,10 @@ fn bench_pipeline_no_branches(c: &mut Criterion) {
     let rt = bench_runtime();
     let registry = FilterRegistry::with_builtins();
     let mut entries = vec![
-        filter_entry("router", "routes:\n  - path_prefix: /api/\n    cluster: api\n  - path_prefix: /\n    cluster: default"),
+        filter_entry(
+            "router",
+            "routes:\n  - path_prefix: /api/\n    cluster: api\n  - path_prefix: /\n    cluster: default",
+        ),
         filter_entry("headers", "request_add:\n  - name: X-Via\n    value: praxis"),
     ];
     let pipeline = FilterPipeline::build(&mut entries, &registry).unwrap();
@@ -149,14 +152,13 @@ fn bench_result_set_snapshot(c: &mut Criterion) {
                 FilterResultSet::new()
                     .with("status", "success")
                     .with("latency", "100ms")
-                    .with("attempts", &i.to_string())
+                    .with("attempts", &i.to_string()),
             );
         }
 
         group.bench_with_input(BenchmarkId::from_parameter(label), &results, |b, results| {
             b.iter(|| {
-                let _snapshot: std::collections::HashMap<&str, FilterResultSet> =
-                    black_box(results.clone());
+                let _snapshot: std::collections::HashMap<&str, FilterResultSet> = black_box(results.clone());
             });
         });
     }
@@ -177,22 +179,27 @@ fn build_pipeline_with_branches(branch_count: usize) -> FilterPipeline {
             name: Some(format!("branch_{i}")),
             on_result: Some(OnResult {
                 filter: None,
-                equals: Some(std::collections::HashMap::from([
-                    ("cluster".to_owned(), "api".to_owned())
-                ])),
+                equals: Some(std::collections::HashMap::from([(
+                    "cluster".to_owned(),
+                    "api".to_owned(),
+                )])),
                 not_equals: None,
             }),
             rejoin: RejoinTarget::Next,
-            filters: vec![
-                filter_entry("headers", &format!("request_add:\n  - name: X-Branch\n    value: branch_{i}"))
-            ],
+            filters: vec![filter_entry(
+                "headers",
+                &format!("request_add:\n  - name: X-Branch\n    value: branch_{i}"),
+            )],
         })
         .collect();
 
     let mut entries = vec![
         FilterEntry {
             filter_type: "router".into(),
-            config: serde_yaml::from_str("routes:\n  - path_prefix: /api/\n    cluster: api\n  - path_prefix: /\n    cluster: default").unwrap(),
+            config: serde_yaml::from_str(
+                "routes:\n  - path_prefix: /api/\n    cluster: api\n  - path_prefix: /\n    cluster: default",
+            )
+            .unwrap(),
             conditions: vec![],
             response_conditions: vec![],
             name: None,
@@ -217,15 +224,17 @@ fn build_pipeline_with_conditional_branches(branch_count: usize, _target_match: 
                 name: Some(format!("branch_{cluster}")),
                 on_result: Some(OnResult {
                     filter: None,
-                    equals: Some(std::collections::HashMap::from([
-                        ("cluster".to_owned(), cluster.to_owned())
-                    ])),
+                    equals: Some(std::collections::HashMap::from([(
+                        "cluster".to_owned(),
+                        cluster.to_owned(),
+                    )])),
                     not_equals: None,
                 }),
                 rejoin: RejoinTarget::Next,
-                filters: vec![
-                    filter_entry("headers", &format!("request_add:\n  - name: X-Cluster\n    value: {cluster}"))
-                ],
+                filters: vec![filter_entry(
+                    "headers",
+                    &format!("request_add:\n  - name: X-Cluster\n    value: {cluster}"),
+                )],
             }
         })
         .collect();
