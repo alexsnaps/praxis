@@ -400,14 +400,26 @@ publish:
 # merge-blocking gate from failing spuriously on loaded runners.
 coverage:
 	PRAXIS_TEST_READY_TIMEOUT_MS=30000 cargo llvm-cov --workspace --html --output-dir target/coverage \
+		--exclude praxis-tests-benches \
 		--exclude praxis-tests-conformance \
+		--exclude praxis-tests-integration \
+		--exclude praxis-tests-resilience \
+		--exclude praxis-tests-schema \
+		--exclude praxis-tests-security \
+		--exclude praxis-test-utils \
 		--exclude xtask \
 		--ignore-filename-regex '(target/|tests/|crates/server/src/main\.rs)' \
 		--fail-under-lines 96
 
 coverage-check:
 	PRAXIS_TEST_READY_TIMEOUT_MS=30000 cargo llvm-cov --workspace --json \
+		--exclude praxis-tests-benches \
 		--exclude praxis-tests-conformance \
+		--exclude praxis-tests-integration \
+		--exclude praxis-tests-resilience \
+		--exclude praxis-tests-schema \
+		--exclude praxis-tests-security \
+		--exclude praxis-test-utils \
 		--exclude xtask \
 		--ignore-filename-regex '(target/|tests/|crates/server/src/main\.rs)' \
 		--fail-under-lines 96 \
