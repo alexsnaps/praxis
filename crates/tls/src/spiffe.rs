@@ -661,18 +661,23 @@ mod tests {
 
         impl TestPki {
             fn new() -> Self {
-                let ca_key = KeyPair::generate().unwrap();
-                let mut ca_params = CertificateParams::new(Vec::<String>::new()).unwrap();
+                let ca_key = KeyPair::generate().expect("test CA key generation must succeed");
+                let mut ca_params = CertificateParams::new(Vec::<String>::new()).expect("test CA params must be valid");
                 ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
                 ca_params.distinguished_name.push(DnType::CommonName, "grid test CA");
-                let ca_cert = ca_params.self_signed(&ca_key).unwrap();
+                let ca_cert = ca_params
+                    .self_signed(&ca_key)
+                    .expect("test CA self-signing must succeed");
                 let ca_pem = ca_cert.pem();
                 let issuer = Issuer::new(ca_params, ca_key);
 
-                let server_key = KeyPair::generate().unwrap();
-                let mut server_params = CertificateParams::new(vec!["localhost".to_owned()]).unwrap();
+                let server_key = KeyPair::generate().expect("test server key generation must succeed");
+                let mut server_params =
+                    CertificateParams::new(vec!["localhost".to_owned()]).expect("test server params must be valid");
                 server_params.distinguished_name.push(DnType::CommonName, "localhost");
-                let server_cert = server_params.signed_by(&server_key, &issuer).unwrap();
+                let server_cert = server_params
+                    .signed_by(&server_key, &issuer)
+                    .expect("test server cert signing must succeed");
 
                 Self {
                     ca_pem,
@@ -690,16 +695,21 @@ mod tests {
                 uri: &str,
                 conforming: bool,
             ) -> (Vec<CertificateDer<'static>>, PrivateKeyDer<'static>) {
-                let key = KeyPair::generate().unwrap();
-                let mut params = CertificateParams::new(Vec::<String>::new()).unwrap();
+                let key = KeyPair::generate().expect("test client key generation must succeed");
+                let mut params =
+                    CertificateParams::new(Vec::<String>::new()).expect("test client params must be valid");
                 params.distinguished_name.push(DnType::CommonName, "peer");
-                params.subject_alt_names.push(SanType::URI(uri.try_into().unwrap()));
+                params
+                    .subject_alt_names
+                    .push(SanType::URI(uri.try_into().expect("test URI must be valid")));
                 if conforming {
                     params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
                     params.extended_key_usages =
                         vec![ExtendedKeyUsagePurpose::ServerAuth, ExtendedKeyUsagePurpose::ClientAuth];
                 }
-                let cert = params.signed_by(&key, &self.issuer).unwrap();
+                let cert = params
+                    .signed_by(&key, &self.issuer)
+                    .expect("test client cert signing must succeed");
                 let chain = vec![cert.der().clone()];
                 let key_der = PrivateKeyDer::Pkcs8(key.serialize_der().into());
                 (chain, key_der)
@@ -710,13 +720,13 @@ mod tests {
         /// `require_named` and the given allowlist.
         fn server_config(pki: &TestPki, allowlist: &[&str]) -> Arc<rustls::ServerConfig> {
             install_provider();
-            let dir = tempfile::TempDir::new().unwrap();
+            let dir = tempfile::TempDir::new().expect("test temp dir must be created");
             let ca = dir.path().join("ca.pem");
             let cert = dir.path().join("server.pem");
             let key = dir.path().join("server-key.pem");
-            std::fs::write(&ca, &pki.ca_pem).unwrap();
-            std::fs::write(&cert, &pki.server_pem).unwrap();
-            std::fs::write(&key, &pki.server_key_pem).unwrap();
+            std::fs::write(&ca, &pki.ca_pem).expect("test CA write must succeed");
+            std::fs::write(&cert, &pki.server_pem).expect("test cert write must succeed");
+            std::fs::write(&key, &pki.server_key_pem).expect("test key write must succeed");
 
             let ids = allowlist
                 .iter()
@@ -743,15 +753,17 @@ mod tests {
             install_provider();
             let mut roots = RootCertStore::empty();
             roots
-                .add(CertificateDer::from_pem_slice(pki.ca_pem.as_bytes()).unwrap())
-                .unwrap();
+                .add(CertificateDer::from_pem_slice(pki.ca_pem.as_bytes()).expect("test CA PEM must parse"))
+                .expect("test CA must be added to root store");
             let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
             let builder = ClientConfig::builder_with_provider(provider)
                 .with_safe_default_protocol_versions()
-                .unwrap()
+                .expect("test protocol versions must be valid")
                 .with_root_certificates(roots);
             let config = match identity {
-                Some((chain, key)) => builder.with_client_auth_cert(chain, key).unwrap(),
+                Some((chain, key)) => builder
+                    .with_client_auth_cert(chain, key)
+                    .expect("test client auth cert must be valid"),
                 None => builder.with_no_client_auth(),
             };
             Arc::new(config)
@@ -759,31 +771,39 @@ mod tests {
 
         /// Drive an in-memory handshake to completion or error. `Ok` means both sides
         /// finished; `Err` is the rustls error that ended it (an mTLS rejection).
+        #[allow(
+            clippy::panic,
+            reason = "panic signals test infrastructure failure, not handshake failure"
+        )]
         fn handshake(
             server_cfg: Arc<rustls::ServerConfig>,
             client_cfg: Arc<ClientConfig>,
         ) -> Result<(), rustls::Error> {
-            let mut server = ServerConnection::new(server_cfg).unwrap();
-            let mut client = ClientConnection::new(client_cfg, ServerName::try_from("localhost").unwrap()).unwrap();
+            let mut server = ServerConnection::new(server_cfg).expect("test server connection must be created");
+            let mut client = ClientConnection::new(
+                client_cfg,
+                ServerName::try_from("localhost").expect("test server name must be valid"),
+            )
+            .expect("test client connection must be created");
 
             for _ in 0..32 {
                 let mut c2s = Vec::new();
                 while client.wants_write() {
-                    client.write_tls(&mut c2s).unwrap();
+                    client.write_tls(&mut c2s).expect("test TLS write must succeed");
                 }
                 let mut c2s_rd: &[u8] = &c2s;
                 while !c2s_rd.is_empty() {
-                    server.read_tls(&mut c2s_rd).unwrap();
+                    server.read_tls(&mut c2s_rd).expect("test TLS read must succeed");
                 }
                 server.process_new_packets()?;
 
                 let mut s2c = Vec::new();
                 while server.wants_write() {
-                    server.write_tls(&mut s2c).unwrap();
+                    server.write_tls(&mut s2c).expect("test TLS write must succeed");
                 }
                 let mut s2c_rd: &[u8] = &s2c;
                 while !s2c_rd.is_empty() {
-                    client.read_tls(&mut s2c_rd).unwrap();
+                    client.read_tls(&mut s2c_rd).expect("test TLS read must succeed");
                 }
                 client.process_new_packets()?;
 

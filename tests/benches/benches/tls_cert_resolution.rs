@@ -7,16 +7,7 @@
 //! matching, and default certificate fallback paths with varying
 //! certificate pool sizes.
 
-#![expect(
-    clippy::arithmetic_side_effects,
-    clippy::min_ident_chars,
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::indexing_slicing,
-    clippy::too_many_lines,
-    clippy::as_conversions,
-    reason = "benchmarks"
-)]
+#![expect(clippy::min_ident_chars, clippy::unwrap_used, reason = "benchmarks")]
 
 use std::hint::black_box;
 
@@ -98,9 +89,15 @@ fn bench_fallback_lookup(c: &mut Criterion) {
     });
 
     // Miss without default (returns None)
-    let resolver = build_resolver_with_exact_hostnames(100);
+    let resolver_no_default = build_resolver_with_exact_hostnames(100);
     group.bench_function("no_default_miss", |b| {
-        b.iter(|| black_box(resolver.lookup(black_box(Some("unknown.example.com"))).is_none()));
+        b.iter(|| {
+            black_box(
+                resolver_no_default
+                    .lookup(black_box(Some("unknown.example.com")))
+                    .is_none(),
+            )
+        });
     });
 
     // No SNI with default (returns default cert)
@@ -109,9 +106,9 @@ fn bench_fallback_lookup(c: &mut Criterion) {
     });
 
     // No SNI without default (returns None)
-    let resolver_no_default = build_resolver_with_exact_hostnames(100);
+    let resolver_no_sni_no_default = build_resolver_with_exact_hostnames(100);
     group.bench_function("no_sni_no_default", |b| {
-        b.iter(|| black_box(resolver_no_default.lookup(black_box(None)).is_none()));
+        b.iter(|| black_box(resolver_no_sni_no_default.lookup(black_box(None)).is_none()));
     });
 
     group.finish();

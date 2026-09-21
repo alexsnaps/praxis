@@ -11,10 +11,12 @@
     clippy::arithmetic_side_effects,
     clippy::min_ident_chars,
     clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::indexing_slicing,
     clippy::too_many_lines,
-    clippy::as_conversions,
+    clippy::missing_assert_message,
+    clippy::disallowed_methods,
+    clippy::drop_non_drop,
+    clippy::unit_arg,
+    clippy::map_with_unused_argument_over_ranges,
     reason = "benchmarks"
 )]
 
@@ -25,10 +27,10 @@ use std::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     thread,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
-use criterion::{BenchmarkGroup, BenchmarkId, Criterion, criterion_group, criterion_main, measurement::WallTime};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use praxis_core::circuit::{CircuitBreaker, CircuitBreakerConfig, CircuitCheck};
 
 // -----------------------------------------------------------------------------
@@ -49,9 +51,9 @@ criterion_main!(benches);
 /// Benchmark token acquisition when the circuit is closed (always succeeds).
 fn bench_acquire_closed(c: &mut Criterion) {
     let breaker = CircuitBreaker::new(CircuitBreakerConfig {
-        failure_threshold: 5,
-        recovery_window_ms: 10_000,
-        half_open_max_requests: 1,
+        threshold: 5,
+        recovery_window: Duration::from_millis(10_000),
+        half_open_timeout: Duration::from_millis(5_000),
     });
 
     c.bench_function("circuit_breaker/acquire_closed", |b| {
@@ -65,9 +67,9 @@ fn bench_acquire_closed(c: &mut Criterion) {
 /// Benchmark token acquisition when the circuit is open (fast reject).
 fn bench_acquire_open(c: &mut Criterion) {
     let breaker = CircuitBreaker::new(CircuitBreakerConfig {
-        failure_threshold: 1,
-        recovery_window_ms: 10_000,
-        half_open_max_requests: 1,
+        threshold: 1,
+        recovery_window: Duration::from_millis(10_000),
+        half_open_timeout: Duration::from_millis(5_000),
     });
 
     // Trigger circuit open by recording a failure
@@ -86,16 +88,16 @@ fn bench_acquire_open(c: &mut Criterion) {
 /// Benchmark token acquisition when the circuit is half-open (probe token).
 fn bench_acquire_half_open(c: &mut Criterion) {
     let breaker = CircuitBreaker::new(CircuitBreakerConfig {
-        failure_threshold: 1,
-        recovery_window_ms: 0, // Immediate recovery for benchmark
-        half_open_max_requests: 1,
+        threshold: 1,
+        recovery_window: Duration::from_millis(0), // Immediate recovery for benchmark
+        half_open_timeout: Duration::from_millis(5_000),
     });
 
     // Trigger circuit open then wait for recovery window
     if let CircuitCheck::Allowed(token) = breaker.try_acquire() {
         breaker.record_failure(token);
     }
-    std::thread::sleep(std::time::Duration::from_millis(10));
+    thread::sleep(Duration::from_millis(10));
 
     c.bench_function("circuit_breaker/acquire_half_open", |b| {
         b.iter(|| {
@@ -109,9 +111,9 @@ fn bench_acquire_half_open(c: &mut Criterion) {
 /// Benchmark recording a successful request.
 fn bench_record_success(c: &mut Criterion) {
     let breaker = CircuitBreaker::new(CircuitBreakerConfig {
-        failure_threshold: 100,
-        recovery_window_ms: 10_000,
-        half_open_max_requests: 1,
+        threshold: 100,
+        recovery_window: Duration::from_millis(10_000),
+        half_open_timeout: Duration::from_millis(5_000),
     });
 
     c.bench_function("circuit_breaker/record_success", |b| {
@@ -130,9 +132,9 @@ fn bench_record_failure(c: &mut Criterion) {
         b.iter_batched(
             || {
                 CircuitBreaker::new(CircuitBreakerConfig {
-                    failure_threshold: 100,
-                    recovery_window_ms: 10_000,
-                    half_open_max_requests: 1,
+                    threshold: 100,
+                    recovery_window: Duration::from_millis(10_000),
+                    half_open_timeout: Duration::from_millis(5_000),
                 })
             },
             |breaker| {
@@ -170,9 +172,9 @@ fn bench_concurrent_access(c: &mut Criterion) {
 fn bench_concurrent_closed(b: &mut criterion::Bencher<'_>, thread_count: usize) {
     b.iter_custom(|iterations| {
         let breaker = Arc::new(CircuitBreaker::new(CircuitBreakerConfig {
-            failure_threshold: 1_000_000,
-            recovery_window_ms: 10_000,
-            half_open_max_requests: 1,
+            threshold: 1_000_000,
+            recovery_window: Duration::from_millis(10_000),
+            half_open_timeout: Duration::from_millis(5_000),
         }));
         let ready = Arc::new(Barrier::new(thread_count + 1));
         let go = Arc::new(AtomicBool::new(false));
@@ -225,9 +227,9 @@ fn bench_concurrent_closed(b: &mut criterion::Bencher<'_>, thread_count: usize) 
 fn bench_concurrent_open(b: &mut criterion::Bencher<'_>, thread_count: usize) {
     b.iter_custom(|iterations| {
         let breaker = Arc::new(CircuitBreaker::new(CircuitBreakerConfig {
-            failure_threshold: 1,
-            recovery_window_ms: 1_000_000, // Very long window to keep it open
-            half_open_max_requests: 1,
+            threshold: 1,
+            recovery_window: Duration::from_millis(1_000_000), // Very long window to keep it open
+            half_open_timeout: Duration::from_millis(5_000),
         }));
 
         // Trigger circuit open

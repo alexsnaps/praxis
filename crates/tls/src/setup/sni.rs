@@ -150,6 +150,9 @@ impl SniCertResolver {
         self.lookup_impl(sni)
     }
 
+    /// Perform SNI lookup with case-insensitive matching and wildcard support.
+    ///
+    /// Returns the exact match if found, falls back to wildcard match, then default.
     fn lookup_impl(&self, sni: Option<&str>) -> Option<Arc<CertifiedKey>> {
         let Some(sni) = sni else {
             return self.default.as_ref().map(Arc::clone);
@@ -196,6 +199,10 @@ impl ResolvesServerCert for SniCertResolver {
 /// The entry with `default: true` becomes the fallback certificate.
 /// If no entry has `default: true`, unmatched SNI is rejected
 /// (the resolver returns `None`).
+///
+/// # Errors
+///
+/// Returns an error if certificate loading fails or if duplicate server names are registered.
 #[cfg(not(feature = "bench-utils"))]
 pub(super) fn build_sni_resolver(certificates: &[CertKeyPair]) -> Result<SniCertResolver, TlsError> {
     build_sni_resolver_impl(certificates)
@@ -204,11 +211,18 @@ pub(super) fn build_sni_resolver(certificates: &[CertKeyPair]) -> Result<SniCert
 /// Build an [`SniCertResolver`] from a list of certificate entries.
 ///
 /// Public variant for benchmarks (enabled with bench-utils feature).
+///
+/// # Errors
+///
+/// Returns an error if certificate loading fails or if duplicate server names are registered.
 #[cfg(feature = "bench-utils")]
 pub fn build_sni_resolver(certificates: &[CertKeyPair]) -> Result<SniCertResolver, TlsError> {
     build_sni_resolver_impl(certificates)
 }
 
+/// Build the SNI resolver from certificate entries.
+///
+/// Shared implementation for both the public and private variants of `build_sni_resolver`.
 fn build_sni_resolver_impl(certificates: &[CertKeyPair]) -> Result<SniCertResolver, TlsError> {
     let mut certs = HashMap::new();
     let mut wildcard_certs = HashMap::new();

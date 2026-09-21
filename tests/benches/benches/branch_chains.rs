@@ -11,10 +11,8 @@
     clippy::arithmetic_side_effects,
     clippy::min_ident_chars,
     clippy::unwrap_used,
-    clippy::expect_used,
     clippy::indexing_slicing,
     clippy::too_many_lines,
-    clippy::as_conversions,
     reason = "benchmarks"
 )]
 
@@ -24,8 +22,8 @@ use std::hint::black_box;
 
 use common::{bench_runtime, make_ctx, make_request};
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
-use praxis_core::config::{BranchChainConfig, ChainRef, ConditionMatch, OnResult, RejoinTarget};
-use praxis_filter::{FilterEntry, FilterPipeline, FilterRegistry, FilterResultSet, HttpFilter as _};
+use praxis_core::config::{BranchChainConfig, BranchCondition, ChainRef};
+use praxis_filter::{FilterEntry, FilterPipeline, FilterRegistry, FilterResultSet};
 
 // -----------------------------------------------------------------------------
 // Benchmarks
@@ -95,7 +93,7 @@ fn bench_branch_condition_matching(c: &mut Criterion) {
 
     // Build three different pipelines for different match scenarios
     let pipeline_api = build_pipeline_with_conditional_branches(3, "api");
-    let pipeline_app = build_pipeline_with_conditional_branches(3, "app");
+    let _pipeline_app = build_pipeline_with_conditional_branches(3, "app");
     let pipeline_other = build_pipeline_with_conditional_branches(3, "other");
 
     // Condition that matches (first branch fires)
@@ -147,18 +145,16 @@ fn bench_result_set_snapshot(c: &mut Criterion) {
     for &(label, result_count) in &[("1", 1), ("5", 5), ("10", 10)] {
         let mut results = std::collections::HashMap::new();
         for i in 0..result_count {
-            results.insert(
-                format!("filter_{i}").leak() as &'static str,
-                FilterResultSet::new()
-                    .with("status", "success")
-                    .with("latency", "100ms")
-                    .with("attempts", &i.to_string()),
-            );
+            let mut result_set = FilterResultSet::new();
+            result_set.set("status", "success").unwrap();
+            result_set.set("latency", "100ms").unwrap();
+            result_set.set("attempts", i.to_string()).unwrap();
+            results.insert(format!("filter_{i}"), result_set);
         }
 
         group.bench_with_input(BenchmarkId::from_parameter(label), &results, |b, results| {
             b.iter(|| {
-                let _snapshot: std::collections::HashMap<&str, FilterResultSet> = black_box(results.clone());
+                let _snapshot = black_box(results.clone());
             });
         });
     }
@@ -176,20 +172,21 @@ fn build_pipeline_with_branches(branch_count: usize) -> FilterPipeline {
 
     let branch_chains: Vec<BranchChainConfig> = (0..branch_count)
         .map(|i| BranchChainConfig {
-            name: Some(format!("branch_{i}")),
-            on_result: Some(OnResult {
-                filter: None,
-                equals: Some(std::collections::HashMap::from([(
-                    "cluster".to_owned(),
-                    "api".to_owned(),
-                )])),
-                not_equals: None,
+            name: format!("branch_{i}"),
+            on_result: Some(BranchCondition {
+                filter: "router".to_owned(),
+                key: "cluster".to_owned(),
+                value: "api".to_owned(),
             }),
-            rejoin: RejoinTarget::Next,
-            filters: vec![filter_entry(
-                "headers",
-                &format!("request_add:\n  - name: X-Branch\n    value: branch_{i}"),
-            )],
+            rejoin: "next".to_owned(),
+            max_iterations: None,
+            chains: vec![ChainRef::Inline {
+                name: format!("chain_{i}"),
+                filters: vec![filter_entry(
+                    "headers",
+                    &format!("request_add:\n  - name: X-Branch\n    value: branch_{i}"),
+                )],
+            }],
         })
         .collect();
 
@@ -221,20 +218,21 @@ fn build_pipeline_with_conditional_branches(branch_count: usize, _target_match: 
         .map(|i| {
             let cluster = cluster_values[i % cluster_values.len()];
             BranchChainConfig {
-                name: Some(format!("branch_{cluster}")),
-                on_result: Some(OnResult {
-                    filter: None,
-                    equals: Some(std::collections::HashMap::from([(
-                        "cluster".to_owned(),
-                        cluster.to_owned(),
-                    )])),
-                    not_equals: None,
+                name: format!("branch_{cluster}"),
+                on_result: Some(BranchCondition {
+                    filter: "router".to_owned(),
+                    key: "cluster".to_owned(),
+                    value: cluster.to_owned(),
                 }),
-                rejoin: RejoinTarget::Next,
-                filters: vec![filter_entry(
-                    "headers",
-                    &format!("request_add:\n  - name: X-Cluster\n    value: {cluster}"),
-                )],
+                rejoin: "next".to_owned(),
+                max_iterations: None,
+                chains: vec![ChainRef::Inline {
+                    name: format!("chain_{cluster}"),
+                    filters: vec![filter_entry(
+                        "headers",
+                        &format!("request_add:\n  - name: X-Cluster\n    value: {cluster}"),
+                    )],
+                }],
             }
         })
         .collect();

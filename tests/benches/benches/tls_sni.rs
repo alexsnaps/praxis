@@ -3,7 +3,7 @@
 
 //! Criterion benchmarks for TLS SNI parsing and certificate resolution.
 //!
-//! Covers ClientHello SNI extraction (varying sizes, SNI positions,
+//! Covers `ClientHello` SNI extraction (varying sizes, SNI positions,
 //! malformed inputs) and certificate lookup (exact hostname, wildcard
 //! matching, fallback paths).
 
@@ -11,10 +11,10 @@
     clippy::arithmetic_side_effects,
     clippy::min_ident_chars,
     clippy::unwrap_used,
-    clippy::expect_used,
     clippy::indexing_slicing,
     clippy::too_many_lines,
     clippy::as_conversions,
+    clippy::cast_possible_truncation,
     reason = "benchmarks"
 )]
 
@@ -29,7 +29,7 @@ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 criterion_group!(benches, bench_sni_parsing, bench_sni_parsing_errors);
 criterion_main!(benches);
 
-/// Benchmark SNI parsing with varying ClientHello sizes and SNI positions.
+/// Benchmark SNI parsing with varying `ClientHello` sizes and SNI positions.
 fn bench_sni_parsing(c: &mut Criterion) {
     let mut group = c.benchmark_group("sni_parse");
 
@@ -114,7 +114,7 @@ enum ExtensionPosition {
     NoSni,
 }
 
-/// Build a minimal TLS 1.3 ClientHello with the SNI hostname at the given position.
+/// Build a minimal TLS 1.3 `ClientHello` with the SNI hostname at the given position.
 ///
 /// The `target_size` is approximate; the actual size may vary by a few bytes due to
 /// extension header overhead.
@@ -222,7 +222,7 @@ fn append_sni_extension(buf: &mut Vec<u8>, hostname: &str) {
     buf.extend_from_slice(hostname.as_bytes());
 }
 
-/// Append supported_versions, supported_groups, and padding extensions.
+/// Append `supported_versions`, `supported_groups`, and padding extensions.
 fn append_filler_extensions(buf: &mut Vec<u8>, min_bytes: usize) {
     let initial_len = buf.len();
 
@@ -250,7 +250,7 @@ fn append_filler_extensions(buf: &mut Vec<u8>, min_bytes: usize) {
     }
 }
 
-/// Build a ServerHello (HandshakeType=2) for the error path bench.
+/// Build a `ServerHello` (HandshakeType=2) for the error path bench.
 fn make_server_hello() -> Vec<u8> {
     let mut buf = Vec::new();
     // TLS record header
@@ -274,7 +274,7 @@ fn make_server_hello() -> Vec<u8> {
     buf
 }
 
-/// Build a ClientHello with a malformed SNI extension (truncated hostname).
+/// Build a `ClientHello` with a malformed SNI extension (truncated hostname).
 fn make_malformed_sni_hello() -> Vec<u8> {
     let mut buf = Vec::new();
     // TLS record header
