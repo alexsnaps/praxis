@@ -10,7 +10,10 @@
 //! [`ListenerTls`]: crate::ListenerTls
 
 pub(crate) mod loader;
+#[cfg(not(feature = "bench-utils"))]
 mod sni;
+#[cfg(feature = "bench-utils")]
+pub mod sni;
 
 use std::sync::Arc;
 

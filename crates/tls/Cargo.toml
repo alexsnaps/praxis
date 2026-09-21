@@ -20,6 +20,8 @@ workspace = true
 config-reload = ["dep:arc-swap", "dep:notify", "dep:tokio"]
 # SPIFFE X.509-SVID mTLS peer identity. Off by default; experimental.
 spiffe = ["dep:spiffe", "dep:x509-parser"]
+# Expose test utilities for benchmarks.
+bench-utils = []
 
 [dependencies]
 arc-swap = { workspace = true, optional = true }
