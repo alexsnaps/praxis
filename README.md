@@ -7,8 +7,7 @@
 [![MSRV: 1.96](https://img.shields.io/badge/MSRV-1.96-brightgreen.svg)](https://blog.rust-lang.org/)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-Praxis is a [Rust]-based high-performance security-focused framework for
-building **proxy servers**.
+Praxis is a [Rust]-based framework for building **proxy servers**.
 
 [Rust]:https://github.com/rust-lang/rust
 
@@ -19,7 +18,9 @@ building **proxy servers**.
 
 ## Documentation
 
-Full documentation index: [docs/README.md](docs/README.md)
+Documentation is available here: [docs/README.md](docs/README.md)
+
+If you're new to Praxis, you may want to check these out first:
 
 - [Configuration](docs/operating/configuration.md)
 - [Features](docs/features.md)
@@ -36,22 +37,31 @@ Full documentation index: [docs/README.md](docs/README.md)
 ## Contributing
 
 [Issues] and [pull requests] are welcome. Familiarize yourself
-with the following documentation first:
+with the following documentation before submissions:
 
 - [Architecture](docs/architecture/overview.md)
 - [Conventions](docs/developing/conventions.md)
 - [Development](docs/developing/getting-started.md)
 - [Benchmarks](docs/benchmarks.md)
 
-For larger changes, follow the [proposal process].
-
-Please join us in our Slack channel on [CNCF Slack]: [#praxis] channel.
+For large and complex changes, follow the [proposal process].
 
 Everyone is expected to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 [Issues]:https://github.com/praxis-proxy/praxis/issues/new
 [pull requests]:https://github.com/praxis-proxy/praxis/compare
-[discussion]:https://github.com/praxis-proxy/praxis/discussions
 [CNCF Slack]:https://slack.cncf.io
 [#praxis]:https://cloud-native.slack.com/archives/C0BK0RSP5RC
 [proposal process]:https://github.com/praxis-proxy/enhancements
+
+## Community
+
+Feel free to join our [discussion forums] to ask questions or share ideas.
+
+Or please join us in our Slack channel on [CNCF Slack]: [#praxis] channel
+
+[discussion forums]:https://github.com/praxis-proxy/praxis/discussions
+
+## License
+
+[Apache-2.0](LICENSE)
