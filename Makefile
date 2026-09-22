@@ -398,15 +398,19 @@ publish:
 # Coverage instrumentation slows server startup, so give the test-readiness
 # helpers a generous deadline (see PRAXIS_TEST_READY_TIMEOUT_MS) to keep the
 # merge-blocking gate from failing spuriously on loaded runners.
+#
+# The integration, resilience, security, and schema suites must still RUN here:
+# they drive the server, protocol handlers, and hot-reload paths that unit tests
+# cannot reach, and that lib coverage is what keeps the workspace above the
+# threshold. Only their own source is kept out of the measurement, via the
+# --ignore-filename-regex 'tests/' below. `cargo llvm-cov --exclude <pkg>` would
+# stop those tests running entirely, dropping the covered lib code with them, so
+# only genuinely non-contributing packages are excluded: benches (no #[test]
+# cases), conformance (needs the external h2spec binary), and xtask (dev tool).
 coverage:
 	PRAXIS_TEST_READY_TIMEOUT_MS=30000 cargo llvm-cov --workspace --html --output-dir target/coverage \
 		--exclude praxis-tests-benches \
 		--exclude praxis-tests-conformance \
-		--exclude praxis-tests-integration \
-		--exclude praxis-tests-resilience \
-		--exclude praxis-tests-schema \
-		--exclude praxis-tests-security \
-		--exclude praxis-test-utils \
 		--exclude xtask \
 		--ignore-filename-regex '(target/|tests/|crates/server/src/main\.rs)' \
 		--fail-under-lines 96
@@ -415,11 +419,6 @@ coverage-check:
 	PRAXIS_TEST_READY_TIMEOUT_MS=30000 cargo llvm-cov --workspace --json \
 		--exclude praxis-tests-benches \
 		--exclude praxis-tests-conformance \
-		--exclude praxis-tests-integration \
-		--exclude praxis-tests-resilience \
-		--exclude praxis-tests-schema \
-		--exclude praxis-tests-security \
-		--exclude praxis-test-utils \
 		--exclude xtask \
 		--ignore-filename-regex '(target/|tests/|crates/server/src/main\.rs)' \
 		--fail-under-lines 96 \
