@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright (c) 2024 Praxis Contributors
+// Copyright (c) 2026 Praxis Contributors
 
 //! Wildcard-aware SNI matching, shared by certificate selection and SNI
 //! routing.
@@ -16,9 +16,6 @@
 //!
 //! Exact matches always win over wildcards. Matching is case-insensitive
 //! ([RFC 4343]); a single trailing dot on the looked-up hostname is ignored.
-//!
-//! See `CONTEXT.md` (TLS / SNI) and `docs/adr/0001-sni-wildcard-match-policies.md`
-//! for why the divergence is deliberate.
 //!
 //! [RFC 9525]: https://datatracker.ietf.org/doc/html/rfc9525
 //! [RFC 4343]: https://datatracker.ietf.org/doc/html/rfc4343
