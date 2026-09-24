@@ -199,7 +199,7 @@ impl LoadBalancerFilter {
     fn resolve_cluster<'a>(
         &'a self,
         ctx: &mut HttpFilterContext<'_>,
-    ) -> Result<(Arc<str>, &'a ClusterEntry), FilterError> {
+    ) -> Result<(&'a Arc<str>, &'a ClusterEntry), FilterError> {
         match self.cluster_source {
             ClusterSource::Router => self.resolve_from_router(ctx),
             ClusterSource::BoundUpstream => self.resolve_from_bound_upstream(ctx),
@@ -210,19 +210,17 @@ impl LoadBalancerFilter {
     fn resolve_from_router<'a>(
         &'a self,
         ctx: &HttpFilterContext<'_>,
-    ) -> Result<(Arc<str>, &'a ClusterEntry), FilterError> {
+    ) -> Result<(&'a Arc<str>, &'a ClusterEntry), FilterError> {
         let Some(cluster) = ctx.cluster.as_ref() else {
             return Err(
                 "load_balancer filter: no cluster set in context (is a router filter configured before this?)".into(),
             );
         };
-        let (key, entry) = self
-            .clusters
+        self.clusters
             .get_key_value(cluster.as_ref())
             .ok_or_else(|| -> FilterError {
                 format!("load_balancer filter: unknown cluster '{}'", cluster.as_ref()).into()
-            })?;
-        Ok((Arc::clone(key), entry))
+            })
     }
 
     /// Resolve the frozen logical binding, seeding [`HttpFilterContext::cluster`]
@@ -232,7 +230,7 @@ impl LoadBalancerFilter {
     fn resolve_from_bound_upstream<'a>(
         &'a self,
         ctx: &mut HttpFilterContext<'_>,
-    ) -> Result<(Arc<str>, &'a ClusterEntry), FilterError> {
+    ) -> Result<(&'a Arc<str>, &'a ClusterEntry), FilterError> {
         let Some(bound) = ctx.bound_cluster() else {
             return Err(
                 "load_balancer filter: cluster_source is bound_upstream but no upstream is bound \
@@ -243,18 +241,17 @@ impl LoadBalancerFilter {
         let (key, entry) = self.clusters.get_key_value(bound).ok_or_else(|| -> FilterError {
             format!("load_balancer filter: bound cluster '{bound}' not declared in this load_balancer").into()
         })?;
-        let cluster = Arc::clone(key);
         if let Some(selected) = ctx.cluster.as_deref()
-            && selected != cluster.as_ref()
+            && selected != key.as_ref()
         {
             return Err(format!(
                 "load_balancer filter: exchange cluster '{selected}' conflicts with bound cluster '{}'",
-                cluster.as_ref(),
+                key.as_ref(),
             )
             .into());
         }
-        ctx.cluster = Some(Arc::clone(&cluster));
-        Ok((cluster, entry))
+        ctx.cluster = Some(Arc::clone(key));
+        Ok((key, entry))
     }
 
     /// Look up health state for `cluster_name` from the context's
@@ -354,7 +351,7 @@ impl HttpFilter for LoadBalancerFilter {
             && h.endpoints().iter().all(|ep| !ep.is_healthy())
         {
             warn!(cluster = %cluster_name, "all endpoints unhealthy, routing to all (panic mode)");
-            crate::metrics::record_lb_panic_mode(SharedString::from(Arc::clone(&cluster)));
+            crate::metrics::record_lb_panic_mode(SharedString::from(Arc::clone(cluster)));
         }
 
         let addr = entry.strategy.select(ctx, health, &[]).ok_or_else(|| -> FilterError {

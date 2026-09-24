@@ -657,10 +657,14 @@ impl HttpFilterContext<'_> {
     /// `application_provider`. Returns an empty view (matching nothing) when no
     /// upstream has been bound.
     pub(crate) fn bound_upstream_view(&self) -> crate::condition::BoundUpstreamView<'_> {
-        crate::condition::BoundUpstreamView {
-            protocol: self.bound_application_protocol(),
-            provider: self.bound_application_provider(),
-        }
+        self.extensions
+            .get::<BoundUpstream>()
+            .map_or_else(crate::condition::BoundUpstreamView::default, |bound| {
+                crate::condition::BoundUpstreamView {
+                    protocol: bound.application_protocol(),
+                    provider: bound.application_provider(),
+                }
+            })
     }
 
     /// Publish (or replace) the logical upstream binding for this request.
