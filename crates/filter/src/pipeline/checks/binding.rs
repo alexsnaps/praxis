@@ -1010,6 +1010,7 @@ mod tests {
         },
         test_filters::{
             binding_router, bound_lb, lb_filter, metadata_filter, noop_filter_with_conditions, selector_filter,
+            terminal_filter,
         },
     };
 
@@ -2219,12 +2220,12 @@ mod tests {
 
     #[test]
     fn binding_control_flow_terminal_host_has_no_exit() {
-        let filters = vec![
-            crate::pipeline::test_filters::terminal_filter("terminal"),
-            named_noop_filter("unreachable", vec![]),
-        ];
+        let filters = vec![terminal_filter("terminal"), named_noop_filter("unreachable", vec![])];
 
-        assert!(binding_control_flow_edges(&filters).is_empty());
+        assert!(
+            binding_control_flow_edges(&filters).is_empty(),
+            "a filter that always answers has no fall-through edge"
+        );
     }
 
     #[test]
@@ -2492,6 +2493,134 @@ mod tests {
                 .iter()
                 .any(|error| error.contains("'router'") && error.contains("bound_upstream condition")),
             "a router cannot read the binding it has not published yet: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn binding_control_flow_reenter_and_next_rejoins() {
+        let mut looper = named_noop_filter("looper", vec![]);
+        looper.branches = vec![
+            conditional_branch("again", vec![], RejoinTarget::ReEnter(0)),
+            make_branch_with_filters("next", vec![]),
+        ];
+        let filters = vec![
+            named_noop_filter("start", vec![]),
+            looper,
+            named_noop_filter("end", vec![]),
+        ];
+
+        assert_eq!(
+            binding_control_flow_edges(&filters),
+            vec![(0, 1), (1, 2), (1, 0)],
+            "a ReEnter adds a back edge and a Next rejoin adds nothing beyond the fall-through"
+        );
+    }
+
+    #[test]
+    fn binding_control_flow_unconditional_terminal_rejoin_ends_the_host() {
+        let mut host = named_noop_filter("host", vec![]);
+        host.branches = vec![make_terminal_branch("done", vec![])];
+        let filters = vec![host, named_noop_filter("after", vec![])];
+
+        assert!(
+            binding_control_flow_edges(&filters).is_empty(),
+            "an unconditional terminal branch always ends the request at its host"
+        );
+    }
+
+    #[test]
+    fn converging_jumps_need_the_binding_on_every_incoming_path() {
+        let gated = || noop_filter_with_conditions("gated", vec![bound_condition(None, Some("openai"))]);
+        let mut bypass = named_noop_filter("bypass", vec![]);
+        bypass.branches = vec![conditional_branch("jump", vec![], RejoinTarget::SkipTo(3))];
+        let bypassing = vec![
+            bypass,
+            binding_router(&["a"]),
+            named_noop_filter("work", vec![]),
+            gated(),
+        ];
+        let mut after = named_noop_filter("after", vec![]);
+        after.branches = vec![conditional_branch("jump", vec![], RejoinTarget::SkipTo(3))];
+        let bound_both_ways = vec![
+            binding_router(&["a"]),
+            after,
+            named_noop_filter("work", vec![]),
+            gated(),
+        ];
+        let (mut bypassing_errors, mut bound_errors) = (Vec::new(), Vec::new());
+
+        check_bound_upstream_requires_binding(&bypassing, false, &mut bypassing_errors);
+        check_bound_upstream_requires_binding(&bound_both_ways, false, &mut bound_errors);
+
+        assert_eq!(
+            bypassing_errors.len(),
+            1,
+            "a jump from before the router can reach the consumer unbound: {bypassing_errors:?}"
+        );
+        assert!(
+            bound_errors.is_empty(),
+            "both paths into the consumer pass the router: {bound_errors:?}"
+        );
+    }
+
+    #[test]
+    fn router_stops_the_unbound_walk_before_a_later_reenter_loop() {
+        let mut looper = named_noop_filter("looper", vec![]);
+        looper.branches = vec![conditional_branch("again", vec![], RejoinTarget::ReEnter(1))];
+        let filters = vec![
+            binding_router(&["a"]),
+            noop_filter_with_conditions("gated", vec![bound_condition(None, Some("openai"))]),
+            looper,
+        ];
+        let mut errors = Vec::new();
+
+        check_bound_upstream_requires_binding(&filters, false, &mut errors);
+
+        assert!(
+            errors.is_empty(),
+            "a loop that starts and lands after the router is never walked unbound: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn consumer_after_an_unconditional_terminal_filter_is_reported() {
+        let filters = vec![binding_router(&["a"]), terminal_filter("answers"), bound_lb(&["a"])];
+        let mut errors = Vec::new();
+
+        check_bound_upstream_requires_binding(&filters, false, &mut errors);
+
+        assert_eq!(
+            errors.len(),
+            1,
+            "a consumer no path reaches is reported rather than silently accepted: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn ladder_of_optional_jumps_validates_without_path_explosion() {
+        const HOSTS: usize = 64;
+        let lb = HOSTS + 1;
+        let mut filters = vec![binding_router(&["a"])];
+        filters.extend((1..=HOSTS).map(|idx| {
+            let mut host = named_noop_filter("hop", vec![]);
+            host.branches = vec![conditional_branch(
+                "jump",
+                vec![],
+                RejoinTarget::SkipTo((idx + 2).min(lb)),
+            )];
+            host
+        }));
+        filters.push(bound_lb(&["a"]));
+        let mut errors = Vec::new();
+
+        check_bound_upstream_requires_binding(&filters, false, &mut errors);
+        check_no_rebind_after_binding(&filters, false, &mut errors);
+        check_bound_cluster_coverage(&filters, &mut errors);
+
+        assert!(
+            errors.is_empty(),
+            "every one of the exponentially many jump paths reaches the load balancer, and each start is scanned \
+             once so this finishes: {errors:?}"
         );
     }
 
