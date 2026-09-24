@@ -87,7 +87,7 @@ pub(super) fn as_request_body_filter<'a>(
     let AnyFilter::Http(http_filter) = &pf.filter else {
         return Ok(None);
     };
-    if !conditions_resolved {
+    if !conditions_resolved && !pf.conditions.is_empty() {
         let run = should_execute_from(
             &pf.conditions,
             ctx.request,

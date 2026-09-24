@@ -83,12 +83,16 @@ impl FilterPipeline {
                     continue;
                 },
             };
-            if !should_execute_bound_selected(
-                &pf.conditions,
-                ctx.request,
-                ctx.bound_upstream_view(),
-                super::http_utils::ctx_selected_upstream(ctx),
-            ) {
+            // Unconditioned filters skip the binding and selection lookups
+            // entirely; this is the common hot path.
+            if !pf.conditions.is_empty()
+                && !should_execute_bound_selected(
+                    &pf.conditions,
+                    ctx.request,
+                    ctx.bound_upstream_view(),
+                    super::http_utils::ctx_selected_upstream(ctx),
+                )
+            {
                 trace!(filter = http_filter.name(), "skipped by conditions");
                 idx += 1;
                 continue;
@@ -438,12 +442,14 @@ impl FilterPipeline {
             // This barrier fires inside the request phase, before the load
             // balancer publishes an upstream selection, so any `selected_upstream`
             // predicate on a participant fails closed (`SelectedUpstream::none`).
-            if !should_execute_bound_selected(
-                &pf.conditions,
-                ctx.request,
-                ctx.bound_upstream_view(),
-                SelectedUpstream::none(),
-            ) {
+            if !pf.conditions.is_empty()
+                && !should_execute_bound_selected(
+                    &pf.conditions,
+                    ctx.request,
+                    ctx.bound_upstream_view(),
+                    SelectedUpstream::none(),
+                )
+            {
                 trace!(
                     filter = pf.filter.name(),
                     "skipped bound-upstream request body (conditions)"

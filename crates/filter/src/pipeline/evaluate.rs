@@ -194,8 +194,14 @@ async fn execute_branch_filters(
             AnyFilter::Http(f) => f.as_ref(),
             AnyFilter::Tcp(_) => continue,
         };
-        let selected = super::http_utils::ctx_selected_upstream(ctx);
-        if !should_execute_bound_selected(&pf.conditions, ctx.request, ctx.bound_upstream_view(), selected) {
+        if !pf.conditions.is_empty()
+            && !should_execute_bound_selected(
+                &pf.conditions,
+                ctx.request,
+                ctx.bound_upstream_view(),
+                super::http_utils::ctx_selected_upstream(ctx),
+            )
+        {
             continue;
         }
         ctx.current_filter_id = Some(pf.filter_id);
