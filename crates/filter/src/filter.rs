@@ -197,6 +197,18 @@ pub trait HttpFilter: Send + Sync {
         Vec::new()
     }
 
+    /// The `when: bound_upstream` matchers inside this composite filter's
+    /// nested steps, each with its step name, sorted by step.
+    ///
+    /// Framework filters that own nested step pipelines (the IRR) override
+    /// this so pipeline validation can judge a step's matchers against the
+    /// clusters the parent's router can bind, exactly as it judges the parent's
+    /// own conditions.
+    #[cfg(feature = "iterative-request-router")]
+    fn nested_bound_upstream_matchers(&self) -> Vec<(String, praxis_core::config::ApplicationMatch)> {
+        Vec::new()
+    }
+
     /// Cluster names this filter can select from the frozen logical binding.
     ///
     /// A load balancer with `cluster_source: bound_upstream` reports the

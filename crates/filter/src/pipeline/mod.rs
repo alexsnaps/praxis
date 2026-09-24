@@ -719,6 +719,13 @@ impl FilterPipeline {
         checks::bound_consumer_clusters(&self.filters)
     }
 
+    /// The `when: bound_upstream` matchers on this pipeline's filters, at any
+    /// branch depth, in pipeline order.
+    #[cfg(feature = "iterative-request-router")]
+    pub(crate) fn bound_when_matchers(&self) -> Vec<praxis_core::config::ApplicationMatch> {
+        checks::bound_when_matchers(&self.filters)
+    }
+
     /// Whether every path through this pipeline, entered already bound to
     /// `cluster`, reaches a load balancer serving it or an answer.
     #[cfg(feature = "iterative-request-router")]

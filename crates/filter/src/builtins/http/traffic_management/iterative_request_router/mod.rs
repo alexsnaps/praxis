@@ -465,6 +465,20 @@ impl HttpFilter for IterativeRequestRouterFilter {
         readers
     }
 
+    fn nested_bound_upstream_matchers(&self) -> Vec<(String, praxis_core::config::ApplicationMatch)> {
+        let mut matchers: Vec<(String, praxis_core::config::ApplicationMatch)> = self
+            .reachable_steps()
+            .flat_map(|(name, pipeline)| {
+                pipeline
+                    .bound_when_matchers()
+                    .into_iter()
+                    .map(move |matcher| (name.to_owned(), matcher))
+            })
+            .collect();
+        matchers.sort_by(|left, right| left.0.cmp(&right.0));
+        matchers
+    }
+
     fn bound_upstream_clusters(&self) -> Vec<String> {
         // Any reachable step that load balances from the binding can run for
         // the bound cluster, so the IRR only serves the clusters every such

@@ -957,30 +957,74 @@ fn check_bound_matchers(
     errors: &mut Vec<String>,
 ) {
     for pf in filters {
-        for condition in &pf.conditions {
-            let Condition::When(matcher) = condition else {
-                continue;
-            };
-            let Some(bound) = &matcher.bound_upstream else {
-                continue;
-            };
-            let satisfiable = bindable.iter().any(|cluster| {
-                let metadata = catalog.lookup(cluster);
-                bound.application_protocol.as_deref().is_none_or(|expected| {
-                    metadata.and_then(crate::pipeline::catalog::ClusterApplicationMetadata::protocol) == Some(expected)
-                }) && bound.application_provider.as_deref().is_none_or(|expected| {
-                    metadata.and_then(crate::pipeline::catalog::ClusterApplicationMetadata::provider) == Some(expected)
-                })
-            });
-            if !satisfiable {
+        for bound in when_bound_matchers(&pf.conditions) {
+            if !matcher_satisfiable(bound, bindable, catalog) {
                 errors.push(format!(
                     "filter '{}' has a bound_upstream condition that matches no bindable cluster's application metadata",
                     pf.filter.name(),
                 ));
             }
         }
+        if let AnyFilter::Http(filter) = &pf.filter {
+            for (step, bound) in nested_bound_upstream_matchers(filter.as_ref()) {
+                if !matcher_satisfiable(&bound, bindable, catalog) {
+                    errors.push(format!(
+                        "filter '{}' step '{step}' has a bound_upstream condition that matches no bindable \
+                         cluster's application metadata",
+                        pf.filter.name(),
+                    ));
+                }
+            }
+        }
         for branch in &pf.branches {
             check_bound_matchers(&branch.filters, bindable, catalog, errors);
+        }
+    }
+}
+
+/// Whether some bindable cluster's catalog metadata satisfies `bound`.
+fn matcher_satisfiable(
+    bound: &praxis_core::config::ApplicationMatch,
+    bindable: &std::collections::HashSet<String>,
+    catalog: &crate::pipeline::catalog::ClusterApplicationCatalog,
+) -> bool {
+    bindable.iter().any(|cluster| {
+        let metadata = catalog.lookup(cluster);
+        bound.application_protocol.as_deref().is_none_or(|expected| {
+            metadata.and_then(crate::pipeline::catalog::ClusterApplicationMetadata::protocol) == Some(expected)
+        }) && bound.application_provider.as_deref().is_none_or(|expected| {
+            metadata.and_then(crate::pipeline::catalog::ClusterApplicationMetadata::provider) == Some(expected)
+        })
+    })
+}
+
+/// The `bound_upstream` matchers of the `when` conditions in `conditions`.
+fn when_bound_matchers(conditions: &[Condition]) -> impl Iterator<Item = &praxis_core::config::ApplicationMatch> {
+    conditions.iter().filter_map(|condition| match condition {
+        Condition::When(matcher) => matcher.bound_upstream.as_ref(),
+        Condition::Unless(_) => None,
+    })
+}
+
+/// The `when: bound_upstream` matchers on `filters` and their branch
+/// sub-chains, in pipeline order, for an IRR to fold up to its parent.
+#[cfg(feature = "iterative-request-router")]
+pub(in crate::pipeline) fn bound_when_matchers(
+    filters: &[PipelineFilter],
+) -> Vec<praxis_core::config::ApplicationMatch> {
+    let mut matchers = Vec::new();
+    collect_bound_when_matchers(filters, &mut matchers);
+    matchers
+}
+
+/// Append the `when: bound_upstream` matchers of `filters` and their branches
+/// to `out`.
+#[cfg(feature = "iterative-request-router")]
+fn collect_bound_when_matchers(filters: &[PipelineFilter], out: &mut Vec<praxis_core::config::ApplicationMatch>) {
+    for pf in filters {
+        out.extend(when_bound_matchers(&pf.conditions).cloned());
+        for branch in &pf.branches {
+            collect_bound_when_matchers(&branch.filters, out);
         }
     }
 }
@@ -1067,6 +1111,24 @@ fn fallback_branches(pf: &PipelineFilter) -> impl Iterator<Item = &ResolvedBranc
 #[cfg(feature = "iterative-request-router")]
 fn nested_bound_upstream_readers(filter: &dyn crate::filter::HttpFilter) -> Vec<String> {
     filter.nested_bound_upstream_readers()
+}
+
+/// The `when: bound_upstream` matchers inside `filter`'s nested steps; only
+/// the IRR has any.
+#[cfg(feature = "iterative-request-router")]
+fn nested_bound_upstream_matchers(
+    filter: &dyn crate::filter::HttpFilter,
+) -> Vec<(String, praxis_core::config::ApplicationMatch)> {
+    filter.nested_bound_upstream_matchers()
+}
+
+/// The `when: bound_upstream` matchers inside `filter`'s nested steps; none
+/// without the IRR.
+#[cfg(not(feature = "iterative-request-router"))]
+fn nested_bound_upstream_matchers(
+    _filter: &dyn crate::filter::HttpFilter,
+) -> Vec<(String, praxis_core::config::ApplicationMatch)> {
+    Vec::new()
 }
 
 /// Nested steps of `filter` that read the binding; none without the IRR.

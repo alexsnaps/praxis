@@ -4069,7 +4069,7 @@ fn irr_step_tags_and_pre_read_matrix() {
             "{{filter: iterative_request_router, {entry}initial_step: s, steps: [{{name: s, filters: [{step_filters}], on_result: [{{default: true, done: true}}]}}]}}"
         )
     };
-    let cases: [(&str, String, &[&str]); 4] = [
+    let cases: [(&str, String, &[&str]); 5] = [
         (
             "top-level matcher satisfied only by a step's tag",
             format!("[{router}, {}, {}]", gated("openai"), irr("", &bound_lb(openai_a))),
@@ -4091,6 +4091,21 @@ fn irr_step_tags_and_pre_read_matrix() {
                 irr("", &format!("{}, {}", gated("openai"), bound_lb(openai_a)))
             ),
             &[],
+        ),
+        (
+            "step matcher only an unbindable cluster's tag satisfies",
+            format!(
+                "[{router}, {}]",
+                irr(
+                    "",
+                    &format!(
+                        "{}, {}",
+                        gated("anthropic"),
+                        bound_lb(&format!("{openai_a}, {anthropic_c}"))
+                    )
+                )
+            ),
+            &["filter 'iterative_request_router' step 's' has a bound_upstream condition that matches no bindable"],
         ),
         (
             "IRR gated on its own binding, a known over-rejection since it reads the body after routing",
@@ -4411,6 +4426,48 @@ steps:
     assert!(
         !dead.consumes_bound_upstream(),
         "a transition listed after the default never fires, so its step never runs"
+    );
+}
+
+#[test]
+fn nested_bound_upstream_matchers_come_from_reachable_steps_only() {
+    let config: serde_yaml::Value = serde_yaml::from_str(
+        r#"
+initial_step: first
+steps:
+  - name: first
+    filters:
+      - filter: headers
+        conditions: [{when: {bound_upstream: {application_provider: openai}}}]
+        request_set: [{name: x-openai, value: "true"}]
+      - filter: headers
+        conditions: [{unless: {bound_upstream: {application_provider: azure}}}]
+        request_set: [{name: x-not-azure, value: "true"}]
+    on_result: [{default: true, done: true}]
+  - name: orphan
+    filters:
+      - filter: headers
+        conditions: [{when: {bound_upstream: {application_provider: anthropic}}}]
+        request_set: [{name: x-anthropic, value: "true"}]
+    on_result: [{default: true, done: true}]
+"#,
+    )
+    .unwrap();
+    let filter = super::IterativeRequestRouterFilter::from_config(&config).unwrap();
+
+    let matchers = filter.nested_bound_upstream_matchers();
+
+    assert_eq!(
+        matchers.len(),
+        1,
+        "one when-matcher in the reachable step, none from the orphan or the unless"
+    );
+    let (step, matcher) = matchers.first().expect("one matcher was reported");
+    assert_eq!(step, "first", "the matcher is reported under its step");
+    assert_eq!(
+        matcher.application_provider.as_deref(),
+        Some("openai"),
+        "the matcher is passed up unchanged"
     );
 }
 
