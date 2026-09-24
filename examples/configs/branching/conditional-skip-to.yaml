@@ -1,13 +1,14 @@
 # Conditional Skip-To Branch (on_result + rejoin: <named>)
 #
-# Skips the rest of the request phase for clean requests.
+# Skips the remaining middleware for clean requests.
 # When guardrails reports status=passed, the branch
-# fires and resumes directly at the routing filter. The
-# security filters (CORS, forwarded_headers) sit before the
-# branch host because a skip may never bypass one.
+# fires and resumes at the routing filter, jumping over
+# the inspection middleware in between. The security
+# filters (CORS, forwarded_headers) sit before the branch
+# host because a skip may never bypass one.
 #
 # Use case: clean requests that pass guardrails don't
-# need extra middleware processing.
+# need the extra inspection that flagged ones get.
 #
 # Usage:
 #   cargo run -p praxis-proxy -- -c examples/configs/branching/conditional-skip-to.yaml
@@ -56,6 +57,13 @@ filter_chains:
                     request_add:
                       - name: X-Clean
                         value: "true"
+
+      # Inspection middleware: only flagged requests reach
+      # it, since clean ones skipped ahead to routing
+      - filter: headers
+        request_add:
+          - name: X-Inspected
+            value: "full"
 
       # Named target for skip-to rejoin
       - filter: router

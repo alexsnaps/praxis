@@ -39,7 +39,7 @@ See [Quickstart](../docs/quickstart.md#quick-test-servers) for full options.
 
 | File | Description |
 | ------ | ------------- |
-| [conditional-skip-to.yaml](configs/branching/conditional-skip-to.yaml) | Skips the rest of the request phase for clean requests |
+| [conditional-skip-to.yaml](configs/branching/conditional-skip-to.yaml) | Skips the remaining middleware for clean requests |
 | [conditional-terminal.yaml](configs/branching/conditional-terminal.yaml) | Short-circuits the pipeline when guardrails detects a dangerous request header |
 | [cross-chain-flat.yaml](configs/branching/cross-chain-flat.yaml) | A listener references two chains: preprocessing and routing |
 | [multiple-branches.yaml](configs/branching/multiple-branches.yaml) | Multiple branches on a single filter, evaluated in order |
