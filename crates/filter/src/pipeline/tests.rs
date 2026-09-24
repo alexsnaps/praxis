@@ -6969,6 +6969,60 @@ mod bound_upstream_body_barrier {
         );
     }
 
+    #[test]
+    fn branch_router_never_binds_for_a_top_level_participant() {
+        let mut registry = FilterRegistry::with_builtins();
+        registry
+            .register(
+                "marking",
+                FilterFactory::Http(Arc::new(|_| Ok(Box::new(MarkingParticipant::new("marking", None).0)))),
+            )
+            .unwrap();
+        let mut entries: Vec<FilterEntry> = serde_yaml::from_str(
+            r#"
+- filter: headers
+  branch_chains:
+    - name: route
+      chains:
+        - name: route-chain
+          filters:
+            - filter: router
+              routes: [{path_prefix: "/", cluster: backend}]
+- filter: marking
+- filter: load_balancer
+  cluster_source: bound_upstream
+  clusters: [{name: backend, endpoints: ["127.0.0.1:9"]}]
+"#,
+        )
+        .unwrap();
+        let pipeline = FilterPipeline::build_with_chains(
+            &mut entries,
+            &registry,
+            &HashMap::new(),
+            &praxis_core::config::InsecureOptions::default(),
+        )
+        .unwrap();
+
+        let errors = pipeline.ordering_errors(&entries, false, &SkipPipelineChecks::default());
+
+        assert_eq!(
+            pipeline.filters[0].branches.len(),
+            1,
+            "the router's branch must actually be resolved for this to mean anything"
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("filter 'router' publishes a logical upstream binding inside a branch")),
+            "a router in a branch cannot be the binding router: {errors:?}"
+        );
+        assert!(
+            errors.iter().any(|error| error
+                .contains("filter 'marking' requires a bound logical upstream (a bound-upstream request-body hook)")),
+            "the barrier only fires after a top-level router, so the participant has no binding: {errors:?}"
+        );
+    }
+
     /// Read-write participant that appends `|bound` at the barrier and later, at
     /// its own header-phase position, takes the buffered body the way a
     /// body-consuming request filter does.
