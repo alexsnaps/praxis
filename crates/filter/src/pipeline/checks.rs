@@ -23,9 +23,9 @@ mod binding;
 
 #[cfg(feature = "bound-upstream-request-body")]
 pub(super) use binding::check_bound_upstream_body_participants;
-#[cfg(feature = "iterative-request-router")]
-pub(super) use binding::guaranteed_bound_consumer_clusters;
 use binding::{any_consumes_bound_upstream, covered_bound_clusters};
+#[cfg(feature = "iterative-request-router")]
+pub(super) use binding::{bound_consumer_clusters, serves_bound_cluster};
 pub(super) use binding::{
     check_bound_cluster_coverage, check_bound_condition_with_pre_read_body, check_bound_upstream_requires_binding,
     check_cluster_metadata_conflicts, check_irr_coexistence, check_no_rebind_after_binding,

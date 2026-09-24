@@ -185,7 +185,10 @@ from the binding:
   binding on every exchange. The binding survives all
   iterations; each round republishes its own fresh
   *selected* metadata without mutating the frozen
-  binding.
+  binding. Any reachable step that reads the binding can
+  run for the bound cluster, so every such step must
+  serve every cluster the router can bind, by load
+  balancing it or by answering the request itself.
 
 A bound-consuming load balancer is exempt from the
 "needs a preceding router" rule precisely because it

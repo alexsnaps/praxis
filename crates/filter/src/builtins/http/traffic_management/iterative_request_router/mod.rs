@@ -399,6 +399,29 @@ impl IterativeRequestRouterFilter {
             timeout,
         }))
     }
+
+    /// Step pipelines a request can reach from the initial step.
+    fn reachable_step_pipelines(&self) -> impl Iterator<Item = &FilterPipeline> {
+        let mut reachable = std::collections::HashSet::from([self.initial_step.as_ref()]);
+        let mut pending = vec![self.initial_step.as_ref()];
+        while let Some(step) = pending.pop() {
+            let next_steps = self
+                .step_transitions
+                .get(step)
+                .into_iter()
+                .flatten()
+                .filter_map(|transition| transition.next.as_deref());
+            for next in next_steps {
+                if reachable.insert(next) {
+                    pending.push(next);
+                }
+            }
+        }
+        self.step_pipelines
+            .iter()
+            .filter(move |(name, _)| reachable.contains(name.as_ref()))
+            .map(|(_, pipeline)| pipeline.as_ref())
+    }
 }
 
 #[async_trait]
@@ -433,9 +456,28 @@ impl HttpFilter for IterativeRequestRouterFilter {
     }
 
     fn bound_upstream_clusters(&self) -> Vec<String> {
-        self.step_pipelines
-            .get(&self.initial_step)
-            .map_or_else(Vec::new, |pipeline| pipeline.guaranteed_bound_upstream_clusters())
+        // Any reachable step that load balances from the binding can run for
+        // the bound cluster, so the IRR only serves the clusters every such
+        // step serves, whether by load balancing or by answering itself.
+        let consuming: Vec<&FilterPipeline> = self
+            .reachable_step_pipelines()
+            .filter(|pipeline| pipeline.consumes_bound_upstream())
+            .collect();
+        let (catalog, _) = crate::pipeline::catalog::build_catalog(self.declared_cluster_metadata());
+        let candidates: std::collections::HashSet<String> = consuming
+            .iter()
+            .flat_map(|pipeline| pipeline.bound_upstream_candidates())
+            .collect();
+        let mut served: Vec<String> = candidates
+            .into_iter()
+            .filter(|cluster| {
+                consuming
+                    .iter()
+                    .all(|pipeline| pipeline.serves_bound_cluster(cluster, catalog.lookup(cluster)))
+            })
+            .collect();
+        served.sort();
+        served
     }
 
     fn declared_cluster_metadata(&self) -> Vec<ClusterMetadataDeclaration> {

@@ -3758,7 +3758,7 @@ steps:
 }
 
 #[test]
-fn bound_cluster_coverage_comes_only_from_the_initial_step() {
+fn bound_cluster_coverage_needs_every_consuming_step() {
     let config: serde_yaml::Value = serde_yaml::from_str(
         r#"
 initial_step: first
@@ -3788,12 +3788,18 @@ steps:
     .unwrap();
     let filter = super::IterativeRequestRouterFilter::from_config(&config).unwrap();
 
-    assert_eq!(filter.bound_upstream_clusters(), vec!["initial".to_owned()]);
-    assert!(filter.requires_bound_upstream_on_entry());
+    assert!(
+        filter.bound_upstream_clusters().is_empty(),
+        "each step lacks the other's cluster, so any binding fails in one of them"
+    );
+    assert!(
+        filter.requires_bound_upstream_on_entry(),
+        "a step load balancing from the binding needs one on entry"
+    );
 }
 
 #[test]
-fn later_step_bound_consumer_requires_binding_but_gives_no_initial_coverage() {
+fn later_step_bound_consumer_requires_binding_and_serves_its_cluster() {
     let config: serde_yaml::Value = serde_yaml::from_str(
         r#"
 initial_step: first
@@ -3819,10 +3825,157 @@ steps:
     .unwrap();
     let filter = super::IterativeRequestRouterFilter::from_config(&config).unwrap();
 
-    assert!(filter.requires_bound_upstream_on_entry());
     assert!(
-        filter.bound_upstream_clusters().is_empty(),
-        "a later step is not guaranteed to transport the initial exchange"
+        filter.requires_bound_upstream_on_entry(),
+        "a later step load balancing from the binding needs one on entry"
+    );
+    assert_eq!(
+        filter.bound_upstream_clusters(),
+        vec!["later".to_owned()],
+        "a step that does not read the binding places no demand on the bound cluster"
+    );
+}
+
+#[test]
+fn step_that_answers_other_clusters_itself_serves_them() {
+    let config: serde_yaml::Value = serde_yaml::from_str(
+        r#"
+initial_step: first
+steps:
+  - name: first
+    filters:
+      - filter: load_balancer
+        cluster_source: bound_upstream
+        clusters:
+          - name: a
+            http:
+              application_provider: openai
+            endpoints: ["127.0.0.1:9"]
+          - name: b
+            http:
+              application_provider: anthropic
+            endpoints: ["127.0.0.1:10"]
+    on_result:
+      - default: true
+        next: second
+  - name: second
+    filters:
+      - filter: load_balancer
+        cluster_source: bound_upstream
+        conditions:
+          - when:
+              bound_upstream:
+                application_provider: openai
+        clusters:
+          - name: a
+            http:
+              application_provider: openai
+            endpoints: ["127.0.0.1:9"]
+      - filter: static_response
+        status: 200
+    on_result:
+      - default: true
+        done: true
+"#,
+    )
+    .unwrap();
+    let filter = super::IterativeRequestRouterFilter::from_config(&config).unwrap();
+
+    assert_eq!(
+        filter.bound_upstream_clusters(),
+        vec!["a".to_owned(), "b".to_owned()],
+        "the second step answers b itself instead of load balancing it"
+    );
+}
+
+#[test]
+fn unreachable_step_does_not_narrow_bound_coverage() {
+    let config: serde_yaml::Value = serde_yaml::from_str(
+        r#"
+initial_step: dispatch
+steps:
+  - name: dispatch
+    filters:
+      - filter: load_balancer
+        cluster_source: bound_upstream
+        clusters:
+          - name: a
+            endpoints: ["127.0.0.1:9"]
+    on_result:
+      - default: true
+        done: true
+  - name: orphan
+    filters:
+      - filter: load_balancer
+        cluster_source: bound_upstream
+        clusters:
+          - name: z
+            endpoints: ["127.0.0.1:10"]
+    on_result:
+      - default: true
+        done: true
+"#,
+    )
+    .unwrap();
+    let filter = super::IterativeRequestRouterFilter::from_config(&config).unwrap();
+
+    assert_eq!(
+        filter.bound_upstream_clusters(),
+        vec!["a".to_owned()],
+        "no transition reaches the orphan step, so it cannot fail a bound request"
+    );
+}
+
+#[test]
+fn bound_cluster_missing_from_a_later_step_is_rejected() {
+    let registry = crate::FilterRegistry::with_builtins();
+    let mut entries: Vec<crate::FilterEntry> = serde_yaml::from_str(
+        r#"
+- filter: router
+  routes:
+    - path_prefix: "/b"
+      cluster: b
+    - path_prefix: "/"
+      cluster: a
+- filter: iterative_request_router
+  initial_step: first
+  steps:
+    - name: first
+      filters:
+        - filter: load_balancer
+          cluster_source: bound_upstream
+          clusters:
+            - name: a
+              endpoints: ["127.0.0.1:9"]
+            - name: b
+              endpoints: ["127.0.0.1:10"]
+      on_result:
+        - default: true
+          next: second
+    - name: second
+      filters:
+        - filter: load_balancer
+          cluster_source: bound_upstream
+          clusters:
+            - name: a
+              endpoints: ["127.0.0.1:9"]
+      on_result:
+        - default: true
+          done: true
+"#,
+    )
+    .unwrap();
+    let pipeline = crate::FilterPipeline::build(&mut entries, &registry).unwrap();
+
+    let errors = pipeline.ordering_errors(&entries, false, &praxis_core::config::SkipPipelineChecks::default());
+
+    assert!(
+        errors.iter().any(|error| error.contains("cluster 'b'")),
+        "a request bound to b would fail in the second step: {errors:?}"
+    );
+    assert!(
+        errors.iter().all(|error| !error.contains("cluster 'a'")),
+        "every step serves a: {errors:?}"
     );
 }
 

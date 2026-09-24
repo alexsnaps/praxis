@@ -710,12 +710,22 @@ impl FilterPipeline {
         checks::uses_bound_upstream(&self.filters)
     }
 
-    /// Bound-source clusters guaranteed to be consumed when this pipeline runs.
+    /// Clusters this pipeline's bound-source consumers declare, at any branch
+    /// depth.
     #[cfg(feature = "iterative-request-router")]
-    pub(crate) fn guaranteed_bound_upstream_clusters(&self) -> Vec<String> {
-        checks::guaranteed_bound_consumer_clusters(&self.filters)
-            .into_iter()
-            .collect()
+    pub(crate) fn bound_upstream_candidates(&self) -> std::collections::HashSet<String> {
+        checks::bound_consumer_clusters(&self.filters)
+    }
+
+    /// Whether every path through this pipeline, entered already bound to
+    /// `cluster`, reaches a load balancer serving it or an answer.
+    #[cfg(feature = "iterative-request-router")]
+    pub(crate) fn serves_bound_cluster(
+        &self,
+        cluster: &str,
+        metadata: Option<&catalog::ClusterApplicationMetadata>,
+    ) -> bool {
+        checks::serves_bound_cluster(&self.filters, cluster, metadata)
     }
 
     /// Cluster application-metadata declarations from every filter in this

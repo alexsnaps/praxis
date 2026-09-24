@@ -310,27 +310,29 @@ pub(super) fn covered_bound_clusters(filters: &[PipelineFilter]) -> std::collect
         .collect()
 }
 
-/// Bound-source clusters a pipeline serves on every path from its entry.
-///
-/// An IRR step has no router of its own; it inherits its parent's binding. The
-/// candidates are the clusters its bound-source consumers declare, and an
-/// ordinary load balancer does not serve them because nothing in the step set
-/// `ctx.cluster`.
+/// Clusters the bound-source consumers in `filters` declare, at any branch
+/// depth.
 #[cfg(feature = "iterative-request-router")]
-pub(in crate::pipeline) fn guaranteed_bound_consumer_clusters(
+pub(in crate::pipeline) fn bound_consumer_clusters(filters: &[PipelineFilter]) -> std::collections::HashSet<String> {
+    let mut clusters = std::collections::HashSet::new();
+    collect_bound_consumer_clusters(filters, &mut clusters);
+    clusters
+}
+
+/// Whether every path through a pipeline that starts already bound to
+/// `cluster` (an IRR step) ends at a load balancer serving it or an answer.
+///
+/// An ordinary load balancer does not count: nothing in the step set
+/// `ctx.cluster` to the bound cluster.
+#[cfg(feature = "iterative-request-router")]
+pub(in crate::pipeline) fn serves_bound_cluster(
     filters: &[PipelineFilter],
-) -> std::collections::HashSet<String> {
-    let mut candidates = std::collections::HashSet::new();
-    collect_bound_consumer_clusters(filters, &mut candidates);
-    let (catalog, _) = crate::pipeline::catalog::build_catalog(crate::pipeline::collect_cluster_declarations(filters));
-    candidates
-        .into_iter()
-        .filter(|cluster| {
-            ClusterScan::new(cluster, catalog.lookup(cluster), false)
-                .chain(filters, 0, false)
-                .covered()
-        })
-        .collect()
+    cluster: &str,
+    metadata: Option<&crate::pipeline::catalog::ClusterApplicationMetadata>,
+) -> bool {
+    ClusterScan::new(cluster, metadata, false)
+        .chain(filters, 0, false)
+        .covered()
 }
 
 /// Collect bound-source cluster declarations at every branch depth.
