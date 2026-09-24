@@ -237,6 +237,10 @@ matches) or closed (a bound load balancer returns 500) at runtime instead.
 - A load balancer's `failure_mode` is not modeled: coverage treats a bound load
   balancer that lacks the cluster as failing the request, even if it fails
   open and a later load balancer would serve it.
+- A branch-hosted IRR that fails open and lets a request fall out of its
+  fallback branches is treated as failing that request, even when the host's
+  `next` rejoin would carry it on to a load balancer that serves it. Keep the
+  fallback inside the IRR's own branches, or host the IRR at the top level.
 
 ## Example
 
