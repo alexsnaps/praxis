@@ -187,7 +187,10 @@ jobs:
         uses: praxis-proxy/conventions/.github/actions/setup-rust-lint@f636950733882cf65b15cdc3efab570158feea4a # v0.1.0
 
       - name: Install cargo-machete
-        run: cargo install cargo-machete --locked
+        # setup-rust-lint's rust-cache also restores ~/.cargo/bin, so the binary
+        # may already be present. Install only when it is absent; otherwise
+        # `cargo install` aborts with "binary already exists".
+        run: command -v cargo-machete > /dev/null || cargo install cargo-machete --locked
 
       - name: Lint
         run: make lint
