@@ -61,7 +61,7 @@ basic-auth-filter = ["praxis-filter/basic-auth-filter", "experimental"]
 cloud-events-filter = ["praxis-filter/cloud-events-filter", "experimental"]
 # Logical upstream binding (`bound_upstream` conditions, bound load balancers).
 # Off by default; experimental. Implied by the two features below.
-upstream-binding = ["praxis-filter/upstream-binding", "experimental"]
+upstream-binding = ["praxis-filter/upstream-binding", "praxis-protocol/upstream-binding", "experimental"]
 # The `iterative_request_router` filter. Off by default; experimental.
 iterative-request-router = ["praxis-filter/iterative-request-router", "experimental"]
 # The `router` filter's JSON-alias body-routing groundwork. Off by default; experimental.

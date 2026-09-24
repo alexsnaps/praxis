@@ -25,6 +25,10 @@ config-reload = ["praxis-tls/config-reload"]
 # (the proxy data path and background health checks are unaffected). Library
 # default is off; the `praxis-proxy` binary and the test harness turn it on.
 admin-api = []
+# Logical upstream binding in the filter crate this crate embeds. Off by
+# default; forwarded so this crate's own tests can exercise the bound access
+# log fallback. The `praxis-proxy` binary turns it on through its own feature.
+upstream-binding = ["praxis-filter/upstream-binding"]
 # SPIFFE X.509-SVID mTLS peer identity. Off by default; experimental.
 spiffe = ["praxis-tls/spiffe"]
 # The `policy` filter (Praxis Policy Engine) in the filter crate this crate
