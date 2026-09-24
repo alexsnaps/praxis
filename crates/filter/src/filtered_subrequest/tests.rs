@@ -1093,7 +1093,7 @@ fn nested_upstream_extensions() -> crate::RequestExtensions {
     ));
     extensions.insert(crate::extensions::BoundUpstreamFrozen);
 
-    super::enter_nested_upstream_scope(&mut extensions);
+    super::enter_nested_upstream_scope(&mut extensions, true);
     extensions.insert(crate::extensions::BoundUpstream::new(
         Arc::from("child"),
         Some(Arc::from("child_protocol")),
@@ -1136,7 +1136,7 @@ fn nested_upstream_scope_shields_parent_body_rewrite() {
     let mut extensions = crate::RequestExtensions::default();
     extensions.insert(BoundRequestBodyRewrite(bytes::Bytes::from_static(b"parent")));
 
-    super::enter_nested_upstream_scope(&mut extensions);
+    super::enter_nested_upstream_scope(&mut extensions, true);
     assert!(
         extensions.get::<BoundRequestBodyRewrite>().is_none(),
         "the nested pipeline's executor must not take the parent's rewrite as its own"
@@ -1165,7 +1165,7 @@ fn nested_upstream_scope_restores_parent_binding_and_freeze() {
     ));
     extensions.insert(crate::extensions::BoundUpstreamFrozen);
 
-    super::enter_nested_upstream_scope(&mut extensions);
+    super::enter_nested_upstream_scope(&mut extensions, true);
     extensions.insert(crate::extensions::BoundUpstream::new(Arc::from("child"), None, None));
     extensions.remove::<crate::extensions::BoundUpstreamFrozen>();
     extensions.insert(crate::extensions::SelectedClusterApplication::new(None, Some(Arc::from("child"))).unwrap());
@@ -1266,6 +1266,105 @@ fn into_completion_restores_parent_upstream_scope() {
 
     let completion = continuation.into_completion();
     assert_parent_upstream_scope(&completion.extensions);
+}
+
+#[test]
+fn callout_scope_starts_unbound_and_restores_the_parent_binding() {
+    use std::sync::Arc;
+
+    let mut extensions = crate::RequestExtensions::default();
+    extensions.insert(crate::extensions::BoundUpstream::new(
+        Arc::from("parent"),
+        Some(Arc::from("parent_protocol")),
+        None,
+    ));
+    extensions.insert(crate::extensions::BoundUpstreamFrozen);
+
+    super::enter_nested_upstream_scope(&mut extensions, false);
+    assert!(
+        extensions.get::<crate::extensions::BoundUpstream>().is_none(),
+        "an outbound callout is a separate request and must start unbound"
+    );
+    assert!(
+        extensions.get::<crate::extensions::BoundUpstreamFrozen>().is_none(),
+        "the parent's freeze must not block the callout's own binding router"
+    );
+    extensions.insert(crate::extensions::BoundUpstream::new(Arc::from("callout"), None, None));
+    extensions.insert(crate::extensions::BoundUpstreamFrozen);
+    super::restore_parent_upstream_scope(&mut extensions);
+
+    assert_eq!(
+        extensions
+            .get::<crate::extensions::BoundUpstream>()
+            .map(crate::extensions::BoundUpstream::cluster),
+        Some("parent"),
+        "leaving the callout restores the parent's binding"
+    );
+    assert!(
+        extensions.get::<crate::extensions::BoundUpstreamFrozen>().is_some(),
+        "leaving the callout restores the parent's freeze"
+    );
+}
+
+#[tokio::test]
+#[expect(clippy::large_futures, reason = "drives the full executor future in a test")]
+async fn callout_with_its_own_binding_router_ignores_the_parent_binding() {
+    use std::{
+        sync::Arc,
+        time::{Duration, Instant},
+    };
+
+    use praxis_core::subrequest::SubRequestClient;
+
+    let (addr, backend) = spawn_raw_backend("HTTP/1.1 200 OK\r\nContent-Length: 7\r\n\r\ncallout").await;
+    let registry = crate::FilterRegistry::with_builtins();
+    let mut entries: Vec<crate::FilterEntry> = serde_yaml::from_str(&format!(
+        r#"
+- filter: router
+  routes:
+    - path_prefix: "/"
+      cluster: outbound
+- filter: load_balancer
+  cluster_source: bound_upstream
+  clusters:
+    - name: outbound
+      endpoints: ["{addr}"]
+"#
+    ))
+    .unwrap();
+    let pipeline = Arc::new(crate::FilterPipeline::build(&mut entries, &registry).unwrap());
+    let client = SubRequestClient::new(crate::test_support::connector(1, None));
+    let downstream = crate::SubrequestRuntime::new(None, false, None, Instant::now());
+    let executor =
+        crate::FilteredSubrequestExecutor::for_callout(client, downstream, 0, 1_048_576, Duration::from_secs(5));
+    let mut extensions = crate::RequestExtensions::default();
+    extensions.insert(crate::extensions::BoundUpstream::new(Arc::from("parent"), None, None));
+    extensions.insert(crate::extensions::BoundUpstreamFrozen);
+    let request = crate::SubRequest {
+        method: http::Method::GET,
+        uri: http::Uri::from_static("/"),
+        headers: HeaderMap::new(),
+        body: bytes::Bytes::new(),
+    };
+
+    let outcome = executor
+        .run(&pipeline, &request, extensions, Instant::now() + Duration::from_secs(5))
+        .await;
+    backend.abort();
+
+    let response = match outcome.expect("the callout should reach its own bound upstream") {
+        crate::CalloutResponse::Buffered(response) => response,
+        crate::CalloutResponse::Streaming { .. } => panic!("the outbound chain is buffered"),
+    };
+    assert_eq!(
+        response.status, 200,
+        "the callout binds its own cluster instead of failing on the parent's frozen binding"
+    );
+    assert_eq!(
+        response.body.as_ref(),
+        b"callout",
+        "the callout reaches its own backend"
+    );
 }
 
 #[tokio::test]

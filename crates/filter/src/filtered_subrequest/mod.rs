@@ -114,10 +114,27 @@ struct ParentUpstreamState {
 struct ParentUpstreamStates(Vec<ParentUpstreamState>);
 
 /// Save parent routing state before a nested pipeline runs.
-fn enter_nested_upstream_scope(extensions: &mut RequestExtensions) {
+///
+/// A nested pipeline that `inherits_binding` (an IRR step) keeps seeing the
+/// parent's binding; any other (an outbound callout) starts unbound, so its own
+/// binding router can publish without colliding with the parent's frozen one.
+/// The parent's bound-body rewrite is always set aside so the nested executor
+/// cannot take it as its own.
+fn enter_nested_upstream_scope(extensions: &mut RequestExtensions, inherits_binding: bool) {
+    let (binding, frozen) = if inherits_binding {
+        (
+            extensions.get::<BoundUpstream>().cloned(),
+            extensions.get::<BoundUpstreamFrozen>().is_some(),
+        )
+    } else {
+        (
+            extensions.remove::<BoundUpstream>(),
+            extensions.remove::<BoundUpstreamFrozen>().is_some(),
+        )
+    };
     let state = ParentUpstreamState {
-        binding: extensions.get::<BoundUpstream>().cloned(),
-        frozen: extensions.get::<BoundUpstreamFrozen>().is_some(),
+        binding,
+        frozen,
         body_rewrite: extensions.remove::<BoundRequestBodyRewrite>(),
     };
     let mut states = extensions.remove::<ParentUpstreamStates>().unwrap_or_default();
@@ -436,14 +453,7 @@ impl FilteredSubrequestExecutor {
         extensions: RequestExtensions,
         deadline: Instant,
     ) -> Result<CalloutResponse, FilterError> {
-        let input = FilteredSubrequestInput {
-            pipeline,
-            request,
-            label: "callout",
-            iteration: 0,
-            deadline,
-            extensions,
-        };
+        let input = FilteredSubrequestInput::callout(pipeline, request, deadline, extensions);
         let opened = self.execute(input).await.map_err(|error| error.into_parts().0)?;
         Ok(self.callout_response_from(opened))
     }
@@ -550,14 +560,7 @@ impl FilteredSubrequestExecutor {
         extensions: RequestExtensions,
         deadline: Instant,
     ) -> Result<CalloutOutcome, FilterError> {
-        let input = FilteredSubrequestInput {
-            pipeline,
-            request,
-            label: "callout",
-            iteration: 0,
-            deadline,
-            extensions,
-        };
+        let input = FilteredSubrequestInput::callout(pipeline, request, deadline, extensions);
         match self.execute(input).await {
             Ok(opened) => {
                 // A transport-level overflow rides in the completed outcome's
@@ -622,6 +625,7 @@ impl FilteredSubrequestExecutor {
             iteration,
             deadline,
             mut extensions,
+            inherits_binding,
         } = input;
 
         let remaining = deadline
@@ -660,7 +664,7 @@ impl FilteredSubrequestExecutor {
         };
         let mut filter_ctx = build_sub_filter_context(pipeline, &sub_req, resources);
         filter_ctx.extensions = std::mem::take(&mut extensions);
-        enter_nested_upstream_scope(&mut filter_ctx.extensions);
+        enter_nested_upstream_scope(&mut filter_ctx.extensions, inherits_binding);
         filter_ctx.extensions.insert(RetainedFilterResults::default());
         filter_ctx.enable_stream_chunk_emission(self.max_state_bytes);
         // A callout may stage a pre-resolved upstream (for example a URL prepared

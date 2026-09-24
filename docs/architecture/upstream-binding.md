@@ -66,7 +66,9 @@ request-level binding router. Routers inside branches cannot publish binding,
 and IRR steps that observe or consume binding must inherit it from the parent;
 their own ordinary routers remain exchange-local. A `ReEnter` edge may not run
 the binding router again. Republishing the same cluster is an idempotent runtime
-backstop, while a different cluster fails closed.
+backstop, while a different cluster fails closed. An outbound callout chain
+(`bind_chain`) is a separate request: it starts unbound, may bind its own
+cluster, and never sees or changes the parent's binding.
 
 Source: `crates/filter/src/builtins/http/traffic_management/router/mod.rs`,
 `crates/filter/src/extensions.rs` (`BoundUpstream`).
