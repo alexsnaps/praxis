@@ -93,13 +93,13 @@ impl PendingStreamChunks {
 /// A binding-publish attempt rejected because the logical binding is frozen
 /// and the attempted cluster differs from the frozen one.
 ///
-/// The executor freezes the binding right after the first router publishes it, so a later
-/// router cannot silently retarget a request whose body may already have been
-/// processed against the binding. The executor freezes right after the first
-/// binding router publishes, whether or not any body participant exists. Valid
-/// configurations never reach this at runtime (pipeline validation rejects
-/// any control flow that could publish a second, different binding), so the
-/// router treats it as a fail-closed backstop and returns a 500.
+/// The executor freezes the binding right after the first binding router
+/// publishes it, whether or not any body participant exists, so a later router
+/// cannot silently retarget a request whose body may already have been
+/// processed against the binding. Valid configurations never reach this at
+/// runtime (pipeline validation rejects any control flow that could publish a
+/// second, different binding), so the router treats it as a fail-closed
+/// backstop and returns a 500.
 #[cfg(feature = "upstream-binding")]
 #[derive(Debug)]
 pub(crate) struct BindingFrozen {
