@@ -103,6 +103,31 @@ fn validate_request_conditions(chain_name: &str, entry: &FilterEntry) -> Result<
         validate_condition_containers(chain_name, &entry.filter_type, idx, matcher)?;
         validate_condition_paths(chain_name, &entry.filter_type, idx, matcher)?;
         validate_condition_bound_upstream(chain_name, &entry.filter_type, idx, matcher)?;
+        validate_condition_selected_upstream(chain_name, &entry.filter_type, idx, matcher)?;
+    }
+    Ok(())
+}
+
+/// Reject a `selected_upstream` value that is not a canonical identifier.
+///
+/// Cluster tags are validated to the same rule, so a value that breaks it
+/// can never equal a tag. Reporting the rule here beats the later "matches no
+/// cluster" error, which would send the operator hunting for a missing tag.
+fn validate_condition_selected_upstream(
+    chain_name: &str,
+    filter: &str,
+    idx: usize,
+    matcher: &ConditionMatch,
+) -> Result<(), ProxyError> {
+    let Some(selected) = &matcher.selected_upstream else {
+        return Ok(());
+    };
+    let context = format!("filter '{filter}' in chain '{chain_name}': condition {idx} selected_upstream");
+    if let Some(protocol) = selected.application_protocol.as_deref() {
+        super::validate_application_identifier(protocol, "application_protocol", &context)?;
+    }
+    if let Some(provider) = selected.application_provider.as_deref() {
+        super::validate_application_identifier(provider, "application_provider", &context)?;
     }
     Ok(())
 }
@@ -1588,6 +1613,27 @@ clusters:
   - {name: generic, endpoints: ["10.0.0.2:80"]}
 "#;
         Config::from_yaml(yaml).expect("one satisfiable bound matcher permits other untagged clusters");
+    }
+
+    #[test]
+    fn reject_non_canonical_selected_upstream_identifier() {
+        let yaml = r#"
+listeners: [{name: web, address: "127.0.0.1:8080", filter_chains: [main]}]
+filter_chains:
+  - name: main
+    filters:
+      - filter: request_id
+        conditions: [{when: {selected_upstream: {application_provider: "OpenAI"}}}]
+      - filter: load_balancer
+        clusters: [{name: backend, http: {application_provider: openai}, endpoints: ["10.0.0.1:80"]}]
+"#;
+
+        let err = Config::from_yaml(yaml).unwrap_err();
+
+        assert!(
+            err.to_string().contains("lowercase ASCII"),
+            "a selected_upstream value gets the same identifier rule as a bound one: {err}"
+        );
     }
 
     #[test]
