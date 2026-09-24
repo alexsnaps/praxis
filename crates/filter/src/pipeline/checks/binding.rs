@@ -27,6 +27,14 @@ use crate::{
 };
 
 // -----------------------------------------------------------------------------
+// Constants
+// -----------------------------------------------------------------------------
+
+/// Built-in filters that always answer the request themselves, so a bound
+/// request that reaches one needs no load balancer.
+const ANSWERING_FILTERS: &[&str] = &["redirect", "static_response"];
+
+// -----------------------------------------------------------------------------
 // Error Checks
 // -----------------------------------------------------------------------------
 
@@ -254,77 +262,60 @@ pub(in crate::pipeline) fn check_irr_coexistence(filters: &[PipelineFilter], nam
     }
 }
 
-/// A bound-upstream load balancer must be able to resolve every bindable
-/// cluster.
+/// Every cluster the binding router can bind must reach a load balancer that
+/// serves it.
 ///
-/// For each cluster a router may bind, the check follows the pipeline in order
-/// and requires a load balancer that is guaranteed to execute for that
-/// binding. An unconditional load balancer, or one guarded solely by a matching
-/// `bound_upstream` predicate, supplies coverage. Request-dependent conditions
-/// and result-dependent branch chains do not: they may bypass endpoint
-/// selection at runtime. Both bound-source load balancers and ordinary
-/// fallthrough load balancers count, because either can complete transport for
-/// the bound cluster. Pipelines with no declared bound consumer are unaffected.
+/// For each of the router's clusters, [`ClusterScan`] follows every path a
+/// request bound to that cluster can take from the router onward and requires
+/// each to end at a load balancer that declares the cluster, or at a filter
+/// that answers the request itself. A path that reaches a load balancer lacking
+/// the cluster, or that runs off the end of the pipeline, would fail the
+/// request. A pipeline with no load balancer at all is left to the
+/// router-without-load-balancer warning, as in ordinary routing.
 pub(in crate::pipeline) fn check_bound_cluster_coverage(filters: &[PipelineFilter], errors: &mut Vec<String>) {
-    let coverage = guaranteed_bound_cluster_coverage(filters, true);
-    if !declares_bound_cluster_consumer(filters) {
+    if !any_consumes_bound_upstream(filters) && crate::pipeline::clusters::extract_lb_clusters(filters).is_empty() {
         return;
     }
-    let mut bindable: Vec<String> = crate::pipeline::clusters::bindable_clusters(filters)
-        .into_iter()
-        .collect();
+    let Some(router) = binding_router_index(filters) else {
+        return;
+    };
+    let covered = covered_bound_clusters(filters);
+    let mut bindable: Vec<String> = filters
+        .get(router)
+        .map(|pf| pf.filter.selected_clusters())
+        .unwrap_or_default();
     bindable.sort();
-    for cluster in bindable {
-        if !coverage.contains(cluster.as_str()) {
-            errors.push(format!(
-                "cluster '{cluster}' can be bound as the logical upstream but no \
-                 guaranteed load_balancer can serve it on its reachable path; \
-                 requests bound to it could fail endpoint selection"
-            ));
-        }
+    bindable.dedup();
+    for cluster in bindable.into_iter().filter(|cluster| !covered.contains(cluster)) {
+        errors.push(format!(
+            "cluster '{cluster}' can be bound as the logical upstream but no \
+             guaranteed load_balancer can serve it on its reachable path; \
+             requests bound to it could fail endpoint selection"
+        ));
     }
 }
 
-/// Whether this pipeline or one of its branches declares a bound-source
-/// cluster consumer.
-fn declares_bound_cluster_consumer(filters: &[PipelineFilter]) -> bool {
-    filters.iter().any(|pf| {
-        !pf.filter.bound_upstream_clusters().is_empty()
-            || pf
-                .branches
-                .iter()
-                .any(|branch| declares_bound_cluster_consumer(&branch.filters))
-    })
-}
-
-/// Bound clusters for which a consumer is structurally guaranteed by
-/// unconditional control flow or a condition composed solely of a decidable
-/// `bound_upstream` predicate.
-pub(super) fn guaranteed_bound_cluster_coverage(
-    filters: &[PipelineFilter],
-    include_router_source_load_balancers: bool,
-) -> std::collections::HashSet<String> {
-    let bindable = crate::pipeline::clusters::bindable_clusters(filters);
+/// The binding router's clusters that every path from the router serves.
+pub(super) fn covered_bound_clusters(filters: &[PipelineFilter]) -> std::collections::HashSet<String> {
+    let Some(router) = binding_router_index(filters) else {
+        return std::collections::HashSet::new();
+    };
     let (catalog, _) = crate::pipeline::catalog::build_catalog(crate::pipeline::collect_cluster_declarations(filters));
-    bindable
+    filters
+        .get(router)
+        .map(|pf| pf.filter.selected_clusters())
+        .unwrap_or_default()
         .into_iter()
-        .filter(|cluster| {
-            cluster_has_guaranteed_bound_consumer(
-                filters,
-                cluster,
-                catalog.lookup(cluster),
-                include_router_source_load_balancers,
-            )
-        })
+        .filter(|cluster| ClusterScan::new(cluster, catalog.lookup(cluster), true).covers(filters, router))
         .collect()
 }
 
-/// Bound-source clusters a pipeline guarantees to consume whenever it runs.
+/// Bound-source clusters a pipeline serves on every path from its entry.
 ///
-/// Unlike [`guaranteed_bound_cluster_coverage`], candidates come from the
-/// consumers themselves rather than local routers. This lets a framework
-/// owner such as the IRR fold up only its initial step's guaranteed coverage
-/// without crediting optional or later steps.
+/// An IRR step has no router of its own; it inherits its parent's binding. The
+/// candidates are the clusters its bound-source consumers declare, and an
+/// ordinary load balancer does not serve them because nothing in the step set
+/// `ctx.cluster`.
 #[cfg(feature = "iterative-request-router")]
 pub(in crate::pipeline) fn guaranteed_bound_consumer_clusters(
     filters: &[PipelineFilter],
@@ -334,7 +325,11 @@ pub(in crate::pipeline) fn guaranteed_bound_consumer_clusters(
     let (catalog, _) = crate::pipeline::catalog::build_catalog(crate::pipeline::collect_cluster_declarations(filters));
     candidates
         .into_iter()
-        .filter(|cluster| cluster_has_guaranteed_bound_consumer(filters, cluster, catalog.lookup(cluster), false))
+        .filter(|cluster| {
+            ClusterScan::new(cluster, catalog.lookup(cluster), false)
+                .chain(filters, 0, false)
+                .covered()
+        })
         .collect()
 }
 
@@ -349,207 +344,214 @@ fn collect_bound_consumer_clusters(filters: &[PipelineFilter], out: &mut std::co
     }
 }
 
-/// Whether the given cluster is guaranteed to reach a compatible consumer
-/// before an unconditional terminal filter stops the path.
-fn cluster_has_guaranteed_bound_consumer(
-    filters: &[PipelineFilter],
-    cluster: &str,
-    metadata: Option<&crate::pipeline::catalog::ClusterApplicationMetadata>,
-    include_router_source_load_balancers: bool,
-) -> bool {
-    BoundConsumerSearch {
-        cluster,
-        metadata,
-        include_router_source_load_balancers,
-    }
-    .pipeline_has_consumer(filters)
+/// One way a path through a chain can end for a request bound to one cluster.
+#[derive(Clone, Copy)]
+enum Ending {
+    /// A filter answered the request itself.
+    Answered,
+    /// A load balancer that cannot serve the cluster ran.
+    Failed,
+    /// The path left the chain with no load balancer and no answer.
+    FellThrough,
+    /// A load balancer serving the cluster selected an upstream; control keeps
+    /// going through any branch rejoin.
+    Selected,
 }
 
-/// Immutable inputs for exploring whether every path reaches a consumer.
-struct BoundConsumerSearch<'a> {
-    /// Cluster whose binding must be consumed.
+impl Ending {
+    /// The flag bit recording this ending in [`Endings`].
+    fn bit(self) -> u8 {
+        match self {
+            Self::Answered => 0b0001,
+            Self::Failed => 0b0010,
+            Self::FellThrough => 0b0100,
+            Self::Selected => 0b1000,
+        }
+    }
+}
+
+/// The set of ways paths through a chain end.
+#[derive(Clone, Copy, Default)]
+struct Endings(u8);
+
+impl Endings {
+    /// Record that some path ends this way.
+    fn add(&mut self, ending: Ending) {
+        self.0 |= ending.bit();
+    }
+
+    /// Every path ended in an answer or a serving load balancer.
+    fn covered(self) -> bool {
+        self.0 != 0 && !self.has(Ending::Failed) && !self.has(Ending::FellThrough)
+    }
+
+    /// Whether some path ends this way.
+    fn has(self, ending: Ending) -> bool {
+        self.0 & ending.bit() != 0
+    }
+
+    /// Fold in the endings of another set of paths.
+    fn merge(&mut self, other: Self) {
+        self.0 |= other.0;
+    }
+
+    /// These endings with one kind removed.
+    fn without(self, ending: Ending) -> Self {
+        Self(self.0 & !ending.bit())
+    }
+}
+
+/// Follows a request bound to one cluster through a pipeline.
+struct ClusterScan<'a> {
+    /// Cluster the request is bound to.
     cluster: &'a str,
-    /// Application metadata associated with `cluster`.
+    /// Top-level scan results by start index, so a filter reached by many
+    /// jumps is scanned once. An entry is written before its scan finishes,
+    /// which also stops `ReEnter` loops.
+    memo: std::cell::RefCell<std::collections::HashMap<usize, Endings>>,
+    /// Application metadata of `cluster`, used to decide `bound_upstream`
+    /// conditions statically.
     metadata: Option<&'a crate::pipeline::catalog::ClusterApplicationMetadata>,
-    /// Whether a router-source load balancer counts as a consumer.
-    include_router_source_load_balancers: bool,
+    /// Whether an ordinary load balancer serves the cluster: true where the
+    /// binding router also set `ctx.cluster`, false inside an IRR step.
+    ordinary_lb_serves: bool,
 }
 
-/// Mutable worklist state for one pipeline exploration.
-struct BoundConsumerTraversal {
-    /// Filter indexes still to explore.
-    pending: Vec<usize>,
-    /// Filter indexes already explored in this pipeline.
-    visited: std::collections::HashSet<usize>,
-    /// Outcomes observed across all explored paths.
-    outcomes: std::collections::HashSet<BoundConsumerOutcome>,
-}
-
-/// Outcome of one path through a bound-consumer search.
-#[derive(Clone, Copy, Eq, Hash, PartialEq)]
-enum BoundConsumerOutcome {
-    /// A compatible endpoint consumer ran.
-    Consumed,
-    /// The pipeline ended without a compatible consumer.
-    Unconsumed,
-    /// An incompatible or terminal filter stopped the path.
-    Blocked,
-}
-
-impl BoundConsumerSearch<'_> {
-    /// Explore one pipeline, including its nested branches.
-    fn pipeline_has_consumer(&self, filters: &[PipelineFilter]) -> bool {
-        let coverage = self.pipeline_coverage(filters);
-        coverage.outcomes.len() == 1 && coverage.outcomes.contains(&BoundConsumerOutcome::Consumed)
-    }
-
-    /// Classify every path through one pipeline for a caller that will apply a
-    /// branch rejoin to paths that reach the end unconsumed.
-    fn pipeline_coverage(&self, filters: &[PipelineFilter]) -> BoundConsumerTraversal {
-        let mut traversal = BoundConsumerTraversal {
-            pending: vec![0],
-            visited: std::collections::HashSet::new(),
-            outcomes: std::collections::HashSet::new(),
-        };
-        if filters.is_empty() {
-            traversal.outcomes.insert(BoundConsumerOutcome::Unconsumed);
-            return traversal;
-        }
-        while let Some(idx) = traversal.pending.pop() {
-            self.visit_filter(filters, idx, &mut traversal);
-        }
-        traversal
-    }
-
-    /// Explore one reachable filter and enqueue its surviving continuations.
-    fn visit_filter(&self, filters: &[PipelineFilter], idx: usize, traversal: &mut BoundConsumerTraversal) {
-        let Some(pf) = filters.get(idx) else {
-            traversal.outcomes.insert(BoundConsumerOutcome::Unconsumed);
-            return;
-        };
-        if !traversal.visited.insert(idx) {
-            return;
-        }
-        if !self.filter_can_execute(pf, idx, traversal) {
-            return;
-        }
-        if filter_itself_guarantees_bound_consumer(pf, self.cluster, self.include_router_source_load_balancers) {
-            traversal.outcomes.insert(BoundConsumerOutcome::Consumed);
-            return;
-        }
-        if filter_blocks_bound_cluster(pf, self.cluster, self.include_router_source_load_balancers) {
-            traversal.outcomes.insert(BoundConsumerOutcome::Blocked);
-            return;
-        }
-        if is_unconditional_terminal(pf) {
-            traversal.outcomes.insert(BoundConsumerOutcome::Blocked);
-            return;
-        }
-        let Some(fall_through) = self.enqueue_branches(pf, idx, traversal) else {
-            traversal.outcomes.insert(BoundConsumerOutcome::Blocked);
-            return;
-        };
-        if fall_through {
-            traversal.pending.push(idx + 1);
+impl<'a> ClusterScan<'a> {
+    /// Scan for `cluster` with its catalog metadata.
+    fn new(
+        cluster: &'a str,
+        metadata: Option<&'a crate::pipeline::catalog::ClusterApplicationMetadata>,
+        ordinary_lb_serves: bool,
+    ) -> Self {
+        Self {
+            cluster,
+            memo: std::cell::RefCell::default(),
+            metadata,
+            ordinary_lb_serves,
         }
     }
 
-    /// Enqueue a request-condition miss and report whether the filter can run.
-    fn filter_can_execute(&self, pf: &PipelineFilter, idx: usize, traversal: &mut BoundConsumerTraversal) -> bool {
-        match binding_condition_state(&pf.conditions, self.metadata) {
-            BindingConditionState::Never => {
-                traversal.pending.push(idx + 1);
+    /// Follow every path through `filters` from `start`.
+    ///
+    /// A `nested` chain is a branch sub-chain: at runtime its own branches
+    /// cannot jump (`SkipTo`/`ReEnter` are discarded) and a `Terminal` rejoin
+    /// fails the request with a 500.
+    fn chain(&self, filters: &[PipelineFilter], start: usize, nested: bool) -> Endings {
+        if !nested {
+            if let Some(endings) = self.memo.borrow().get(&start) {
+                return *endings;
+            }
+            self.memo.borrow_mut().insert(start, Endings::default());
+        }
+        let mut endings = Endings::default();
+        let mut fell_through = true;
+        for pf in filters.iter().skip(start) {
+            let always = match binding_condition_state(&pf.conditions, self.metadata) {
+                BindingConditionState::Never => continue,
+                BindingConditionState::Maybe => false,
+                BindingConditionState::Always => true,
+            };
+            if !self.run(filters, pf, nested, &mut endings) && always {
+                fell_through = false;
+                break;
+            }
+        }
+        if fell_through {
+            endings.add(Ending::FellThrough);
+        }
+        if !nested {
+            self.memo.borrow_mut().insert(start, endings);
+        }
+        endings
+    }
+
+    /// Whether every path from the binding router at `router` is served.
+    ///
+    /// The router is the anchor: a request only carries this binding once the
+    /// router ran, so its own conditions never let the scan skip it.
+    fn covers(&self, filters: &[PipelineFilter], router: usize) -> bool {
+        let Some(anchor) = filters.get(router) else {
+            return false;
+        };
+        let mut endings = Endings::default();
+        if self.run(filters, anchor, false, &mut endings) {
+            endings.merge(self.chain(filters, router + 1, false));
+        }
+        endings.covered()
+    }
+
+    /// How running `pf` ends the request for this cluster, or `None` when the
+    /// request passes through it.
+    fn ends_request(&self, pf: &PipelineFilter) -> Option<Ending> {
+        let declares = |clusters: Vec<String>| clusters.iter().any(|declared| declared == self.cluster);
+        let served = |serves: bool| Some(if serves { Ending::Selected } else { Ending::Failed });
+        if pf.filter.consumes_bound_upstream() {
+            served(declares(pf.filter.bound_upstream_clusters()))
+        } else if pf.filter.name() == "load_balancer" {
+            self.ordinary_lb_serves
+                .then(|| served(declares(pf.filter.load_balancer_clusters())))
+                .flatten()
+        } else if ANSWERING_FILTERS.contains(&pf.filter.name())
+            || matches!(&pf.filter, AnyFilter::Http(filter) if filter.produces_terminal_response())
+        {
+            Some(Ending::Answered)
+        } else {
+            None
+        }
+    }
+
+    /// Record what running `pf` does to the request and report whether control
+    /// can continue to the next filter in the chain.
+    fn run(&self, filters: &[PipelineFilter], pf: &PipelineFilter, nested: bool, endings: &mut Endings) -> bool {
+        if let Some(ending) = self.ends_request(pf) {
+            endings.add(ending);
+            return false;
+        }
+        for branch in &pf.branches {
+            let leaves = self.run_branch(filters, branch, nested, endings);
+            if branch.condition.is_none() && leaves {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Record the endings of one fired branch of a filter in `filters` and
+    /// report whether every path through it leaves the host's chain.
+    fn run_branch(
+        &self,
+        filters: &[PipelineFilter],
+        branch: &ResolvedBranch,
+        nested: bool,
+        endings: &mut Endings,
+    ) -> bool {
+        let mut sub = self.chain(&branch.filters, 0, true);
+        if nested && matches!(branch.rejoin, RejoinTarget::Terminal) && sub.has(Ending::Selected) {
+            sub = sub.without(Ending::Selected);
+            sub.add(Ending::Failed);
+        }
+        endings.merge(sub.without(Ending::FellThrough));
+        if !sub.has(Ending::FellThrough) {
+            return true;
+        }
+        match &branch.rejoin {
+            RejoinTarget::Next => false,
+            RejoinTarget::SkipTo(_) | RejoinTarget::ReEnter(_) if nested => false,
+            RejoinTarget::ReEnter(target) => {
+                endings.merge(self.chain(filters, *target, false));
                 false
             },
-            BindingConditionState::Maybe => {
-                traversal.pending.push(idx + 1);
+            RejoinTarget::SkipTo(target) => {
+                endings.merge(self.chain(filters, *target, false));
                 true
             },
-            BindingConditionState::Always => true,
+            RejoinTarget::Terminal => {
+                endings.add(Ending::Failed);
+                true
+            },
         }
     }
-
-    /// Add branch continuations and report whether the host can fall through.
-    fn enqueue_branches(
-        &self,
-        pf: &PipelineFilter,
-        idx: usize,
-        traversal: &mut BoundConsumerTraversal,
-    ) -> Option<bool> {
-        let mut fall_through = true;
-        for branch in &pf.branches {
-            let branch_coverage = self.pipeline_coverage(&branch.filters);
-            if branch_coverage.outcomes.contains(&BoundConsumerOutcome::Blocked) {
-                return None;
-            }
-            if branch_coverage.outcomes.contains(&BoundConsumerOutcome::Consumed) {
-                traversal.outcomes.insert(BoundConsumerOutcome::Consumed);
-            }
-            if branch_coverage.outcomes.contains(&BoundConsumerOutcome::Unconsumed) {
-                enqueue_unconsumed_branch_rejoin(&branch.rejoin, idx, &mut traversal.pending)?;
-            }
-            if branch.condition.is_none() {
-                fall_through = unconditional_branch_falls_through(&branch.rejoin, idx, &mut traversal.pending);
-            }
-        }
-        Some(fall_through)
-    }
-}
-
-/// Whether this filter always stops request-pipeline execution when reached.
-fn is_unconditional_terminal(pf: &PipelineFilter) -> bool {
-    pf.conditions.is_empty() && matches!(&pf.filter, AnyFilter::Http(filter) if filter.produces_terminal_response())
-}
-
-/// Follow a branch that did not contain a compatible bound consumer.
-fn enqueue_unconsumed_branch_rejoin(rejoin: &RejoinTarget, idx: usize, pending: &mut Vec<usize>) -> Option<()> {
-    match rejoin {
-        RejoinTarget::Next => pending.push(idx + 1),
-        RejoinTarget::SkipTo(target) | RejoinTarget::ReEnter(target) => pending.push(*target),
-        RejoinTarget::Terminal => return None,
-    }
-    Some(())
-}
-
-/// Account for the host pipeline path when an unconditional branch is taken.
-fn unconditional_branch_falls_through(rejoin: &RejoinTarget, idx: usize, pending: &mut Vec<usize>) -> bool {
-    if matches!(rejoin, RejoinTarget::ReEnter(_)) {
-        pending.push(idx + 1);
-        true
-    } else {
-        false
-    }
-}
-
-/// Whether the executing filter itself serves `cluster`.
-fn filter_itself_guarantees_bound_consumer(
-    pf: &PipelineFilter,
-    cluster: &str,
-    include_router_source_load_balancers: bool,
-) -> bool {
-    pf.filter
-        .bound_upstream_clusters()
-        .iter()
-        .any(|declared| declared == cluster)
-        || include_router_source_load_balancers
-            && pf
-                .filter
-                .load_balancer_clusters()
-                .iter()
-                .any(|declared| declared == cluster)
-}
-
-/// Whether running this selector for `cluster` deterministically fails before
-/// a later consumer can run.
-fn filter_blocks_bound_cluster(pf: &PipelineFilter, cluster: &str, include_router_source_load_balancers: bool) -> bool {
-    let declared = if pf.filter.consumes_bound_upstream() {
-        pf.filter.bound_upstream_clusters()
-    } else if include_router_source_load_balancers && pf.filter.name() == "load_balancer" {
-        pf.filter.load_balancer_clusters()
-    } else {
-        return false;
-    };
-    !declared.iter().any(|candidate| candidate == cluster)
 }
 
 /// Whether request conditions always, never, or only sometimes match for the
@@ -905,10 +907,16 @@ fn check_bound_matchers(
     }
 }
 
-/// Whether any filter in `filters` (including branch sub-chains and IRR steps)
-/// selects its cluster from the frozen logical binding.
+/// Whether any filter in `filters` (including branch sub-chains and, through
+/// the IRR, its steps) selects its cluster from the logical binding.
 pub(super) fn any_consumes_bound_upstream(filters: &[PipelineFilter]) -> bool {
-    !guaranteed_bound_cluster_coverage(filters, false).is_empty()
+    filters.iter().any(|pf| {
+        pf.filter.consumes_bound_upstream()
+            || pf
+                .branches
+                .iter()
+                .any(|branch| any_consumes_bound_upstream(&branch.filters))
+    })
 }
 
 // -----------------------------------------------------------------------------
@@ -1671,13 +1679,139 @@ mod tests {
     }
 
     #[test]
-    fn bound_coverage_without_consumer_no_error() {
+    fn bound_coverage_without_any_load_balancer_no_error() {
         let filters = vec![binding_router(&["inference"])];
         let mut errors = Vec::new();
         check_bound_cluster_coverage(&filters, &mut errors);
         assert!(
             errors.is_empty(),
-            "no bound consumer means the coverage check does not run: {errors:?}"
+            "a pipeline with no load balancer is left to the router-without-LB warning: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn bound_coverage_checks_an_ordinary_load_balancer_gated_by_binding() {
+        let (catalog_openai, catalog_anthropic) = (
+            metadata_filter("metadata", "gpt", None, Some("openai")),
+            metadata_filter("metadata", "claude", None, Some("anthropic")),
+        );
+        let mut gated = lb_filter(&["gpt", "claude"]);
+        gated.conditions = vec![bound_condition(None, Some("openai"))];
+        let filters = vec![
+            binding_router(&["gpt", "claude"]),
+            gated,
+            catalog_openai,
+            catalog_anthropic,
+        ];
+        let mut errors = Vec::new();
+
+        check_bound_cluster_coverage(&filters, &mut errors);
+
+        assert_eq!(
+            errors.len(),
+            1,
+            "requests bound to claude skip the openai-only load balancer: {errors:?}"
+        );
+        assert!(
+            errors[0].contains("cluster 'claude'"),
+            "only claude is unserved: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn bound_coverage_rejects_a_nested_terminal_after_a_load_balancer() {
+        let mut inner = named_noop_filter("inner_host", vec![]);
+        inner.branches = vec![make_terminal_branch("inner", vec![bound_lb(&["backend"])])];
+        let mut outer = named_noop_filter("outer_host", vec![]);
+        outer.branches = vec![make_branch_with_filters("outer", vec![inner])];
+        let filters = vec![binding_router(&["backend"]), outer];
+        let mut errors = Vec::new();
+
+        check_bound_cluster_coverage(&filters, &mut errors);
+
+        assert_eq!(
+            errors.len(),
+            1,
+            "a terminal rejoin inside a branch fails the request even after an upstream was chosen: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn bound_coverage_counts_a_redirect_as_answering() {
+        let mut guard = named_noop_filter("guard", vec![]);
+        guard.branches = vec![conditional_branch(
+            "redirect",
+            vec![named_noop_filter("redirect", vec![])],
+            RejoinTarget::Terminal,
+        )];
+        let filters = vec![binding_router(&["backend"]), guard, bound_lb(&["backend"])];
+        let mut errors = Vec::new();
+
+        check_bound_cluster_coverage(&filters, &mut errors);
+
+        assert!(errors.is_empty(), "a redirect answers the request itself: {errors:?}");
+    }
+
+    #[test]
+    fn bound_coverage_follows_a_top_level_skip_to() {
+        let mut host = named_noop_filter("host", vec![]);
+        host.branches = vec![conditional_branch("jump", vec![], RejoinTarget::SkipTo(3))];
+        let filters = vec![
+            binding_router(&["backend"]),
+            host,
+            bound_lb(&["backend"]),
+            named_noop_filter("after", vec![]),
+        ];
+        let mut errors = Vec::new();
+
+        check_bound_cluster_coverage(&filters, &mut errors);
+
+        assert_eq!(
+            errors.len(),
+            1,
+            "the jump lands past the only load balancer: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn bound_coverage_follows_a_re_enter_target() {
+        let mut skipper = named_noop_filter("skipper", vec![]);
+        skipper.branches = vec![make_skip_branch("to_looper", 3)];
+        let mut exit = named_noop_filter("exit", vec![]);
+        exit.branches = vec![conditional_branch("exit", vec![], RejoinTarget::Terminal)];
+        let mut looper = named_noop_filter("looper", vec![]);
+        looper.branches = vec![conditional_branch("back", vec![], RejoinTarget::ReEnter(2))];
+        let filters = vec![
+            binding_router(&["backend"]),
+            skipper,
+            exit,
+            looper,
+            bound_lb(&["backend"]),
+        ];
+        let mut errors = Vec::new();
+
+        check_bound_cluster_coverage(&filters, &mut errors);
+
+        assert_eq!(
+            errors.len(),
+            1,
+            "re-entering at the exit filter can end the request before any load balancer: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn bound_coverage_rejects_a_conditional_load_balancer_lacking_the_cluster() {
+        let mut other = lb_filter(&["other"]);
+        other.conditions = vec![make_condition()];
+        let filters = vec![binding_router(&["backend"]), other, lb_filter(&["backend"])];
+        let mut errors = Vec::new();
+
+        check_bound_cluster_coverage(&filters, &mut errors);
+
+        assert_eq!(
+            errors.len(),
+            1,
+            "when the conditional load balancer runs it cannot serve backend: {errors:?}"
         );
     }
 
@@ -1963,6 +2097,64 @@ mod tests {
             errors.len(),
             1,
             "a request that skips the conditional router reaches the consumer unbound: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn bound_coverage_ignores_branches_before_the_router() {
+        let mut guard = named_noop_filter("guardrails", vec![]);
+        guard.branches = vec![conditional_branch(
+            "deny",
+            vec![named_noop_filter("static_response", vec![])],
+            RejoinTarget::Terminal,
+        )];
+        let filters = vec![guard, binding_router(&["backend"]), bound_lb(&["backend"])];
+        let mut errors = Vec::new();
+
+        check_bound_cluster_coverage(&filters, &mut errors);
+
+        assert!(
+            errors.is_empty(),
+            "only paths after the router carry the binding: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn bound_coverage_counts_a_static_response_as_answering() {
+        let mut guard = named_noop_filter("guardrails", vec![]);
+        guard.branches = vec![conditional_branch(
+            "deny",
+            vec![named_noop_filter("static_response", vec![])],
+            RejoinTarget::Terminal,
+        )];
+        let filters = vec![binding_router(&["backend"]), guard, bound_lb(&["backend"])];
+        let mut errors = Vec::new();
+
+        check_bound_cluster_coverage(&filters, &mut errors);
+
+        assert!(
+            errors.is_empty(),
+            "a deny branch that answers the request needs no load balancer: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn bound_coverage_ignores_jumps_inside_branch_sub_chains() {
+        let mut nested_host = named_noop_filter("nested_host", vec![]);
+        nested_host.branches = vec![make_skip_branch("nested_skip", 9)];
+        let mut host = named_noop_filter("host", vec![]);
+        host.branches = vec![make_branch_with_filters(
+            "direct",
+            vec![nested_host, bound_lb(&["backend"])],
+        )];
+        let filters = vec![binding_router(&["backend"]), host];
+        let mut errors = Vec::new();
+
+        check_bound_cluster_coverage(&filters, &mut errors);
+
+        assert!(
+            errors.is_empty(),
+            "a nested SkipTo is discarded at runtime, so the sub-chain's load balancer still runs: {errors:?}"
         );
     }
 

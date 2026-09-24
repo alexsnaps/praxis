@@ -259,6 +259,68 @@ async fn built_binding_router_resolves_metadata_from_pipeline_catalog() {
 }
 
 #[test]
+fn deny_branch_before_bound_dispatch_is_accepted_from_yaml() {
+    let registry = FilterRegistry::with_builtins();
+    let mut entries: Vec<FilterEntry> = serde_yaml::from_str(
+        r#"
+- filter: guardrails
+  action: flag
+  rules:
+    - target: header
+      name: "X-Danger"
+      contains: "true"
+  branch_chains:
+    - name: block_banned
+      on_result:
+        filter: guardrails
+        result: blocked
+      rejoin: terminal
+      chains:
+        - name: blocked_response
+          filters:
+            - filter: static_response
+              status: 403
+- filter: router
+  routes:
+    - path_prefix: "/"
+      cluster: backend
+- filter: load_balancer
+  cluster_source: bound_upstream
+  clusters:
+    - name: backend
+      endpoints: ["127.0.0.1:9"]
+"#,
+    )
+    .unwrap();
+    let pipeline = FilterPipeline::build_with_chains(
+        &mut entries,
+        &registry,
+        &HashMap::new(),
+        &praxis_core::config::InsecureOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        pipeline.filters.first().map(|pf| pf.branches.len()),
+        Some(1),
+        "the deny branch must be resolved onto the guardrails host"
+    );
+    assert!(
+        pipeline
+            .filters
+            .get(1)
+            .is_some_and(|pf| matches!(&pf.filter, AnyFilter::Http(f) if f.binds_upstream())),
+        "the bound load balancer must turn the router into the binding router"
+    );
+
+    let errors = pipeline.ordering_errors(&entries, false, &SkipPipelineChecks::default());
+
+    assert!(
+        errors.is_empty(),
+        "a deny branch ahead of the binding router never carries the binding, so it cannot leave the bound cluster unserved: {errors:?}"
+    );
+}
+
+#[test]
 fn binding_enabled_router_in_branch_is_rejected_from_yaml() {
     let registry = FilterRegistry::with_builtins();
     let mut entries: Vec<FilterEntry> = serde_yaml::from_str(

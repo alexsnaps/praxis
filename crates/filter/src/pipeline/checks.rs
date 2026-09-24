@@ -25,7 +25,7 @@ mod binding;
 pub(super) use binding::check_bound_upstream_body_participants;
 #[cfg(feature = "iterative-request-router")]
 pub(super) use binding::guaranteed_bound_consumer_clusters;
-use binding::{any_consumes_bound_upstream, guaranteed_bound_cluster_coverage};
+use binding::{any_consumes_bound_upstream, covered_bound_clusters};
 pub(super) use binding::{
     check_bound_cluster_coverage, check_bound_condition_with_pre_read_body, check_bound_upstream_requires_binding,
     check_cluster_metadata_conflicts, check_irr_coexistence, check_no_rebind_after_binding,
@@ -323,13 +323,11 @@ pub(super) fn check_misaligned_clusters(filters: &[PipelineFilter], errors: &mut
     // for requests that skip the branch.
     let top_selected = super::clusters::level_selected_clusters(filters);
 
-    // A bound-consuming load balancer resolves its cluster from the frozen
-    // logical binding, so it serves a binding router's selection from any
-    // reachable path — including a conditional branch or an IRR step that
-    // `reachable_lb_clusters` deliberately excludes. Fold that coverage in so a
-    // top-level binding router selecting a bound cluster is not misreported as
-    // referencing an undefined load balancer.
-    let bound_coverage = guaranteed_bound_cluster_coverage(filters, true);
+    // A binding router's clusters can be served by load balancers that
+    // `reachable_lb_clusters` does not see (a bound-source one in a branch or
+    // an IRR step). Those the binding coverage scan proves served on every path
+    // count as defined, so they are not misreported here.
+    let bound_coverage = covered_bound_clusters(filters);
     let mut top_lb = super::clusters::reachable_lb_clusters(filters);
     top_lb.extend(bound_coverage.iter().cloned());
 
