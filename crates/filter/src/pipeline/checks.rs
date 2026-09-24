@@ -23,7 +23,7 @@ mod binding;
 
 #[cfg(feature = "bound-upstream-request-body")]
 pub(super) use binding::check_bound_upstream_body_participants;
-use binding::{any_consumes_bound_upstream, covered_bound_clusters};
+use binding::{any_consumes_bound_upstream, binding_router_clusters};
 #[cfg(feature = "iterative-request-router")]
 pub(super) use binding::{bound_consumer_clusters, serves_bound_cluster};
 pub(super) use binding::{
@@ -327,11 +327,10 @@ pub(super) fn check_misaligned_clusters(filters: &[PipelineFilter], errors: &mut
 
     // A binding router's clusters can be served by load balancers that
     // `reachable_lb_clusters` does not see (a bound-source one in a branch or
-    // an IRR step). Those the binding coverage scan proves served on every path
-    // count as defined, so they are not misreported here.
-    let bound_coverage = covered_bound_clusters(filters);
+    // an IRR step). The binding coverage check judges each of them, so they
+    // count as defined here instead of being reported twice.
     let mut top_lb = super::clusters::reachable_lb_clusters(filters);
-    top_lb.extend(bound_coverage.iter().cloned());
+    top_lb.extend(binding_router_clusters(filters));
 
     // The empty-LB escape is judged on the WHOLE pipeline: a pipeline with no
     // load balancer anywhere may route by other means (static upstream), but
@@ -339,7 +338,7 @@ pub(super) fn check_misaligned_clusters(filters: &[PipelineFilter], errors: &mut
     // selection, so the top-level check must still run against top_lb. A
     // bound-consuming load balancer counts too, even when it lives in an IRR
     // step that `extract_lb_clusters` does not descend into.
-    let any_lb = !super::clusters::extract_lb_clusters(filters).is_empty() || !bound_coverage.is_empty();
+    let any_lb = !super::clusters::extract_lb_clusters(filters).is_empty() || any_consumes_bound_upstream(filters);
     if !top_selected.is_empty() && any_lb {
         for cluster in &top_selected {
             if !top_lb.contains(cluster.as_str()) {
@@ -1076,7 +1075,7 @@ mod tests {
 
     use super::*;
     use crate::pipeline::test_filters::{
-        binding_router, bound_lb, lb_filter, noop_filter_with_conditions, selector_filter,
+        binding_router, bound_lb, lb_filter, noop_filter_with_conditions, selector_filter, terminal_filter,
     };
 
     #[test]
@@ -1162,6 +1161,44 @@ mod tests {
                 "a branch trace_context is evaluated when its branch runs, after routing: {errors:?}"
             );
         }
+    }
+
+    #[test]
+    fn misaligned_check_leaves_bound_clusters_to_the_coverage_check() {
+        let filters = vec![binding_router(&["a", "b"]), bound_lb(&["a"])];
+        let mut misaligned = Vec::new();
+        let mut coverage = Vec::new();
+
+        check_misaligned_clusters(&filters, &mut misaligned);
+        check_bound_cluster_coverage(&filters, &mut coverage);
+
+        assert!(
+            misaligned.is_empty(),
+            "the binding router's clusters are the coverage check's to judge: {misaligned:?}"
+        );
+        assert_eq!(coverage.len(), 1, "the unserved cluster is reported once: {coverage:?}");
+        assert!(
+            coverage[0].contains("cluster 'b'"),
+            "the coverage check names the unserved cluster: {coverage:?}"
+        );
+    }
+
+    #[test]
+    fn misaligned_check_skips_a_binding_pipeline_without_any_load_balancer() {
+        let filters = vec![
+            selector_filter("header_selector", &["x"]),
+            binding_router(&["a"]),
+            terminal_filter("static_response"),
+        ];
+        let mut errors = Vec::new();
+
+        check_misaligned_clusters(&filters, &mut errors);
+
+        assert!(
+            errors.is_empty(),
+            "with no load balancer anywhere the static-upstream escape applies, even when the router's clusters are \
+             answered: {errors:?}"
+        );
     }
 
     #[test]

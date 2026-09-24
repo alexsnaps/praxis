@@ -295,8 +295,19 @@ pub(in crate::pipeline) fn check_bound_cluster_coverage(filters: &[PipelineFilte
     }
 }
 
+/// Every cluster the pipeline's binding router can bind.
+///
+/// [`check_bound_cluster_coverage`] owns whether each one is served, so other
+/// alignment checks treat these as accounted for rather than report them twice.
+pub(super) fn binding_router_clusters(filters: &[PipelineFilter]) -> std::collections::HashSet<String> {
+    binding_router_index(filters)
+        .and_then(|router| filters.get(router))
+        .map(|pf| pf.filter.selected_clusters().into_iter().collect())
+        .unwrap_or_default()
+}
+
 /// The binding router's clusters that every path from the router serves.
-pub(super) fn covered_bound_clusters(filters: &[PipelineFilter]) -> std::collections::HashSet<String> {
+fn covered_bound_clusters(filters: &[PipelineFilter]) -> std::collections::HashSet<String> {
     let Some(router) = binding_router_index(filters) else {
         return std::collections::HashSet::new();
     };
