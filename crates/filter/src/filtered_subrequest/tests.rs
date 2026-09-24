@@ -1268,6 +1268,66 @@ fn into_completion_restores_parent_upstream_scope() {
     assert_parent_upstream_scope(&completion.extensions);
 }
 
+#[tokio::test]
+#[expect(clippy::large_futures, reason = "drives the full executor future in a test")]
+async fn expired_deadline_keeps_the_outer_scope_checkpoint() {
+    use std::{
+        sync::Arc,
+        time::{Duration, Instant},
+    };
+
+    use praxis_core::subrequest::SubRequestClient;
+
+    let registry = crate::FilterRegistry::with_builtins();
+    let pipeline = Arc::new(crate::FilterPipeline::build(&mut [], &registry).unwrap());
+    let client = SubRequestClient::new(crate::test_support::connector(1, None));
+    let downstream = crate::SubrequestRuntime::new(None, false, None, Instant::now());
+    let executor =
+        crate::FilteredSubrequestExecutor::for_callout(client, downstream, 0, 1_048_576, Duration::from_secs(5));
+    let mut extensions = crate::RequestExtensions::default();
+    extensions.insert(crate::extensions::BoundUpstream::new(Arc::from("parent"), None, None));
+    super::enter_nested_upstream_scope(&mut extensions, true);
+    extensions.insert(crate::extensions::BoundUpstream::new(
+        Arc::from("outer-step"),
+        None,
+        None,
+    ));
+    let request = crate::SubRequest {
+        method: http::Method::GET,
+        uri: http::Uri::from_static("/"),
+        headers: HeaderMap::new(),
+        body: bytes::Bytes::new(),
+    };
+
+    let Err(error) = executor
+        .execute(super::FilteredSubrequestInput::callout(
+            &pipeline,
+            &request,
+            Instant::now(),
+            extensions,
+        ))
+        .await
+    else {
+        panic!("an expired deadline must fail the sub-request");
+    };
+    let (_error, extensions) = error.into_parts();
+
+    assert_eq!(
+        extensions
+            .get::<crate::extensions::BoundUpstream>()
+            .map(crate::extensions::BoundUpstream::cluster),
+        Some("outer-step"),
+        "a failed inner call must hand back the outer step's view, not pop the outer checkpoint"
+    );
+    assert_eq!(
+        extensions
+            .get::<super::ParentUpstreamStates>()
+            .map(|states| states.0.len()),
+        Some(1),
+        "the outer scope's checkpoint must survive for its own restore"
+    );
+}
+
 #[test]
 fn callout_scope_starts_unbound_and_restores_the_parent_binding() {
     use std::sync::Arc;

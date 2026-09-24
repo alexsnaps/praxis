@@ -627,6 +627,9 @@ impl FilteredSubrequestExecutor {
             mut extensions,
             inherits_binding,
         } = input;
+        // Every error below is handed back through `into_parts`, which restores
+        // one parent checkpoint, so enter the scope before the first of them.
+        enter_nested_upstream_scope(&mut extensions, inherits_binding);
 
         let remaining = deadline
             .checked_duration_since(Instant::now())
@@ -664,7 +667,6 @@ impl FilteredSubrequestExecutor {
         };
         let mut filter_ctx = build_sub_filter_context(pipeline, &sub_req, resources);
         filter_ctx.extensions = std::mem::take(&mut extensions);
-        enter_nested_upstream_scope(&mut filter_ctx.extensions, inherits_binding);
         filter_ctx.extensions.insert(RetainedFilterResults::default());
         filter_ctx.enable_stream_chunk_emission(self.max_state_bytes);
         // A callout may stage a pre-resolved upstream (for example a URL prepared
