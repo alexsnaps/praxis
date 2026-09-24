@@ -401,6 +401,7 @@ impl FilterPipeline {
     /// [`buffered_request_body`] in place with a take/commit pattern: the body
     /// is moved out, threaded through each participant as a borrow distinct
     /// from `&mut ctx`, and committed back even when a participant rejects.
+    /// Participants see `None` for an empty body, as the hook documents.
     ///
     /// Each participant is gated by its own request conditions against the
     /// frozen binding view rather than [`executed_filter_indices`], which is
@@ -424,6 +425,7 @@ impl FilterPipeline {
         &self,
         ctx: &mut HttpFilterContext<'_>,
     ) -> Result<(FilterAction, bool), FilterError> {
+        let had_buffer = ctx.buffered_request_body.is_some();
         let mut body = ctx.buffered_request_body.take();
         let mut result = Ok(FilterAction::Continue);
         let mut rewrote = false;
@@ -450,6 +452,7 @@ impl FilterPipeline {
                 continue;
             };
             ctx.current_filter_id = Some(pf.filter_id);
+            body = body.filter(|bytes| !bytes.is_empty());
             let outcome = run_bound_upstream_request_body_filter(
                 http_filter.as_ref(),
                 ctx,
@@ -473,7 +476,9 @@ impl FilterPipeline {
                 },
             }
         }
-        ctx.buffered_request_body = body;
+        // Later request filters (the IRR) expect a buffer whenever the
+        // pre-read produced one, even if a participant removed the body.
+        ctx.buffered_request_body = body.or_else(|| had_buffer.then(Bytes::new));
         result.map(|action| (action, rewrote))
     }
 

@@ -6731,13 +6731,108 @@ async fn bound_upstream_barrier_runs_for_request_without_body() {
     let pipeline = make_pipeline(vec![binding_router("inference"), Box::new(participant)]);
     let req = crate::test_utils::make_request(Method::GET, "/");
     let mut ctx = crate::test_utils::make_filter_context(&req);
+    ctx.buffered_request_body = Some(Bytes::new());
 
     drop(pipeline.execute_http_request(&mut ctx).await.unwrap());
 
-    assert_eq!(ran.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        ran.load(Ordering::SeqCst),
+        1,
+        "the barrier runs even when the request has no body"
+    );
     assert!(
         seen.lock().unwrap().is_none(),
-        "the no-body snapshot must remain absent"
+        "an empty pre-read buffer must reach the hook as None"
+    );
+    assert_eq!(
+        ctx.buffered_request_body.as_deref(),
+        Some(&b""[..]),
+        "the empty buffer stays in place for later request filters"
+    );
+}
+
+/// Read-write participant that removes the request body at the barrier,
+/// leaving `None` or an empty buffer depending on `leave_empty_buffer`.
+struct RemoveBoundBodyFilter {
+    leave_empty_buffer: bool,
+}
+
+#[async_trait]
+impl HttpFilter for RemoveBoundBodyFilter {
+    fn name(&self) -> &'static str {
+        "remove_bound_body"
+    }
+
+    fn bound_upstream_request_body_access(&self) -> BodyAccess {
+        BodyAccess::ReadWrite
+    }
+
+    fn request_body_mode(&self) -> BodyMode {
+        BodyMode::StreamBuffer {
+            max_bytes: Some(65_536),
+        }
+    }
+
+    async fn on_request(&self, _ctx: &mut crate::HttpFilterContext<'_>) -> Result<FilterAction, FilterError> {
+        Ok(FilterAction::Continue)
+    }
+
+    async fn on_bound_upstream_request_body(
+        &self,
+        _ctx: &mut crate::HttpFilterContext<'_>,
+        body: &mut Option<Bytes>,
+    ) -> Result<crate::BoundUpstreamBodyOutcome, FilterError> {
+        *body = self.leave_empty_buffer.then(Bytes::new);
+        Ok(crate::BoundUpstreamBodyOutcome::Continue)
+    }
+}
+
+#[tokio::test]
+async fn bound_upstream_barrier_keeps_a_buffer_when_a_writer_removes_the_body() {
+    let pipeline = make_pipeline(vec![
+        binding_router("inference"),
+        Box::new(RemoveBoundBodyFilter {
+            leave_empty_buffer: false,
+        }),
+    ]);
+    let req = crate::test_utils::make_request(Method::POST, "/");
+    let mut ctx = crate::test_utils::make_filter_context(&req);
+    ctx.buffered_request_body = Some(Bytes::from_static(b"payload"));
+
+    drop(pipeline.execute_http_request(&mut ctx).await.unwrap());
+
+    assert_eq!(
+        ctx.buffered_request_body.as_deref(),
+        Some(&b""[..]),
+        "a removed body leaves an empty buffer, not None, for the IRR and other body readers"
+    );
+    assert_eq!(
+        ctx.take_bound_request_body_rewrite().as_deref(),
+        Some(&b""[..]),
+        "the transport forwards the removal as an empty body"
+    );
+}
+
+#[tokio::test]
+async fn bound_upstream_barrier_hands_later_participants_none_for_an_emptied_body() {
+    let (recorder, ran, seen) = BoundBodyRecordingFilter::new("bound_body", BoundBodyBehavior::Continue);
+    let pipeline = make_pipeline(vec![
+        binding_router("inference"),
+        Box::new(RemoveBoundBodyFilter {
+            leave_empty_buffer: true,
+        }),
+        Box::new(recorder),
+    ]);
+    let req = crate::test_utils::make_request(Method::POST, "/");
+    let mut ctx = crate::test_utils::make_filter_context(&req);
+    ctx.buffered_request_body = Some(Bytes::from_static(b"payload"));
+
+    drop(pipeline.execute_http_request(&mut ctx).await.unwrap());
+
+    assert_eq!(ran.load(Ordering::SeqCst), 1, "the later participant still runs");
+    assert!(
+        seen.lock().unwrap().is_none(),
+        "a body an earlier writer emptied must reach the next participant as None"
     );
 }
 
