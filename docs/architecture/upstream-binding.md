@@ -198,7 +198,10 @@ rejected before it serves traffic if:
   or an IRR step, or a `ReEnter` can run the binding router again;
 - a router shares a chain with an IRR but no bound-consuming load balancer runs
   after the router (an IRR's own `branch_chains` count only as a fallback when
-  it fails open, and then they must serve or answer every bindable cluster);
+  it fails open, and then they must serve or answer every bindable cluster; a
+  request that falls out of one fallback branch reaches the next only through
+  a `next` rejoin or a spent top-level re-entry loop, because a jump out of a
+  branch-hosted IRR is discarded and nothing after it runs);
 - a `bound_upstream` condition sits on a filter with an ordinary pre-read body
   hook, or on a top-level `trace_context`;
 - a cluster the router can bind reaches no load balancer that serves it and no

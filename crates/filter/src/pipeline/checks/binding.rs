@@ -560,7 +560,7 @@ impl<'a> ClusterScan<'a> {
         if let Some(ending) = self.ends_request(pf) {
             endings.add(ending);
             if falls_back_to_branches(pf) {
-                self.run_fallback(pf, endings);
+                self.run_fallback(pf, nested, endings);
             }
             return false;
         }
@@ -584,13 +584,24 @@ impl<'a> ClusterScan<'a> {
     /// or answer every cluster the router can bind. An IRR with no fallback
     /// branch adds nothing: failing open with nothing to fall back to is the
     /// operator's call.
-    fn run_fallback(&self, pf: &PipelineFilter, endings: &mut Endings) {
+    ///
+    /// A request that falls out of one fallback branch reaches the next one
+    /// only through a `next` rejoin, or through a top-level `ReEnter` once its
+    /// iteration limit is spent and the executor skips it. The executor
+    /// discards a jump out of a nested chain and ends the branch pass there,
+    /// so the branches after it never run.
+    fn run_fallback(&self, pf: &PipelineFilter, nested: bool, endings: &mut Endings) {
         let mut unserved = false;
         for branch in fallback_branches(pf) {
             let fallback = self.chain(&branch.filters, 0, true);
             endings.merge(fallback.without(Ending::FellThrough));
             unserved = fallback.has(Ending::FellThrough);
-            if !unserved || matches!(branch.rejoin, RejoinTarget::Terminal) {
+            let reaches_next = match &branch.rejoin {
+                RejoinTarget::Next => true,
+                RejoinTarget::ReEnter(_) => !nested,
+                RejoinTarget::SkipTo(_) | RejoinTarget::Terminal => false,
+            };
+            if !unserved || !reaches_next {
                 break;
             }
         }
@@ -1647,6 +1658,49 @@ mod tests {
             errors.is_empty(),
             "a request that falls out of the first fallback branch is served by the second: {errors:?}"
         );
+    }
+
+    #[test]
+    fn a_top_level_reentry_fallback_that_spends_its_limit_hands_over_to_the_next() {
+        let mut again = make_branch_with_filters("again", vec![]);
+        again.rejoin = RejoinTarget::ReEnter(1);
+        again.max_iterations = Some(1);
+        let host = fail_open(
+            "iterative_request_router",
+            vec![again, make_branch_with_filters("serve", vec![bound_lb(&["a", "b"])])],
+        );
+
+        let errors = fallback_coverage_errors(host);
+
+        assert!(
+            errors.is_empty(),
+            "once the re-entry limit is spent the executor skips that branch and the next one serves: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn a_nested_irr_fallback_that_jumps_runs_nothing_after_it() {
+        for (rejoin, kind) in [
+            (RejoinTarget::ReEnter(1), "re-enter"),
+            (RejoinTarget::SkipTo(2), "skip"),
+        ] {
+            let mut jump = make_branch_with_filters("jump", vec![]);
+            jump.rejoin = rejoin;
+            jump.max_iterations = Some(1);
+            let irr = fail_open(
+                "iterative_request_router",
+                vec![jump, make_branch_with_filters("serve", vec![bound_lb(&["a", "b"])])],
+            );
+
+            let errors = fallback_coverage_errors(host_with_branch(vec![irr]));
+
+            assert_eq!(
+                errors.len(),
+                2,
+                "a jump out of a nested chain is discarded and ends the pass, so neither cluster reaches the serving \
+                 branch ({kind}): {errors:?}"
+            );
+        }
     }
 
     #[test]
