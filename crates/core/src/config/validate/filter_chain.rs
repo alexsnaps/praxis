@@ -338,10 +338,13 @@ fn empty_predicate_error(chain_name: &str, filter: &str, idx: usize, field: &str
 /// silently degrades exactly like an empty predicate — so reject it at startup
 /// with the offending value named.
 ///
-/// The declared set is the union of every top-level cluster and every inline
-/// cluster (`load_balancer` / `tcp_load_balancer`, including those nested in
-/// inline branch chains and `iterative_request_router` steps), because any of
-/// them can be the one a router points the load balancer at.
+/// For `selected_upstream` the declared set is the union of every top-level
+/// cluster and every inline cluster (`load_balancer` / `tcp_load_balancer`,
+/// including those nested in inline branch chains and
+/// `iterative_request_router` steps), because any of them can be the one a
+/// router points the load balancer at. For `bound_upstream` only the inline
+/// clusters count: the binding catalog is built from load-balancer
+/// declarations, and top-level `clusters:` never enter it.
 ///
 /// # Errors
 ///
@@ -355,19 +358,10 @@ pub(super) fn validate_selected_upstream_matchers(
     let inline = super::inline_clusters::collect_inline_clusters(chains)?;
     let mut declared = DeclaredUpstreams::default();
     for cluster in clusters.iter().chain(inline.iter()) {
-        let protocol = cluster.http.application_protocol.as_deref();
-        let provider = cluster.http.application_provider.as_deref();
-        if let Some(protocol) = protocol {
-            declared.protocols.insert(protocol);
-        }
-        if let Some(provider) = provider {
-            declared.providers.insert(provider);
-        }
-        // A matcher naming both fields matches only a single selected cluster
-        // that carries both, so record the pairs a cluster declares together.
-        if let (Some(protocol), Some(provider)) = (protocol, provider) {
-            declared.pairs.insert((protocol, provider));
-        }
+        declared.selected.record(cluster);
+    }
+    for cluster in &inline {
+        declared.bound.record(cluster);
     }
 
     for chain in chains {
@@ -378,10 +372,20 @@ pub(super) fn validate_selected_upstream_matchers(
     Ok(())
 }
 
-/// The declared cluster application identifiers a `selected_upstream` matcher
-/// may name (across top-level and inline clusters).
+/// The declared cluster application identifiers each condition axis may name.
 #[derive(Default)]
 struct DeclaredUpstreams<'cfg> {
+    /// What a `selected_upstream` matcher may name: every cluster a load
+    /// balancer can select, top-level or inline.
+    selected: AxisDeclarations<'cfg>,
+    /// What a `bound_upstream` matcher may name: the inline load-balancer
+    /// clusters, which are what the binding catalog resolves.
+    bound: AxisDeclarations<'cfg>,
+}
+
+/// The identifiers declared by one set of clusters.
+#[derive(Default)]
+struct AxisDeclarations<'cfg> {
     /// Every declared cluster's `application_protocol`.
     protocols: HashSet<&'cfg str>,
     /// Every declared cluster's `application_provider`.
@@ -391,6 +395,23 @@ struct DeclaredUpstreams<'cfg> {
     /// cluster that carries both, so it must name a pair from this set, not one
     /// value drawn from each of two different clusters.
     pairs: HashSet<(&'cfg str, &'cfg str)>,
+}
+
+impl<'cfg> AxisDeclarations<'cfg> {
+    /// Record the identifiers `cluster` declares.
+    fn record(&mut self, cluster: &'cfg Cluster) {
+        let protocol = cluster.http.application_protocol.as_deref();
+        let provider = cluster.http.application_provider.as_deref();
+        if let Some(protocol) = protocol {
+            self.protocols.insert(protocol);
+        }
+        if let Some(provider) = provider {
+            self.providers.insert(provider);
+        }
+        if let (Some(protocol), Some(provider)) = (protocol, provider) {
+            self.pairs.insert((protocol, provider));
+        }
+    }
 }
 
 /// Check one filter entry's `selected_upstream` matchers, recursing into inline
@@ -425,13 +446,13 @@ fn validate_entry_application_conditions(
         if let Some(selected) = &matcher.selected_upstream {
             check_application_match_values(
                 &ApplicationMatcherLocation::new(chain_name, entry, idx, "selected_upstream", selected),
-                declared,
+                &declared.selected,
             )?;
         }
         if let Some(bound) = &matcher.bound_upstream {
             check_application_match_values(
                 &ApplicationMatcherLocation::new(chain_name, entry, idx, "bound_upstream", bound),
-                declared,
+                &declared.bound,
             )?;
         }
     }
@@ -498,7 +519,7 @@ impl<'cfg> ApplicationMatcherLocation<'cfg> {
 /// single cluster declares together.
 fn check_application_match_values(
     location: &ApplicationMatcherLocation<'_>,
-    declared: &DeclaredUpstreams<'_>,
+    declared: &AxisDeclarations<'_>,
 ) -> Result<(), ProxyError> {
     for (field, value, set) in [
         (
@@ -533,7 +554,7 @@ fn check_application_match_values(
 /// Reject a matcher naming both fields as a pair no single cluster declares.
 fn check_application_match_pair(
     location: &ApplicationMatcherLocation<'_>,
-    declared: &DeclaredUpstreams<'_>,
+    declared: &AxisDeclarations<'_>,
 ) -> Result<(), ProxyError> {
     if let (Some(protocol), Some(provider)) = (
         location.matcher.application_protocol.as_deref(),
@@ -1155,9 +1176,9 @@ clusters: [{name: backend, endpoints: ["10.0.0.1:80"]}]
 filter_chains:
   - name: main
     filters:
-{nested}clusters:
-  - {{name: backend, http: {{application_provider: vllm}}, endpoints: ["10.0.0.1:80"]}}
-"#
+      - filter: load_balancer
+        clusters: [{{name: backend, http: {{application_provider: vllm}}, endpoints: ["10.0.0.1:80"]}}]
+{nested}"#
             );
             let err = Config::from_yaml(&yaml).unwrap_err();
             assert!(
@@ -1587,8 +1608,8 @@ filter_chains:
     filters:
       - filter: request_id
         conditions: [{when: {bound_upstream: {application_provider: openai}}}]
-clusters:
-  - {name: backend, http: {application_provider: vllm}, endpoints: ["10.0.0.1:80"]}
+      - filter: load_balancer
+        clusters: [{name: backend, http: {application_provider: vllm}, endpoints: ["10.0.0.1:80"]}]
 "#;
         let err = Config::from_yaml(yaml).unwrap_err();
         assert!(
@@ -1608,11 +1629,120 @@ filter_chains:
     filters:
       - filter: request_id
         conditions: [{when: {bound_upstream: {application_provider: openai}}}]
-clusters:
-  - {name: openai, http: {application_provider: openai}, endpoints: ["10.0.0.1:80"]}
-  - {name: generic, endpoints: ["10.0.0.2:80"]}
+      - filter: load_balancer
+        clusters:
+          - {name: openai, http: {application_provider: openai}, endpoints: ["10.0.0.1:80"]}
+          - {name: generic, endpoints: ["10.0.0.2:80"]}
 "#;
         Config::from_yaml(yaml).expect("one satisfiable bound matcher permits other untagged clusters");
+    }
+
+    #[cfg(feature = "upstream-binding")]
+    #[test]
+    fn top_level_cluster_tags_count_for_selected_but_not_bound() {
+        let yaml = |axis: &str| {
+            format!(
+                r#"
+listeners: [{{name: web, address: "127.0.0.1:8080", filter_chains: [main]}}]
+filter_chains:
+  - name: main
+    filters:
+      - filter: request_id
+        conditions: [{{when: {{{axis}: {{application_provider: openai}}}}}}]
+      - filter: load_balancer
+        clusters: [{{name: backend, endpoints: ["10.0.0.1:80"]}}]
+clusters:
+  - {{name: top, http: {{application_provider: openai}}, endpoints: ["10.0.0.2:80"]}}
+"#
+            )
+        };
+
+        Config::from_yaml(&yaml("selected_upstream"))
+            .expect("a load balancer may select a top-level cluster, so its tag satisfies selected_upstream");
+        let err = Config::from_yaml(&yaml("bound_upstream")).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("bound_upstream.application_provider 'openai' matches no cluster"),
+            "a router can only bind inline load-balancer clusters, so a top-level tag never satisfies bound_upstream: \
+             {err}"
+        );
+    }
+
+    #[cfg(feature = "upstream-binding")]
+    #[test]
+    fn reject_bound_upstream_pair_no_single_cluster_declares() {
+        let yaml = r#"
+listeners: [{name: web, address: "127.0.0.1:8080", filter_chains: [main]}]
+filter_chains:
+  - name: main
+    filters:
+      - filter: request_id
+        conditions: [{when: {bound_upstream: {application_protocol: openai_responses, application_provider: openai}}}]
+      - filter: load_balancer
+        clusters:
+          - {name: a, http: {application_protocol: openai_responses}, endpoints: ["10.0.0.1:80"]}
+          - {name: b, http: {application_provider: openai}, endpoints: ["10.0.0.2:80"]}
+"#;
+
+        let err = Config::from_yaml(yaml).unwrap_err();
+
+        assert!(
+            err.to_string().contains("no single cluster declares both"),
+            "each half of the pair is on a different cluster, so no binding can match both: {err}"
+        );
+    }
+
+    #[cfg(feature = "upstream-binding")]
+    #[test]
+    fn reject_overlong_bound_upstream_identifier() {
+        let long = "a".repeat(65);
+        let yaml = format!(
+            r#"
+listeners: [{{name: web, address: "127.0.0.1:8080", filter_chains: [main]}}]
+filter_chains:
+  - name: main
+    filters:
+      - filter: request_id
+        conditions: [{{when: {{bound_upstream: {{application_provider: "{long}"}}}}}}]
+      - filter: load_balancer
+        clusters: [{{name: backend, endpoints: ["10.0.0.1:80"]}}]
+"#
+        );
+
+        let err = Config::from_yaml(&yaml).unwrap_err();
+
+        assert!(
+            err.to_string().contains("exceeds 64 bytes"),
+            "a condition value gets the same length cap as a cluster tag: {err}"
+        );
+    }
+
+    #[test]
+    fn reject_selected_upstream_typo_inside_an_irr_step() {
+        let yaml = r#"
+listeners: [{name: web, address: "127.0.0.1:8080", filter_chains: [main]}]
+filter_chains:
+  - name: main
+    filters:
+      - filter: iterative_request_router
+        steps:
+          - name: call
+            url: "http://backend"
+            filters:
+              - filter: request_id
+                conditions: [{when: {selected_upstream: {application_provider: ollama}}}]
+              - filter: load_balancer
+                clusters: [{name: backend, http: {application_provider: vllm}, endpoints: ["10.0.0.1:80"]}]
+"#;
+
+        let err = Config::from_yaml(yaml).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("selected_upstream.application_provider 'ollama' matches no cluster"),
+            "the walk into IRR steps covers selected_upstream matchers too: {err}"
+        );
     }
 
     #[test]
