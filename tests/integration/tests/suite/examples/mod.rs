@@ -10,6 +10,7 @@ pub use test_utils::load_example_config;
 mod access_log_fields;
 mod access_logging;
 mod admin_interface;
+mod all_examples_validate;
 mod api_key_filter;
 mod authority_override;
 mod basic_reverse_proxy;
