@@ -1004,6 +1004,7 @@ fn drain_body(stream: &mut TcpStream, head: &str) {
 
 /// Build a transport with a private test pool.
 fn transport(allow_private: bool) -> PolicyHttpTransport {
+    praxis_tls::provider::install();
     let transport = PolicyHttpTransport::new(allow_private);
     transport
         .client
