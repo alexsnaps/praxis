@@ -40,8 +40,10 @@ use crate::{
 // -----------------------------------------------------------------------------
 
 /// Built-in filters that always answer the request themselves, so a bound
-/// request that reaches one needs no load balancer.
-const ANSWERING_FILTERS: &[&str] = &["redirect", "static_response"];
+/// request that reaches one needs no load balancer and nothing after them
+/// runs. Any other filter that declares terminal responses is modeled as one
+/// that may also continue.
+const ANSWERING_FILTERS: &[&str] = &["iterative_request_router", "redirect", "static_response"];
 
 // -----------------------------------------------------------------------------
 // Error Checks
@@ -210,8 +212,7 @@ fn binding_control_flow_edges(filters: &[PipelineFilter]) -> Vec<(usize, usize)>
     let len = filters.len();
     let mut edges = Vec::new();
     for (idx, pf) in filters.iter().enumerate() {
-        let unconditional_terminal = pf.conditions.is_empty()
-            && matches!(&pf.filter, AnyFilter::Http(filter) if filter.produces_terminal_response());
+        let unconditional_terminal = pf.conditions.is_empty() && always_answers(pf);
         let unconditional_skip = pf.conditions.is_empty()
             && pf.branches.iter().any(|branch| {
                 branch.condition.is_none() && matches!(branch.rejoin, RejoinTarget::SkipTo(_) | RejoinTarget::Terminal)
@@ -540,6 +541,9 @@ impl<'a> ClusterScan<'a> {
                 }
             }
             return false;
+        }
+        if may_answer(pf) {
+            endings.add(Ending::Answered);
         }
         for branch in &pf.branches {
             let leaves = self.run_branch(filters, branch, nested, endings);
@@ -984,26 +988,29 @@ fn has_bound_upstream_condition(pf: &PipelineFilter) -> bool {
     })
 }
 
-/// Whether validation treats the filter as answering every request itself: a
-/// built-in answering filter, or one that declares terminal responses (the
-/// IRR).
+/// Whether the filter answers every request itself, so nothing after it runs
+/// and a bound request that reaches it needs no load balancer.
 ///
-/// Declaring terminal responses only says a filter *may* answer; like the
-/// control-flow walk, the binding checks assume it never continues past
-/// itself. Only a fail-open IRR runs its branches, as a fallback (see
-/// [`falls_back_to_branches`]).
+/// Only the built-in filters in [`ANSWERING_FILTERS`] qualify. Declaring
+/// terminal responses (see [`may_answer`]) says a filter *may* answer, which is
+/// not enough to drop the path past it.
 fn always_answers(pf: &PipelineFilter) -> bool {
     ANSWERING_FILTERS.contains(&pf.filter.name())
-        || matches!(&pf.filter, AnyFilter::Http(filter) if filter.produces_terminal_response())
+}
+
+/// Whether the filter declares that it sometimes answers the request itself
+/// (a cache, say) without being one of the built-ins that always do. Coverage
+/// counts both outcomes: the answered path is served, and the continuing path
+/// still has to reach a load balancer.
+fn may_answer(pf: &PipelineFilter) -> bool {
+    !always_answers(pf) && matches!(&pf.filter, AnyFilter::Http(filter) if filter.produces_terminal_response())
 }
 
 /// Whether an answering filter can fail open, which runs its branches as a
-/// fallback. The built-in answering filters never fail, so only a filter that
-/// declares terminal responses (the IRR) with `failure_mode: open` does.
+/// fallback. `redirect` and `static_response` never fail, so only the IRR with
+/// `failure_mode: open` does.
 fn falls_back_to_branches(pf: &PipelineFilter) -> bool {
-    pf.failure_mode == FailureMode::Open
-        && !ANSWERING_FILTERS.contains(&pf.filter.name())
-        && matches!(&pf.filter, AnyFilter::Http(filter) if filter.produces_terminal_response())
+    pf.filter.name() == "iterative_request_router" && pf.failure_mode == FailureMode::Open
 }
 
 /// The branches a failed filter can fall back to: an error writes no filter
@@ -1473,7 +1480,7 @@ mod tests {
     #[test]
     fn fail_open_fallbacks_that_cannot_fail_a_bound_request_are_accepted() {
         let lb_branch = make_branch_with_filters("fallback", vec![bound_lb(&["a"])]);
-        let answer_branch = make_branch_with_filters("fallback", vec![terminal_filter("answers")]);
+        let answer_branch = make_branch_with_filters("fallback", vec![terminal_filter("static_response")]);
         let cases = [
             ("a redirect, which never errors", fail_open("redirect", vec![lb_branch])),
             ("an IRR with no fallback", fail_open("iterative_request_router", vec![])),
@@ -1529,7 +1536,7 @@ mod tests {
         let irr = || named_noop_filter("iterative_request_router", vec![]);
         let mut jump = named_noop_filter("jump", vec![]);
         jump.branches = vec![make_skip_branch("past", 3)];
-        let answer = terminal_filter("answers");
+        let answer = terminal_filter("static_response");
         let cases = [
             ("before the router", vec![consumer(), binding_router(&["a"]), irr()]),
             (
@@ -2472,7 +2479,7 @@ mod tests {
 
     #[test]
     fn binding_control_flow_terminal_host_has_no_exit() {
-        let filters = vec![terminal_filter("terminal"), named_noop_filter("unreachable", vec![])];
+        let filters = vec![terminal_filter("redirect"), named_noop_filter("unreachable", vec![])];
 
         assert!(
             binding_control_flow_edges(&filters).is_empty(),
@@ -2984,8 +2991,45 @@ mod tests {
     }
 
     #[test]
+    fn a_filter_that_only_sometimes_answers_keeps_the_path_past_it() {
+        let filters = vec![binding_router(&["a"]), terminal_filter("cache"), bound_lb(&["a"])];
+        let mut errors = Vec::new();
+
+        check_bound_upstream_requires_binding(&filters, false, &mut errors);
+        check_bound_cluster_coverage(&filters, &mut errors);
+
+        assert!(
+            errors.is_empty(),
+            "a cache that may answer still lets a miss reach the bound load balancer: {errors:?}"
+        );
+        assert_eq!(
+            binding_control_flow_edges(&filters),
+            vec![(0, 1), (1, 2)],
+            "only the built-in answering filters drop their fall-through edge"
+        );
+    }
+
+    #[test]
+    fn a_miss_past_a_sometimes_answering_filter_still_needs_a_load_balancer() {
+        let filters = vec![binding_router(&["a", "b"]), terminal_filter("cache"), bound_lb(&["a"])];
+        let mut errors = Vec::new();
+
+        check_bound_cluster_coverage(&filters, &mut errors);
+
+        assert_eq!(
+            errors.len(),
+            1,
+            "a cache miss for b reaches a load balancer that cannot serve it: {errors:?}"
+        );
+    }
+
+    #[test]
     fn consumer_after_an_unconditional_terminal_filter_is_reported() {
-        let filters = vec![binding_router(&["a"]), terminal_filter("answers"), bound_lb(&["a"])];
+        let filters = vec![
+            binding_router(&["a"]),
+            terminal_filter("static_response"),
+            bound_lb(&["a"]),
+        ];
         let mut errors = Vec::new();
 
         check_bound_upstream_requires_binding(&filters, false, &mut errors);

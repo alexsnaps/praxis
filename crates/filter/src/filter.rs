@@ -238,6 +238,11 @@ pub trait HttpFilter: Send + Sync {
     /// can return a terminal action must override this, so detection is not
     /// limited to the hard-coded builtin terminal names in [`TERMINAL_FILTERS`].
     ///
+    /// Binding validation reads this as "may answer": it keeps the path past
+    /// the filter alive and requires that path to be served too. Only the
+    /// built-in answering filters (`redirect`, `static_response`, and the IRR)
+    /// are treated as always ending the request.
+    ///
     /// [`FilterAction`]: crate::FilterAction
     /// [`TERMINAL_FILTERS`]: praxis_core::config::TERMINAL_FILTERS
     fn produces_terminal_response(&self) -> bool {
