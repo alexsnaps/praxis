@@ -3,11 +3,16 @@
 
 //! Transport coverage for the at-most-once bound-upstream body phase.
 
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
+
 use bytes::Bytes;
 use praxis_core::config::Config;
 use praxis_filter::{
-    BodyAccess, BodyMode, BoundUpstreamBodyOutcome, FilterAction, FilterError, HttpFilter, HttpFilterContext,
-    Rejection, SelectedUpstreamBodyOutcome,
+    BodyAccess, BodyMode, BoundUpstreamBodyOutcome, FilterAction, FilterError, FilterFactory, FilterRegistry,
+    HttpFilter, HttpFilterContext, Rejection, SelectedUpstreamBodyOutcome,
 };
 use praxis_test_utils::{
     Backend, free_port, http_post, http_send, parse_body, parse_status, registry_with, start_echo_backend,
@@ -255,6 +260,39 @@ impl HttpFilter for ErrorBoundBody {
         _body: &mut Option<Bytes>,
     ) -> Result<BoundUpstreamBodyOutcome, FilterError> {
         Err("bound body failure".to_owned().into())
+    }
+}
+
+/// Counts its bound-body runs without touching the body.
+struct CountBoundBody {
+    runs: Arc<AtomicUsize>,
+}
+
+#[async_trait::async_trait]
+impl HttpFilter for CountBoundBody {
+    fn name(&self) -> &'static str {
+        "count_bound_body"
+    }
+
+    async fn on_request(&self, _ctx: &mut HttpFilterContext<'_>) -> Result<FilterAction, FilterError> {
+        Ok(FilterAction::Continue)
+    }
+
+    fn bound_upstream_request_body_access(&self) -> BodyAccess {
+        BodyAccess::ReadOnly
+    }
+
+    fn request_body_mode(&self) -> BodyMode {
+        BodyMode::StreamBuffer { max_bytes: Some(4096) }
+    }
+
+    async fn on_bound_upstream_request_body(
+        &self,
+        _ctx: &mut HttpFilterContext<'_>,
+        _body: &mut Option<Bytes>,
+    ) -> Result<BoundUpstreamBodyOutcome, FilterError> {
+        self.runs.fetch_add(1, Ordering::SeqCst);
+        Ok(BoundUpstreamBodyOutcome::Continue)
     }
 }
 
@@ -616,6 +654,38 @@ fn oversized_inbound_body_rejects_before_binding_barrier() {
     assert_eq!(
         status, 413,
         "an inbound body over the limit should be rejected before the binding barrier"
+    );
+}
+
+#[test]
+fn oversized_inbound_body_never_reaches_a_read_only_participant() {
+    let backend = start_echo_backend();
+    let proxy_port = free_port();
+    let config = Config::from_yaml(&direct_yaml(proxy_port, backend.port(), "count_bound_body")).unwrap();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let mut registry = FilterRegistry::with_builtins();
+    let factory_runs = Arc::clone(&runs);
+    registry
+        .register(
+            "count_bound_body",
+            FilterFactory::Http(Arc::new(move |_| {
+                Ok(Box::new(CountBoundBody {
+                    runs: Arc::clone(&factory_runs),
+                }))
+            })),
+        )
+        .unwrap();
+    let proxy = start_full_proxy_with_registry(&config, &registry);
+
+    let (small_status, _) = http_post(proxy.addr(), "/echo", "small");
+    let (large_status, _) = http_post(proxy.addr(), "/echo", &"x".repeat(4097));
+
+    assert_eq!(small_status, 200, "a body within the limit reaches the upstream");
+    assert_eq!(large_status, 413, "a body over the participant's limit is rejected");
+    assert_eq!(
+        runs.load(Ordering::SeqCst),
+        1,
+        "only the small request reached the barrier; the oversized one was rejected before it"
     );
 }
 
