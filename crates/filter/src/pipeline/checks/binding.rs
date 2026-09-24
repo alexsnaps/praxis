@@ -532,13 +532,7 @@ impl<'a> ClusterScan<'a> {
         if let Some(ending) = self.ends_request(pf) {
             endings.add(ending);
             if falls_back_to_branches(pf) {
-                for branch in fallback_branches(pf) {
-                    let fallback = self.chain(&branch.filters, 0, true);
-                    endings.merge(fallback.without(Ending::FellThrough));
-                    if !fallback.has(Ending::FellThrough) {
-                        break;
-                    }
-                }
+                self.run_fallback(pf, endings);
             }
             return false;
         }
@@ -552,6 +546,29 @@ impl<'a> ClusterScan<'a> {
             }
         }
         true
+    }
+
+    /// Record what a fail-open IRR's fallback branches do with the request.
+    ///
+    /// The IRR is the last filter, so a request that falls out of its last
+    /// fallback branch (or out of one that rejoins `terminal`) ends the
+    /// pipeline with no upstream and fails. A fallback therefore has to serve
+    /// or answer every cluster the router can bind. An IRR with no fallback
+    /// branch adds nothing: failing open with nothing to fall back to is the
+    /// operator's call.
+    fn run_fallback(&self, pf: &PipelineFilter, endings: &mut Endings) {
+        let mut unserved = false;
+        for branch in fallback_branches(pf) {
+            let fallback = self.chain(&branch.filters, 0, true);
+            endings.merge(fallback.without(Ending::FellThrough));
+            unserved = fallback.has(Ending::FellThrough);
+            if !unserved || matches!(branch.rejoin, RejoinTarget::Terminal) {
+                break;
+            }
+        }
+        if unserved {
+            endings.add(Ending::Failed);
+        }
     }
 
     /// Record the endings of one fired branch of a filter in `filters` and
@@ -1497,19 +1514,65 @@ mod tests {
     }
 
     #[test]
-    fn terminal_fallback_that_lets_a_cluster_fall_through_is_not_a_failure() {
+    fn a_fallback_the_bound_request_falls_out_of_is_a_failure() {
+        let gated = || {
+            let mut lb = bound_lb(&["a"]);
+            lb.conditions = vec![bound_condition(None, Some("openai"))];
+            lb
+        };
+        for (rejoin, branch) in [
+            ("terminal", make_terminal_branch("fallback", vec![gated()])),
+            ("next", make_branch_with_filters("fallback", vec![gated()])),
+        ] {
+            let host = fail_open("iterative_request_router", vec![branch]);
+
+            let errors = fallback_coverage_errors(host);
+
+            assert_eq!(
+                errors.len(),
+                1,
+                "the untagged cluster skips the gated fallback and, past the last filter, has no upstream ({rejoin}): \
+                 {errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn later_fallback_branches_serve_what_earlier_ones_let_through() {
         let mut gated = bound_lb(&["a"]);
         gated.conditions = vec![bound_condition(None, Some("openai"))];
         let host = fail_open(
             "iterative_request_router",
-            vec![make_terminal_branch("fallback", vec![gated])],
+            vec![
+                make_branch_with_filters("openai", vec![gated]),
+                make_branch_with_filters("rest", vec![bound_lb(&["b"])]),
+            ],
         );
 
         let errors = fallback_coverage_errors(host);
 
         assert!(
             errors.is_empty(),
-            "the untagged cluster skips the gated fallback, which the IRR error already failed: {errors:?}"
+            "a request that falls out of the first fallback branch is served by the second: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn a_conditional_fallback_branch_never_fires_after_an_irr_error() {
+        let host = fail_open(
+            "iterative_request_router",
+            vec![conditional_branch(
+                "maybe",
+                vec![bound_lb(&["a", "b"])],
+                RejoinTarget::Next,
+            )],
+        );
+
+        let errors = fallback_coverage_errors(host);
+
+        assert!(
+            errors.is_empty(),
+            "an IRR error writes no results, so a conditional branch is not a fallback and is not scanned: {errors:?}"
         );
     }
 
