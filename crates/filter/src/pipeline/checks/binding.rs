@@ -109,34 +109,61 @@ pub(in crate::pipeline) fn check_bound_upstream_requires_binding(
         reachable_from(filters, 0, router)
     };
     for (((idx, pf), reached), reached_unbound) in filters.iter().enumerate().zip(reachable).zip(unbound) {
-        let bound_on_entry = reached && !reached_unbound;
-        if !bound_on_entry && let Some(reason) = binding_requirement_reason(pf) {
-            errors.push(missing_binding_error(pf.filter.name(), &reason));
+        let entry = if !reached {
+            ConsumerEntry::Unreachable
+        } else if reached_unbound {
+            ConsumerEntry::Unbound
+        } else {
+            ConsumerEntry::Bound
+        };
+        if entry != ConsumerEntry::Bound
+            && let Some(reason) = binding_requirement_reason(pf)
+        {
+            errors.push(consumer_error(pf.filter.name(), &reason, entry));
         }
-        let bound_in_branches = bound_on_entry || Some(idx) == router;
-        if !bound_in_branches {
-            collect_branch_binding_consumers(&pf.branches, errors);
+        let branches_bound = entry == ConsumerEntry::Bound || Some(idx) == router;
+        if !branches_bound {
+            collect_branch_binding_consumers(&pf.branches, entry, errors);
         }
     }
 }
 
-/// Report every binding consumer inside branches that run without a binding.
-fn collect_branch_binding_consumers(branches: &[ResolvedBranch], errors: &mut Vec<String>) {
+/// How a consumer is entered: bound, on some path without a binding, or never.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum ConsumerEntry {
+    /// Every path into the consumer passed the binding router.
+    Bound,
+    /// Some path into the consumer skips the binding router.
+    Unbound,
+    /// No path reaches the consumer at all.
+    Unreachable,
+}
+
+/// Report every binding consumer inside branches whose host is entered as
+/// `entry`.
+fn collect_branch_binding_consumers(branches: &[ResolvedBranch], entry: ConsumerEntry, errors: &mut Vec<String>) {
     for pf in branches.iter().flat_map(|branch| &branch.filters) {
         if let Some(reason) = binding_requirement_reason(pf) {
-            errors.push(missing_binding_error(pf.filter.name(), &reason));
+            errors.push(consumer_error(pf.filter.name(), &reason, entry));
         }
-        collect_branch_binding_consumers(&pf.branches, errors);
+        collect_branch_binding_consumers(&pf.branches, entry, errors);
     }
 }
 
-/// The diagnostic for a binding consumer that can run without a binding.
-fn missing_binding_error(name: &str, reason: &str) -> String {
-    format!(
-        "filter '{name}' requires a bound logical upstream ({reason}) but no \
-         preceding filter is guaranteed to bind one; place an unconditional \
-         binding router earlier in the pipeline"
-    )
+/// The diagnostic for a binding consumer that is not entered bound.
+fn consumer_error(name: &str, reason: &str, entry: ConsumerEntry) -> String {
+    match entry {
+        ConsumerEntry::Unreachable => format!(
+            "filter '{name}' requires a bound logical upstream ({reason}) but no \
+             request path reaches it; remove it or fix the control flow in front \
+             of it"
+        ),
+        ConsumerEntry::Bound | ConsumerEntry::Unbound => format!(
+            "filter '{name}' requires a bound logical upstream ({reason}) but no \
+             preceding filter is guaranteed to bind one; place an unconditional \
+             binding router earlier in the pipeline"
+        ),
+    }
 }
 
 /// Index of the pipeline's binding router: the first top-level publisher a
@@ -3101,6 +3128,28 @@ mod tests {
             errors.len(),
             1,
             "a consumer no path reaches is reported rather than silently accepted: {errors:?}"
+        );
+        assert!(
+            errors[0].contains("no request path reaches it"),
+            "the message says the consumer is unreachable instead of asking for a router: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn an_unreachable_step_consumer_is_reported_as_unreachable_not_unbound() {
+        let filters = vec![terminal_filter("static_response"), bound_lb(&["a"])];
+        let mut errors = Vec::new();
+
+        check_bound_upstream_requires_binding(&filters, true, &mut errors);
+
+        assert_eq!(
+            errors.len(),
+            1,
+            "the dead consumer in the step is reported once: {errors:?}"
+        );
+        assert!(
+            errors[0].contains("no request path reaches it"),
+            "a step may not add a router, so the message must not ask for one: {errors:?}"
         );
     }
 
