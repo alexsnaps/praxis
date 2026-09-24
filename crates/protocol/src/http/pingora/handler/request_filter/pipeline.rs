@@ -455,7 +455,7 @@ async fn run_pipeline(
             ctx.retry_policy = retry_policy;
             ctx.route_retry_policy = route_retry_policy;
             if let Some(CanonicalRequestBody(body)) = canonical_body {
-                store_canonical_request_body(ctx, Some(body));
+                store_canonical_request_body(ctx, body);
             }
             if let Some(AdaptedRequestBody(body)) = adapted_body {
                 store_adapted_request_body(ctx, body);

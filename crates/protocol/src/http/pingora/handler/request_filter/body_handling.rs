@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2024 Praxis Contributors
 
-//! Request body handling utilities for selected-upstream phase.
+//! Request body handling utilities for the body phases that run after
+//! routing.
 //!
-//! Manages adapted request body storage and body size limit resolution
-//! for the selected-upstream request-body phase introduced in #1139.
+//! Manages adapted request body storage and body size limit resolution for
+//! the selected-upstream request-body phase introduced in #1139, and the
+//! canonical body the bound-upstream phase can produce.
 
 use std::collections::VecDeque;
 
@@ -46,13 +48,14 @@ pub(super) fn store_adapted_request_body(ctx: &mut PingoraRequestCtx, body: Opti
 ///
 /// Direct dispatch drains `pre_read_body`; retries are re-seeded from the
 /// retained copy. Updating the authoritative mutated length keeps framing and
-/// retry replay aligned when a bound-body writer grows, shrinks, or removes the
-/// body.
-pub(super) fn store_canonical_request_body(ctx: &mut PingoraRequestCtx, body: Option<Bytes>) {
-    let len = body.as_ref().map_or(0, Bytes::len);
-    let chunks = match body {
-        Some(body) if !body.is_empty() => VecDeque::from([body]),
-        _ => VecDeque::new(),
+/// retry replay aligned when a bound-body writer grows, shrinks, or empties
+/// the body (an emptied body is stored as no chunks with a length of zero).
+pub(super) fn store_canonical_request_body(ctx: &mut PingoraRequestCtx, body: Bytes) {
+    let len = body.len();
+    let chunks = if body.is_empty() {
+        VecDeque::new()
+    } else {
+        VecDeque::from([body])
     };
     ctx.retained_pre_read_body = Some(chunks.clone());
     ctx.pre_read_body = Some(chunks);
@@ -212,7 +215,7 @@ mod tests {
     #[test]
     fn store_canonical_request_body_updates_direct_and_retry_representations() {
         let mut ctx = make_ctx();
-        store_canonical_request_body(&mut ctx, Some(Bytes::from_static(b"BOUND")));
+        store_canonical_request_body(&mut ctx, Bytes::from_static(b"BOUND"));
 
         let expected = Some(VecDeque::from([Bytes::from_static(b"BOUND")]));
         assert_eq!(
@@ -233,7 +236,7 @@ mod tests {
     #[test]
     fn store_canonical_request_body_preserves_empty_replay_marker() {
         let mut ctx = make_ctx();
-        store_canonical_request_body(&mut ctx, None);
+        store_canonical_request_body(&mut ctx, Bytes::new());
 
         assert_eq!(
             ctx.pre_read_body,
