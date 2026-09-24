@@ -2824,44 +2824,10 @@ steps:
 
 // -----------------------------------------------------------------------------
 // Bound-Upstream Preservation Tests
-//
-// The IRR overwrites the shared cluster catalog with each step's own catalog
-// while a step runs, and threads the request's `BoundUpstream` through
-// unchanged. These prove that on every exit path the parent pipeline's catalog
-// is restored (the terminal step's catalog never rides back) and the frozen
-// binding survives intact, per the removed IRR catalog exception.
 // -----------------------------------------------------------------------------
 
-/// Build a parent catalog naming a cluster the IRR steps never declare, so a
-/// step's catalog riding back into the parent would be observable.
-fn parent_only_catalog() -> std::sync::Arc<crate::pipeline::catalog::ClusterApplicationCatalog> {
-    use crate::pipeline::catalog::{ClusterApplicationMetadata, ClusterMetadataDeclaration, build_catalog};
-
-    let (catalog, _conflicts) = build_catalog([ClusterMetadataDeclaration {
-        name: std::sync::Arc::from("parent-only"),
-        metadata: ClusterApplicationMetadata::new(Some(std::sync::Arc::from("parent_proto")), None),
-    }]);
-    std::sync::Arc::new(catalog)
-}
-
-/// Assert the restored extensions carry the parent catalog, not a step's.
-fn assert_parent_catalog_restored(ctx: &crate::HttpFilterContext<'_>) {
-    let catalog = ctx
-        .extensions
-        .get::<std::sync::Arc<crate::pipeline::catalog::ClusterApplicationCatalog>>()
-        .expect("the parent catalog must be restored into the returned extensions");
-    assert!(
-        catalog.lookup("parent-only").is_some(),
-        "the parent pipeline's own catalog must ride back out of the IRR"
-    );
-    assert!(
-        catalog.lookup("backend").is_none(),
-        "a step's catalog must never ride back into the parent"
-    );
-}
-
 #[tokio::test]
-async fn iteration_completion_restores_parent_catalog_and_preserves_binding() {
+async fn iteration_completion_preserves_parent_binding() {
     let (addr, backend) = spawn_raw_backend("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok").await;
     let yaml = format!(
         "
@@ -2881,9 +2847,6 @@ steps:
     let client = make_client();
     let req = crate::test_utils::make_request(http::Method::POST, "/");
     let mut ctx = make_iteration_context(&req, &client, b"payload");
-    ctx.extensions.insert(parent_only_catalog());
-    // A frozen binding to the cluster the step routes to, so the step router's
-    // re-bind is an idempotent no-op that must leave the binding untouched.
     ctx.publish_bound_upstream(
         std::sync::Arc::from("backend"),
         Some(std::sync::Arc::from("bound_proto")),
@@ -2909,7 +2872,6 @@ steps:
         },
         other => panic!("expected TerminalResponse, got {other:?}"),
     }
-    assert_parent_catalog_restored(&ctx);
     assert_eq!(
         ctx.bound_cluster(),
         Some("backend"),
@@ -2932,7 +2894,7 @@ steps:
 }
 
 #[tokio::test]
-async fn step_error_restores_parent_catalog_and_preserves_binding() {
+async fn step_error_preserves_parent_binding() {
     let mut registry = crate::FilterRegistry::with_builtins();
     registry
         .register(
@@ -2964,7 +2926,6 @@ steps:
     let client = make_client();
     let req = crate::test_utils::make_request(http::Method::POST, "/v1/responses");
     let mut ctx = make_iteration_context(&req, &client, b"request");
-    ctx.extensions.insert(parent_only_catalog());
     ctx.publish_bound_upstream(
         std::sync::Arc::from("bound-cluster"),
         Some(std::sync::Arc::from("bound_proto")),
@@ -2976,7 +2937,6 @@ steps:
     let result = filter.on_request(&mut ctx).await;
 
     assert!(result.is_err(), "the nested step error must propagate");
-    assert_parent_catalog_restored(&ctx);
     assert_eq!(
         ctx.bound_cluster(),
         Some("bound-cluster"),
@@ -2994,7 +2954,7 @@ steps:
 }
 
 #[tokio::test]
-async fn streaming_completion_restores_parent_catalog_and_preserves_binding() {
+async fn streaming_completion_preserves_parent_binding() {
     let (addr, backend) =
         spawn_raw_backend("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n").await;
     let yaml = format!(
@@ -3016,7 +2976,6 @@ steps:
     let client = make_client();
     let req = crate::test_utils::make_request(http::Method::GET, "/stream");
     let mut ctx = make_iteration_context(&req, &client, b"");
-    ctx.extensions.insert(parent_only_catalog());
     ctx.publish_bound_upstream(
         std::sync::Arc::from("backend"),
         Some(std::sync::Arc::from("bound_proto")),
@@ -3040,7 +2999,6 @@ steps:
     // after the executor returned; this is the streaming path's restore point.
     terminal.body.swap_extensions(&mut ctx.extensions);
 
-    assert_parent_catalog_restored(&ctx);
     assert_eq!(
         ctx.bound_cluster(),
         Some("backend"),

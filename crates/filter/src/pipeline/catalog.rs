@@ -5,9 +5,10 @@
 //!
 //! A binding `router` records only a cluster name in [`BoundUpstream`].
 //! To publish that cluster's opaque application protocol and provider
-//! alongside the name, the router resolves the name through this catalog,
-//! built once at pipeline construction from every reachable cluster
-//! declaration.
+//! alongside the name, the router resolves the name through this catalog.
+//! Pipeline construction builds it once from every reachable cluster
+//! declaration and hands it to the pipeline's binding routers, so the
+//! catalog never travels with the request.
 //!
 //! The catalog is metadata-only: it stores cluster name, protocol, and
 //! provider. Endpoint and load-balancing state remain owned by each
@@ -92,12 +93,15 @@ pub struct ClusterMetadataDeclaration {
 
 /// Metadata-only catalog keyed by cluster name.
 ///
-/// Built at pipeline construction and injected into each request's
-/// [`RequestExtensions`](crate::RequestExtensions) so the binding router can
-/// resolve a matched cluster's application metadata without owning any
-/// endpoint state.
+/// Opaque outside this crate. Pipeline construction builds one per
+/// binding-enabled pipeline and hands it to the pipeline's binding router, so
+/// the router resolves a matched cluster's application metadata without owning
+/// any endpoint state. Routers inside branches receive it too, but only so
+/// validation can see and reject them as branch publishers. A nested pipeline
+/// (an IRR step or outbound chain) builds its own catalog from its own
+/// declarations.
 #[derive(Debug, Default)]
-pub(crate) struct ClusterApplicationCatalog {
+pub struct ClusterApplicationCatalog {
     /// Cluster name -> resolved application metadata.
     map: HashMap<Arc<str>, ClusterApplicationMetadata>,
 }
@@ -109,6 +113,7 @@ impl ClusterApplicationCatalog {
     }
 
     /// Whether the catalog holds no cluster declarations.
+    #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
         self.map.is_empty()
     }

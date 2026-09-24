@@ -179,12 +179,6 @@ pub struct FilterPipeline {
     allow_private_upstreams: bool,
     /// Indices into `filters` of filters declaring response-trailer access.
     response_trailer_filter_indices: Vec<usize>,
-
-    /// Metadata-only catalog of every reachable cluster declaration,
-    /// injected into each request so a binding `router` can resolve a
-    /// matched cluster's application protocol and provider. `None` when no
-    /// filter declares any cluster.
-    cluster_application_catalog: Option<Arc<catalog::ClusterApplicationCatalog>>,
 }
 
 #[expect(
@@ -611,34 +605,8 @@ impl FilterPipeline {
     /// filter context. Delegates to each registered
     /// [`PipelineExtension`].
     pub fn prepare_extensions(&self, extensions: &mut RequestExtensions) {
-        self.inject_cluster_catalog(extensions);
         for ext in &self.pipeline_extensions {
             ext.prepare(extensions);
-        }
-    }
-
-    /// Install this pipeline's cluster application catalog into per-request
-    /// extensions, replacing any catalog already present.
-    ///
-    /// A nested pipeline entered by a filtered sub-request installs the
-    /// caller's extensions, which carry the *parent* pipeline's catalog. This
-    /// swaps in this pipeline's own catalog so a router binding inside the
-    /// nested pipeline resolves application metadata against the right
-    /// declarations; when this pipeline declares no catalog it removes the
-    /// stale parent one rather than letting it leak through. Only the catalog
-    /// extension is touched — unlike [`prepare_extensions`], this does not
-    /// rerun the registered [`PipelineExtension`]s, which are owned by the
-    /// caller's pipeline.
-    ///
-    /// [`prepare_extensions`]: FilterPipeline::prepare_extensions
-    pub(crate) fn inject_cluster_catalog(&self, extensions: &mut RequestExtensions) {
-        match &self.cluster_application_catalog {
-            Some(catalog) => {
-                extensions.insert(Arc::clone(catalog));
-            },
-            None => {
-                extensions.remove::<Arc<catalog::ClusterApplicationCatalog>>();
-            },
         }
     }
 

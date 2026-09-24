@@ -50,6 +50,7 @@ use crate::{
     FilterError,
     actions::{FilterAction, Rejection},
     filter::{HttpFilter, HttpFilterContext},
+    pipeline::catalog::ClusterApplicationCatalog,
 };
 
 // -----------------------------------------------------------------------------
@@ -98,8 +99,10 @@ use crate::{
 /// [`rewritten_path`]: crate::HttpFilterContext::rewritten_path
 #[derive(Debug)]
 pub struct RouterFilter {
-    /// Whether this pipeline has a bound-upstream observer or consumer.
-    binding_enabled: bool,
+    /// The pipeline's cluster catalog, present only when the pipeline has a
+    /// bound-upstream observer or consumer. Its presence is what makes this
+    /// router publish the logical binding.
+    binding_catalog: Option<Arc<ClusterApplicationCatalog>>,
 
     /// Enable multi-level subdomain matching for wildcard hosts.
     multi_level_subdomain_matching: bool,
@@ -194,7 +197,7 @@ impl RouterFilter {
         let resolved = resolve_routes(routes);
         debug!(routes = resolved.len(), "router initialized");
         Self {
-            binding_enabled: false,
+            binding_catalog: None,
             multi_level_subdomain_matching: false,
             routes: resolved,
         }
@@ -284,8 +287,8 @@ impl RouterFilter {
     /// case (validation forbids a second binding after the barrier), so treat it
     /// as an internal error.
     fn apply_matched_route(&self, ctx: &mut HttpFilterContext<'_>, resolved: &ResolvedRoute) -> FilterAction {
-        if self.binding_enabled
-            && let Err(frozen) = ctx.bind_upstream(Arc::clone(&resolved.route.cluster))
+        if let Some(catalog) = &self.binding_catalog
+            && let Err(frozen) = ctx.bind_upstream(Arc::clone(&resolved.route.cluster), catalog)
         {
             warn!(
                 frozen = %frozen.frozen,
@@ -513,11 +516,11 @@ impl HttpFilter for RouterFilter {
     }
 
     fn binds_upstream(&self) -> bool {
-        self.binding_enabled
+        self.binding_catalog.is_some()
     }
 
-    fn enable_upstream_binding(&mut self) {
-        self.binding_enabled = true;
+    fn enable_upstream_binding(&mut self, catalog: Arc<ClusterApplicationCatalog>) {
+        self.binding_catalog = Some(catalog);
     }
 
     async fn on_request(&self, ctx: &mut HttpFilterContext<'_>) -> Result<FilterAction, FilterError> {

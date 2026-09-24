@@ -78,7 +78,11 @@ without owning any endpoint state by resolving them
 through a **catalog** built once at pipeline
 construction. Every `load_balancer` declares its
 clusters' metadata, and the builder folds all
-declarations into a single name-to-metadata map.
+declarations into a single name-to-metadata map that it
+hands to the pipeline's binding router. The catalog is
+configuration, not request state: it never travels in
+the request extensions, and a nested pipeline (an IRR
+step or outbound chain) resolves against its own.
 
 The same cluster is commonly declared by several load
 balancers — for example one per IRR round — so

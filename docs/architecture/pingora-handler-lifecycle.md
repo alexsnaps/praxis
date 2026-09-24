@@ -191,8 +191,8 @@ output is stored as the new canonical `pre_read_body` and
 retained for retry replay; an oversized rewrite becomes a
 local 413 before transport. The same phase runs inside a
 filtered sub-request only as inherited request state—the
-parent binding and catalog are restored centrally on every
-child completion and error path.
+parent binding is restored centrally on every child
+completion and error path.
 
 **Selected-upstream request-body phase:**
 

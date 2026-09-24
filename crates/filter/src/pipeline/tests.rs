@@ -150,8 +150,11 @@ fn ordinary_routing_does_not_require_global_cluster_metadata_agreement() {
     let errors = pipeline.ordering_errors(&entries, false, &SkipPipelineChecks::default());
 
     assert!(
-        pipeline.cluster_application_catalog.is_none(),
-        "ordinary routing must not build a pipeline-wide binding catalog"
+        !pipeline
+            .filters
+            .iter()
+            .any(|pf| matches!(&pf.filter, AnyFilter::Http(f) if f.binds_upstream())),
+        "ordinary routing must not enable binding or build a pipeline-wide catalog"
     );
     assert!(
         errors
@@ -193,14 +196,65 @@ fn binding_enabled_routing_requires_global_cluster_metadata_agreement() {
     let errors = pipeline.ordering_errors(&entries, false, &SkipPipelineChecks::default());
 
     assert!(
-        pipeline.cluster_application_catalog.is_some(),
-        "binding-aware routing must build the global metadata catalog"
+        pipeline
+            .filters
+            .iter()
+            .any(|pf| matches!(&pf.filter, AnyFilter::Http(f) if f.binds_upstream())),
+        "binding-aware routing must enable binding on the router"
     );
     assert!(
         errors
             .iter()
             .any(|error| error.contains("conflicting application metadata")),
         "binding metadata must remain unambiguous: {errors:?}"
+    );
+}
+
+#[tokio::test]
+async fn built_binding_router_resolves_metadata_from_pipeline_catalog() {
+    let registry = FilterRegistry::with_builtins();
+    let mut entries: Vec<FilterEntry> = serde_yaml::from_str(
+        r#"
+- filter: router
+  routes:
+    - path_prefix: "/"
+      cluster: inference
+- filter: headers
+  conditions:
+    - when:
+        bound_upstream:
+          application_provider: openai
+  request_set: [{name: x-bound, value: "true"}]
+- filter: load_balancer
+  clusters:
+    - name: inference
+      http:
+        application_protocol: openai_responses
+        application_provider: openai
+      endpoints: ["127.0.0.1:9"]
+"#,
+    )
+    .unwrap();
+    let pipeline = FilterPipeline::build(&mut entries, &registry).unwrap();
+    let req = crate::test_utils::make_request(Method::GET, "/");
+    let mut ctx = crate::test_utils::make_filter_context(&req);
+
+    let action = pipeline.execute_http_request(&mut ctx).await.unwrap();
+
+    assert!(matches!(action, FilterAction::Continue), "the pipeline should continue");
+    assert_eq!(
+        ctx.bound_application_protocol(),
+        Some("openai_responses"),
+        "the built router must resolve the protocol from the pipeline catalog"
+    );
+    assert_eq!(
+        ctx.bound_application_provider(),
+        Some("openai"),
+        "the built router must resolve the provider from the pipeline catalog"
+    );
+    assert!(
+        ctx.request_headers_to_set.iter().any(|(name, _)| name == "x-bound"),
+        "the bound_upstream condition must match the catalog-resolved provider"
     );
 }
 
@@ -2648,7 +2702,6 @@ async fn skip_to_excludes_skipped_filters_from_response() {
         bound_upstream_request_body_filter_indices: Vec::new(),
         allow_private_upstreams: false,
         response_trailer_filter_indices: Vec::new(),
-        cluster_application_catalog: None,
     });
 
     let req = crate::test_utils::make_request(Method::GET, "/");
@@ -2728,7 +2781,6 @@ async fn skip_to_excludes_skipped_filters_from_body_hooks() {
         bound_upstream_request_body_filter_indices: Vec::new(),
         allow_private_upstreams: false,
         response_trailer_filter_indices: Vec::new(),
-        cluster_application_catalog: None,
     });
 
     let req = crate::test_utils::make_request(Method::GET, "/");
@@ -2805,7 +2857,6 @@ async fn body_hooks_run_for_every_filter_before_the_request_phase() {
         bound_upstream_request_body_filter_indices: Vec::new(),
         allow_private_upstreams: false,
         response_trailer_filter_indices: Vec::new(),
-        cluster_application_catalog: None,
     });
 
     let req = crate::test_utils::make_request(Method::GET, "/");
@@ -2876,7 +2927,6 @@ async fn all_executed_filters_run_on_response() {
         bound_upstream_request_body_filter_indices: Vec::new(),
         allow_private_upstreams: false,
         response_trailer_filter_indices: Vec::new(),
-        cluster_application_catalog: None,
     });
 
     let req = crate::test_utils::make_request(Method::GET, "/");
@@ -3084,7 +3134,6 @@ async fn skipped_filter_skips_its_branches() {
         bound_upstream_request_body_filter_indices: Vec::new(),
         allow_private_upstreams: false,
         response_trailer_filter_indices: Vec::new(),
-        cluster_application_catalog: None,
     });
 
     let req = crate::test_utils::make_request(Method::GET, "/other");
@@ -4599,7 +4648,6 @@ fn test_pipeline(body_capabilities: BodyCapabilities, filters: Vec<PipelineFilte
         bound_upstream_request_body_filter_indices: Vec::new(),
         allow_private_upstreams: false,
         response_trailer_filter_indices: Vec::new(),
-        cluster_application_catalog: None,
     })
 }
 
@@ -4916,7 +4964,6 @@ fn make_pipeline(filters: Vec<Box<dyn HttpFilter>>) -> FilterPipeline {
         bound_upstream_request_body_filter_indices: Vec::new(),
         allow_private_upstreams: false,
         response_trailer_filter_indices: Vec::new(),
-        cluster_application_catalog: None,
     })
 }
 
@@ -4954,7 +5001,6 @@ fn make_pipeline_with_conditions(
         bound_upstream_request_body_filter_indices: Vec::new(),
         allow_private_upstreams: false,
         response_trailer_filter_indices: Vec::new(),
-        cluster_application_catalog: None,
     })
 }
 
@@ -4992,7 +5038,6 @@ fn make_pipeline_with_response_conditions(
         bound_upstream_request_body_filter_indices: Vec::new(),
         allow_private_upstreams: false,
         response_trailer_filter_indices: Vec::new(),
-        cluster_application_catalog: None,
     })
 }
 
@@ -5644,7 +5689,6 @@ fn streaming_capability_detected_when_filter_declares_it() {
         bound_upstream_request_body_filter_indices: Vec::new(),
         allow_private_upstreams: false,
         response_trailer_filter_indices: Vec::new(),
-        cluster_application_catalog: None,
     });
     assert!(
         pipeline.may_select_streaming_subrequest_response(),
@@ -6756,76 +6800,6 @@ fn filter_request_conditions_match_fails_closed_for_untagged_binding() {
     assert!(
         !pipeline.filter_request_conditions_match("access_log", &ctx),
         "an untagged binding must not satisfy a provider-scoped fallback"
-    );
-}
-
-// -----------------------------------------------------------------------------
-// Cluster Application Catalog Injection
-// -----------------------------------------------------------------------------
-
-/// Build a single-cluster catalog tagging `cluster` with `protocol`.
-fn single_cluster_catalog(cluster: &str, protocol: &str) -> Arc<super::catalog::ClusterApplicationCatalog> {
-    let (catalog, conflicts) = super::catalog::build_catalog([super::catalog::ClusterMetadataDeclaration {
-        name: Arc::from(cluster),
-        metadata: super::catalog::ClusterApplicationMetadata::new(Some(Arc::from(protocol)), None),
-    }]);
-    assert!(conflicts.is_empty(), "single declaration cannot conflict");
-    Arc::new(catalog)
-}
-
-#[test]
-fn inject_cluster_catalog_replaces_stale_parent_catalog() {
-    use crate::RequestExtensions;
-
-    // A nested pipeline inherits the caller's (parent) extensions, which carry
-    // the parent pipeline's catalog. Entering the child must swap in the
-    // child's own catalog so a binding router resolves the right metadata.
-    let parent = single_cluster_catalog("inference", "parent_proto");
-    let child = single_cluster_catalog("inference", "child_proto");
-
-    let mut pipeline = make_pipeline(vec![]);
-    pipeline.cluster_application_catalog = Some(Arc::clone(&child));
-
-    let mut ext = RequestExtensions::new();
-    ext.insert(parent);
-
-    pipeline.inject_cluster_catalog(&mut ext);
-
-    let installed = ext
-        .get::<Arc<super::catalog::ClusterApplicationCatalog>>()
-        .expect("child catalog must be present after injection");
-    assert_eq!(
-        installed
-            .lookup("inference")
-            .and_then(super::catalog::ClusterApplicationMetadata::protocol),
-        Some("child_proto"),
-        "the nested pipeline's catalog must replace the parent's",
-    );
-}
-
-#[test]
-fn inject_cluster_catalog_drops_stale_parent_when_child_has_none() {
-    use crate::RequestExtensions;
-
-    // A nested pipeline that declares no catalog must not leak the parent's:
-    // leaving it installed would let a binding inside the sub-request resolve
-    // metadata against declarations the child never knew about.
-    let parent = single_cluster_catalog("inference", "parent_proto");
-
-    let pipeline = make_pipeline(vec![]);
-    assert!(
-        pipeline.cluster_application_catalog.is_none(),
-        "make_pipeline builds a catalog-less pipeline",
-    );
-
-    let mut ext = RequestExtensions::new();
-    ext.insert(parent);
-
-    pipeline.inject_cluster_catalog(&mut ext);
-
-    assert!(
-        ext.get::<Arc<super::catalog::ClusterApplicationCatalog>>().is_none(),
-        "a nested pipeline with no catalog must drop the stale parent catalog",
     );
 }
 

@@ -1082,22 +1082,10 @@ async fn staged_upstream_clears_discarded_selection_metadata() {
     );
 }
 
-fn nested_upstream_extensions(
-    with_parent_catalog: bool,
-) -> (
-    crate::RequestExtensions,
-    Option<std::sync::Arc<crate::pipeline::catalog::ClusterApplicationCatalog>>,
-) {
+fn nested_upstream_extensions() -> crate::RequestExtensions {
     use std::sync::Arc;
 
-    let registry = crate::FilterRegistry::with_builtins();
-    let child = crate::FilterPipeline::build(&mut [], &registry).unwrap();
-    let parent_catalog =
-        with_parent_catalog.then(|| Arc::new(crate::pipeline::catalog::ClusterApplicationCatalog::default()));
     let mut extensions = crate::RequestExtensions::default();
-    if let Some(catalog) = &parent_catalog {
-        extensions.insert(Arc::clone(catalog));
-    }
     extensions.insert(crate::extensions::BoundUpstream::new(
         Arc::from("parent"),
         Some(Arc::from("parent_protocol")),
@@ -1105,7 +1093,7 @@ fn nested_upstream_extensions(
     ));
     extensions.insert(crate::extensions::BoundUpstreamFrozen);
 
-    super::enter_nested_upstream_scope(&mut extensions, &child);
+    super::enter_nested_upstream_scope(&mut extensions);
     extensions.insert(crate::extensions::BoundUpstream::new(
         Arc::from("child"),
         Some(Arc::from("child_protocol")),
@@ -1114,24 +1102,10 @@ fn nested_upstream_extensions(
     extensions.remove::<crate::extensions::BoundUpstreamFrozen>();
     extensions.insert(crate::extensions::SelectedClusterApplication::new(None, Some(Arc::from("leak"))).unwrap());
 
-    (extensions, parent_catalog)
+    extensions
 }
 
-fn assert_parent_upstream_scope(
-    extensions: &crate::RequestExtensions,
-    parent_catalog: Option<&std::sync::Arc<crate::pipeline::catalog::ClusterApplicationCatalog>>,
-) {
-    let restored_catalog = extensions.get::<std::sync::Arc<crate::pipeline::catalog::ClusterApplicationCatalog>>();
-    match parent_catalog {
-        Some(expected) => assert!(
-            restored_catalog.is_some_and(|actual| std::sync::Arc::ptr_eq(actual, expected)),
-            "the exact parent catalog must be restored"
-        ),
-        None => assert!(
-            restored_catalog.is_none(),
-            "a child catalog must not escape when the parent had no catalog"
-        ),
-    }
+fn assert_parent_upstream_scope(extensions: &crate::RequestExtensions) {
     let binding = extensions
         .get::<crate::extensions::BoundUpstream>()
         .expect("the parent binding must be restored");
@@ -1148,22 +1122,18 @@ fn assert_parent_upstream_scope(
 }
 
 #[test]
-fn error_into_parts_restores_parent_upstream_scope_without_catalog() {
-    let (extensions, parent_catalog) = nested_upstream_extensions(false);
+fn error_into_parts_restores_parent_upstream_scope() {
+    let extensions = nested_upstream_extensions();
     let error = super::FilteredSubrequestError::new("boom".to_owned().into(), extensions);
     let (_error, extensions) = error.into_parts();
-    assert_parent_upstream_scope(&extensions, parent_catalog.as_ref());
+    assert_parent_upstream_scope(&extensions);
 }
 
 #[test]
-fn nested_upstream_scope_restores_parent_catalog_binding_and_freeze() {
+fn nested_upstream_scope_restores_parent_binding_and_freeze() {
     use std::sync::Arc;
 
-    let registry = crate::FilterRegistry::with_builtins();
-    let child = crate::FilterPipeline::build(&mut [], &registry).unwrap();
-    let parent_catalog = Arc::new(crate::pipeline::catalog::ClusterApplicationCatalog::default());
     let mut extensions = crate::RequestExtensions::default();
-    extensions.insert(Arc::clone(&parent_catalog));
     extensions.insert(crate::extensions::BoundUpstream::new(
         Arc::from("parent"),
         Some(Arc::from("parent_protocol")),
@@ -1171,19 +1141,13 @@ fn nested_upstream_scope_restores_parent_catalog_binding_and_freeze() {
     ));
     extensions.insert(crate::extensions::BoundUpstreamFrozen);
 
-    super::enter_nested_upstream_scope(&mut extensions, &child);
+    super::enter_nested_upstream_scope(&mut extensions);
     extensions.insert(crate::extensions::BoundUpstream::new(Arc::from("child"), None, None));
     extensions.remove::<crate::extensions::BoundUpstreamFrozen>();
     extensions.insert(crate::extensions::SelectedClusterApplication::new(None, Some(Arc::from("child"))).unwrap());
 
     super::restore_parent_upstream_scope(&mut extensions);
 
-    assert!(Arc::ptr_eq(
-        extensions
-            .get::<Arc<crate::pipeline::catalog::ClusterApplicationCatalog>>()
-            .unwrap(),
-        &parent_catalog,
-    ));
     let binding = extensions.get::<crate::extensions::BoundUpstream>().unwrap();
     assert_eq!(binding.cluster(), "parent");
     assert_eq!(binding.application_protocol(), Some("parent_protocol"));
@@ -1211,7 +1175,7 @@ fn into_parent_extensions_restores_parent_upstream_scope() {
         headers: HeaderMap::new(),
         status: http::StatusCode::OK,
     };
-    let (extensions, parent_catalog) = nested_upstream_extensions(true);
+    let extensions = nested_upstream_extensions();
 
     let continuation = super::continuation::FilteredSubrequestContinuation {
         pipeline,
@@ -1235,7 +1199,7 @@ fn into_parent_extensions_restores_parent_upstream_scope() {
     };
 
     let extensions = continuation.into_parent_extensions();
-    assert_parent_upstream_scope(&extensions, parent_catalog.as_ref());
+    assert_parent_upstream_scope(&extensions);
 }
 
 #[test]
@@ -1253,7 +1217,7 @@ fn into_completion_restores_parent_upstream_scope() {
         headers: HeaderMap::new(),
         status: http::StatusCode::OK,
     };
-    let (extensions, parent_catalog) = nested_upstream_extensions(true);
+    let extensions = nested_upstream_extensions();
 
     let continuation = super::continuation::FilteredSubrequestContinuation {
         pipeline,
@@ -1277,7 +1241,7 @@ fn into_completion_restores_parent_upstream_scope() {
     };
 
     let completion = continuation.into_completion();
-    assert_parent_upstream_scope(&completion.extensions, parent_catalog.as_ref());
+    assert_parent_upstream_scope(&completion.extensions);
 }
 
 #[tokio::test]

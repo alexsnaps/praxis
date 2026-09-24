@@ -75,10 +75,7 @@ use crate::{
     factory::parse_filter_config,
     filter::{HttpFilter, HttpFilterContext},
     filtered_subrequest::{FilteredStreamingBody, SubrequestRuntime, normalize_response_status},
-    pipeline::{
-        catalog::{ClusterApplicationCatalog, ClusterMetadataDeclaration},
-        subrequest::DEPTH_HEADER,
-    },
+    pipeline::{catalog::ClusterMetadataDeclaration, subrequest::DEPTH_HEADER},
 };
 
 // -----------------------------------------------------------------------------
@@ -122,64 +119,12 @@ pub(super) fn streaming_transition_order_is_valid(transitions: &[config::StepTra
 /// The generic executor already removes its own transient mechanisms; the
 /// router additionally injects [`IterationState`] and [`NextIterationBody`],
 /// which must not leak into the parent pipeline. Applying this to the executor's
-/// parent-facing extensions restores the router-owned end state of the
-/// pre-extraction context.
-///
-/// This reconciles only the iteration mechanisms; catalog restoration is layered
-/// on top by [`restore_parent_extensions`], which every parent-facing write-back
-/// funnels through.
+/// parent-facing extensions restores the exact end state of the pre-extraction
+/// router.
 pub(super) fn strip_iteration_extensions(mut extensions: RequestExtensions) -> RequestExtensions {
     extensions.remove::<IterationState>();
     extensions.remove::<NextIterationBody>();
     extensions
-}
-
-/// Reconcile the threaded extensions back to the parent's end state before they
-/// cross back into the parent request context.
-///
-/// Beyond [`strip_iteration_extensions`], a binding-enabled step pipeline
-/// installs its own [`ClusterApplicationCatalog`] into the threaded extensions
-/// (via [`prepare_extensions`]), so without this a terminal step's catalog
-/// could ride back into the parent in place of the parent's own. Restoring
-/// `parent_catalog` at every parent-facing write-back keeps the parent pipeline
-/// resolving cluster metadata against its own declarations after the IRR
-/// returns; a `parent_catalog` of `None` means the parent declared none, so any
-/// step catalog is removed rather than left to leak.
-///
-/// The frozen [`BoundUpstream`] and its barrier marker are intentionally left
-/// intact so the logical binding survives the hand-back unchanged.
-///
-/// [`ClusterApplicationCatalog`]: crate::pipeline::catalog::ClusterApplicationCatalog
-/// [`BoundUpstream`]: crate::extensions::BoundUpstream
-/// [`prepare_extensions`]: crate::pipeline::FilterPipeline::prepare_extensions
-pub(super) fn restore_parent_extensions(
-    extensions: RequestExtensions,
-    parent_catalog: Option<&Arc<ClusterApplicationCatalog>>,
-) -> RequestExtensions {
-    let mut extensions = strip_iteration_extensions(extensions);
-    restore_parent_catalog(&mut extensions, parent_catalog);
-    extensions
-}
-
-/// Install `parent_catalog` into `extensions`, replacing any step catalog left
-/// behind, or removing it when the parent declared none.
-///
-/// The in-place form used by the streaming session's [`swap_extensions`], where
-/// the extensions are only borrowed.
-///
-/// [`swap_extensions`]: crate::actions::StreamingResponseBody::swap_extensions
-pub(super) fn restore_parent_catalog(
-    extensions: &mut RequestExtensions,
-    parent_catalog: Option<&Arc<ClusterApplicationCatalog>>,
-) {
-    match parent_catalog {
-        Some(catalog) => {
-            extensions.insert(Arc::clone(catalog));
-        },
-        None => {
-            extensions.remove::<Arc<ClusterApplicationCatalog>>();
-        },
-    }
 }
 
 /// Drop any selected-cluster application metadata a prior step published, so a
@@ -644,17 +589,13 @@ impl IterativeRequestRouterFilter {
         let mut current_step = Arc::clone(&self.initial_step);
         let mut current_request = original_request;
         let mut extensions = std::mem::take(&mut ctx.extensions);
-        // The parent pipeline's own cluster catalog, captured before any step
-        // overwrites it. Restored on every parent-facing write-back so the
-        // terminal step's catalog never rides back into the parent.
-        let parent_catalog = extensions.get::<Arc<ClusterApplicationCatalog>>().cloned();
         let mut pending_chunks = VecDeque::new();
         let mut pending_bytes = 0_usize;
 
         loop {
             clear_selected_application(&mut extensions);
             if state.iteration >= self.max_iterations {
-                ctx.extensions = restore_parent_extensions(extensions, parent_catalog.as_ref());
+                ctx.extensions = extensions;
                 warn!(
                     iterations = state.iteration,
                     max = self.max_iterations,
@@ -668,7 +609,7 @@ impl IterativeRequestRouterFilter {
                 .unwrap_or(Duration::ZERO)
                 .is_zero()
             {
-                ctx.extensions = restore_parent_extensions(extensions, parent_catalog.as_ref());
+                ctx.extensions = extensions;
                 warn!(
                     iterations = state.iteration,
                     "iterative_request_router: deadline exceeded"
@@ -680,7 +621,7 @@ impl IterativeRequestRouterFilter {
                 Ok(opened) => opened,
                 Err(error) => {
                     let (error, restored_extensions) = error.into_parts();
-                    ctx.extensions = restore_parent_extensions(restored_extensions, parent_catalog.as_ref());
+                    ctx.extensions = restored_extensions;
                     return Err(error);
                 },
             };
@@ -691,8 +632,7 @@ impl IterativeRequestRouterFilter {
                     let transitions = self.step_transitions.get(&current_step).map_or(&[][..], Vec::as_slice);
                     if !streaming_transition_order_is_valid(transitions) {
                         (*body).cancel().await;
-                        ctx.extensions =
-                            restore_parent_extensions(continuation.into_parent_extensions(), parent_catalog.as_ref());
+                        ctx.extensions = strip_iteration_extensions(continuation.into_parent_extensions());
                         return Err(format!(
                             "iterative_request_router: step '{current_step}' selected streaming with interleaved transition phases"
                         )
@@ -707,10 +647,8 @@ impl IterativeRequestRouterFilter {
                             );
                             let mut skipped = FilteredStreamingBody::new(body, continuation);
                             if let Err(error) = skipped.suppress().await {
-                                ctx.extensions = restore_parent_extensions(
-                                    skipped.into_continuation().into_parent_extensions(),
-                                    parent_catalog.as_ref(),
-                                );
+                                ctx.extensions =
+                                    strip_iteration_extensions(skipped.into_continuation().into_parent_extensions());
                                 return Err(error);
                             }
                             let mut completion =
@@ -718,16 +656,14 @@ impl IterativeRequestRouterFilter {
                                     Ok(completion) => completion,
                                     Err(error) => {
                                         let (error, restored_extensions) = error.into_parts();
-                                        ctx.extensions =
-                                            restore_parent_extensions(restored_extensions, parent_catalog.as_ref());
+                                        ctx.extensions = restored_extensions;
                                         return Err(error);
                                     },
                                 };
                             completion.state.previous_response = None;
                             completion.state.iteration += 1;
                             if completion.state.retained_bytes() > self.max_state_bytes {
-                                ctx.extensions =
-                                    restore_parent_extensions(completion.extensions, parent_catalog.as_ref());
+                                ctx.extensions = completion.extensions;
                                 return Ok(FilterAction::Reject(Rejection::status(413)));
                             }
                             let next_body = completion
@@ -746,10 +682,7 @@ impl IterativeRequestRouterFilter {
                         TransitionResult::Done | TransitionResult::NoMatch => {
                             let Some(active_state) = continuation.extensions().get::<IterationState>() else {
                                 (*body).cancel().await;
-                                ctx.extensions = restore_parent_extensions(
-                                    continuation.into_parent_extensions(),
-                                    parent_catalog.as_ref(),
-                                );
+                                ctx.extensions = strip_iteration_extensions(continuation.into_parent_extensions());
                                 return Err(
                                     "iterative_request_router: iteration state missing before stream handoff"
                                         .to_owned()
@@ -768,13 +701,11 @@ impl IterativeRequestRouterFilter {
                                     Ok(completion) => completion,
                                     Err(error) => {
                                         let (error, restored_extensions) = error.into_parts();
-                                        ctx.extensions =
-                                            restore_parent_extensions(restored_extensions, parent_catalog.as_ref());
+                                        ctx.extensions = restored_extensions;
                                         return Err(error);
                                     },
                                 };
-                                ctx.extensions =
-                                    restore_parent_extensions(completion.extensions, parent_catalog.as_ref());
+                                ctx.extensions = completion.extensions;
                                 return Ok(FilterAction::Reject(Rejection::status(413)));
                             }
                             let status = normalize_response_status(outcome.response.status);
@@ -792,7 +723,6 @@ impl IterativeRequestRouterFilter {
                                     self.step_transitions.clone(),
                                     self.max_state_bytes,
                                     self.max_stream_response_bytes,
-                                    parent_catalog.clone(),
                                 )),
                             )
                             .with_headers(headers);
@@ -805,7 +735,7 @@ impl IterativeRequestRouterFilter {
                         Ok(completion) => completion,
                         Err(error) => {
                             let (error, restored_extensions) = error.into_parts();
-                            ctx.extensions = restore_parent_extensions(restored_extensions, parent_catalog.as_ref());
+                            ctx.extensions = restored_extensions;
                             return Err(error);
                         },
                     };
@@ -822,7 +752,7 @@ impl IterativeRequestRouterFilter {
                     let filter_results = completion.filter_results;
                     extensions = completion.extensions;
                     if state.retained_bytes() > self.max_state_bytes {
-                        ctx.extensions = restore_parent_extensions(extensions, parent_catalog.as_ref());
+                        ctx.extensions = extensions;
                         return Ok(FilterAction::Reject(Rejection::status(413)));
                     }
 
@@ -845,7 +775,7 @@ impl IterativeRequestRouterFilter {
                                     state.retained_bytes(),
                                 );
                                 let Ok(updated_pending_bytes) = appended else {
-                                    ctx.extensions = restore_parent_extensions(extensions, parent_catalog.as_ref());
+                                    ctx.extensions = extensions;
                                     return Ok(FilterAction::Reject(Rejection::status(413)));
                                 };
                                 pending_bytes = updated_pending_bytes;
@@ -867,13 +797,13 @@ impl IterativeRequestRouterFilter {
                                     .chain(std::iter::once(&outcome.response.body))
                                     .try_fold(0_usize, |total, chunk| total.checked_add(chunk.len()));
                                 let Some(combined_bytes) = combined_bytes else {
-                                    ctx.extensions = restore_parent_extensions(extensions, parent_catalog.as_ref());
+                                    ctx.extensions = extensions;
                                     return Err("iterative_request_router: completion body byte count overflow"
                                         .to_owned()
                                         .into());
                                 };
                                 if combined_bytes > max_response_bytes {
-                                    ctx.extensions = restore_parent_extensions(extensions, parent_catalog.as_ref());
+                                    ctx.extensions = extensions;
                                     return Err(
                                         "iterative_request_router: abnormal completion exceeds response body limit"
                                             .to_owned()
@@ -893,14 +823,14 @@ impl IterativeRequestRouterFilter {
                                 pending_chunks.clear();
                                 outcome.response.body = Bytes::new();
                             } else if !pending_chunks.is_empty() || !completed_pending_chunks.is_empty() {
-                                ctx.extensions = restore_parent_extensions(extensions, parent_catalog.as_ref());
+                                ctx.extensions = extensions;
                                 return Err(
                                     "iterative_request_router: stream chunks were emitted without a streaming response"
                                         .to_owned()
                                         .into(),
                                 );
                             }
-                            ctx.extensions = restore_parent_extensions(extensions, parent_catalog.as_ref());
+                            ctx.extensions = extensions;
                             return Ok(FilterAction::TerminalResponse(Box::new(build_terminal_response(
                                 &outcome.response,
                                 current_request.method == http::Method::HEAD,

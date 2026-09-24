@@ -148,6 +148,21 @@ fn bench_bound_pipeline_eval(c: &mut Criterion) {
     )
     .expect("valid benchmark pipeline");
     let pipeline = FilterPipeline::build(&mut entries, &registry).expect("benchmark pipeline builds");
+    runtime.block_on(async {
+        let request = make_get_request("/api");
+        let mut ctx = make_ctx(&request);
+        drop(
+            pipeline
+                .execute_http_request(&mut ctx)
+                .await
+                .expect("pipeline executes"),
+        );
+        assert_eq!(
+            ctx.bound_application_provider(),
+            Some("openai"),
+            "the benchmark must measure a bound-provider hit, not a miss"
+        );
+    });
 
     c.bench_function("condition_eval/router_bound_provider_hit", |b| {
         b.to_async(&runtime).iter_batched(

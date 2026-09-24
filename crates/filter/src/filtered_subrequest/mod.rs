@@ -92,14 +92,11 @@ use crate::{
     actions::Rejection,
     context::PendingStreamChunks,
     extensions::{BoundUpstream, BoundUpstreamFrozen, RequestExtensions, SelectedClusterApplication},
-    pipeline::catalog::ClusterApplicationCatalog,
     results::RetainedFilterResults,
 };
 
 /// Parent routing state shadowed while a nested pipeline executes.
 struct ParentUpstreamState {
-    /// Parent pipeline's application-metadata catalog.
-    catalog: Option<Arc<ClusterApplicationCatalog>>,
     /// Parent request's logical cluster binding.
     binding: Option<BoundUpstream>,
     /// Whether the parent binding had already reached its freeze point.
@@ -111,10 +108,9 @@ struct ParentUpstreamState {
 #[derive(Default)]
 struct ParentUpstreamStates(Vec<ParentUpstreamState>);
 
-/// Save parent routing state and install the nested pipeline's catalog.
-fn enter_nested_upstream_scope(extensions: &mut RequestExtensions, pipeline: &FilterPipeline) {
+/// Save parent routing state before a nested pipeline runs.
+fn enter_nested_upstream_scope(extensions: &mut RequestExtensions) {
     let state = ParentUpstreamState {
-        catalog: extensions.remove::<Arc<ClusterApplicationCatalog>>(),
         binding: extensions.get::<BoundUpstream>().cloned(),
         frozen: extensions.get::<BoundUpstreamFrozen>().is_some(),
     };
@@ -122,7 +118,6 @@ fn enter_nested_upstream_scope(extensions: &mut RequestExtensions, pipeline: &Fi
     states.0.push(state);
     extensions.insert(states);
     extensions.remove::<SelectedClusterApplication>();
-    pipeline.inject_cluster_catalog(extensions);
 }
 
 /// Remove nested routing state and restore the most recent parent checkpoint.
@@ -134,12 +129,8 @@ fn restore_parent_upstream_scope(extensions: &mut RequestExtensions) {
     let Some(state) = states.0.pop() else {
         return;
     };
-    extensions.remove::<Arc<ClusterApplicationCatalog>>();
     extensions.remove::<BoundUpstream>();
     extensions.remove::<BoundUpstreamFrozen>();
-    if let Some(catalog) = state.catalog {
-        extensions.insert(catalog);
-    }
     if let Some(binding) = state.binding {
         extensions.insert(binding);
     }
@@ -659,7 +650,7 @@ impl FilteredSubrequestExecutor {
         };
         let mut filter_ctx = build_sub_filter_context(pipeline, &sub_req, resources);
         filter_ctx.extensions = std::mem::take(&mut extensions);
-        enter_nested_upstream_scope(&mut filter_ctx.extensions, pipeline);
+        enter_nested_upstream_scope(&mut filter_ctx.extensions);
         filter_ctx.extensions.insert(RetainedFilterResults::default());
         filter_ctx.enable_stream_chunk_emission(self.max_state_bytes);
         // A callout may stage a pre-resolved upstream (for example a URL prepared

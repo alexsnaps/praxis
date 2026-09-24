@@ -5,6 +5,8 @@
 //!
 //! Every HTTP filter implements this trait.
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use bytes::Bytes;
 use praxis_core::config::InsecureOptions;
@@ -14,7 +16,10 @@ use crate::{
     actions::{BoundUpstreamBodyOutcome, FilterAction, SelectedUpstreamBodyOutcome},
     body::{BodyAccess, BodyMode},
     builtins::http::payload_processing::compression_config::CompressionConfig,
-    pipeline::{FilterPipeline, catalog::ClusterMetadataDeclaration},
+    pipeline::{
+        FilterPipeline,
+        catalog::{ClusterApplicationCatalog, ClusterMetadataDeclaration},
+    },
 };
 
 // -----------------------------------------------------------------------------
@@ -153,10 +158,13 @@ pub trait HttpFilter: Send + Sync {
     /// Enable logical-upstream publication for this filter.
     ///
     /// Pipeline construction calls this only when the resolved pipeline
-    /// contains a bound-upstream observer or consumer. The built-in `router`
-    /// uses the hook to keep ordinary routing pipelines on their pre-binding
-    /// fast path; other filters leave the default no-op implementation.
-    fn enable_upstream_binding(&mut self) {}
+    /// contains a bound-upstream observer or consumer, passing the pipeline's
+    /// cluster `catalog` so a published binding carries each cluster's
+    /// application metadata. The built-in `router` uses the hook to keep
+    /// ordinary routing pipelines on their pre-binding fast path; other
+    /// filters leave the default no-op implementation.
+    #[doc(hidden)]
+    fn enable_upstream_binding(&mut self, _catalog: Arc<ClusterApplicationCatalog>) {}
 
     /// Whether this filter selects its cluster from the frozen logical
     /// binding (`BoundUpstream`) rather than a preceding `router`'s

@@ -259,7 +259,7 @@ async fn on_request_sets_cluster_on_match() {
 }
 
 #[tokio::test]
-async fn on_request_publishes_name_only_binding_without_catalog() {
+async fn on_request_publishes_name_only_binding_with_empty_catalog() {
     let router = make_router(vec![prefix_route("/", "default")]);
     let req = crate::test_utils::make_request(http::Method::GET, "/");
     let mut ctx = crate::test_utils::make_filter_context(&req);
@@ -274,12 +274,12 @@ async fn on_request_publishes_name_only_binding_without_catalog() {
     assert_eq!(
         ctx.bound_application_protocol(),
         None,
-        "a plain routing pipeline (no catalog) binds without a protocol"
+        "a cluster the catalog does not declare binds without a protocol"
     );
     assert_eq!(
         ctx.bound_application_provider(),
         None,
-        "a plain routing pipeline (no catalog) binds without a provider"
+        "a cluster the catalog does not declare binds without a provider"
     );
 }
 
@@ -305,16 +305,15 @@ async fn on_request_resolves_binding_metadata_from_catalog() {
 
     use crate::pipeline::catalog::{ClusterApplicationMetadata, ClusterMetadataDeclaration, build_catalog};
 
-    let router = make_router(vec![prefix_route("/", "inference")]);
-    let req = crate::test_utils::make_request(http::Method::GET, "/");
-    let mut ctx = crate::test_utils::make_filter_context(&req);
-
     let (catalog, conflicts) = build_catalog([ClusterMetadataDeclaration {
         name: Arc::from("inference"),
         metadata: ClusterApplicationMetadata::new(Some(Arc::from("openai_responses")), Some(Arc::from("openai"))),
     }]);
     assert!(conflicts.is_empty(), "a single declaration cannot conflict");
-    ctx.extensions.insert(Arc::new(catalog));
+    let mut router = RouterFilter::new(vec![prefix_route("/", "inference")]).unwrap();
+    router.enable_upstream_binding(Arc::new(catalog));
+    let req = crate::test_utils::make_request(http::Method::GET, "/");
+    let mut ctx = crate::test_utils::make_filter_context(&req);
 
     drop(router.on_request(&mut ctx).await.unwrap());
 
@@ -339,17 +338,34 @@ async fn on_request_resolves_binding_metadata_from_catalog() {
 async fn on_request_catalog_miss_publishes_name_only_binding() {
     use std::sync::Arc;
 
-    let router = make_router(vec![prefix_route("/", "not-declared")]);
+    use crate::pipeline::catalog::{ClusterApplicationMetadata, ClusterMetadataDeclaration, build_catalog};
+
+    let (catalog, _) = build_catalog([ClusterMetadataDeclaration {
+        name: Arc::from("declared"),
+        metadata: ClusterApplicationMetadata::new(Some(Arc::from("openai_responses")), None),
+    }]);
+    let mut router = RouterFilter::new(vec![prefix_route("/", "not-declared")]).unwrap();
+    router.enable_upstream_binding(Arc::new(catalog));
     let req = crate::test_utils::make_request(http::Method::GET, "/");
     let mut ctx = crate::test_utils::make_filter_context(&req);
-    ctx.extensions
-        .insert(Arc::new(crate::pipeline::catalog::ClusterApplicationCatalog::default()));
 
     drop(router.on_request(&mut ctx).await.unwrap());
 
-    assert_eq!(ctx.bound_cluster(), Some("not-declared"));
-    assert_eq!(ctx.bound_application_protocol(), None);
-    assert_eq!(ctx.bound_application_provider(), None);
+    assert_eq!(
+        ctx.bound_cluster(),
+        Some("not-declared"),
+        "a catalog miss still binds the matched cluster name"
+    );
+    assert_eq!(
+        ctx.bound_application_protocol(),
+        None,
+        "a catalog miss must not borrow another cluster's protocol"
+    );
+    assert_eq!(
+        ctx.bound_application_provider(),
+        None,
+        "a catalog miss binds without a provider"
+    );
 }
 
 #[tokio::test]
@@ -427,8 +443,8 @@ routes:
         .unwrap(),
     )
     .unwrap();
-    first.enable_upstream_binding();
-    second.enable_upstream_binding();
+    first.enable_upstream_binding(std::sync::Arc::default());
+    second.enable_upstream_binding(std::sync::Arc::default());
     let req = crate::test_utils::make_request(http::Method::GET, "/");
     let mut ctx = crate::test_utils::make_filter_context(&req);
 
@@ -2162,7 +2178,7 @@ fn json_alias_max_bytes_at_upper_bound_passes_bounds_check() {
 
 fn make_router(routes: Vec<Route>) -> RouterFilter {
     let mut router = RouterFilter::new(routes).expect("test routes should be valid");
-    router.enable_upstream_binding();
+    router.enable_upstream_binding(std::sync::Arc::default());
     router
 }
 

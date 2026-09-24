@@ -29,6 +29,7 @@ use super::{
         body_filter_indices, bound_upstream_request_body_indices, compute_body_capabilities,
         selected_upstream_request_body_indices,
     },
+    catalog::ClusterApplicationCatalog,
     filter::PipelineFilter,
 };
 use crate::{FilterError, any_filter::AnyFilter, registry::FilterRegistry};
@@ -111,9 +112,9 @@ impl FilterPipeline {
         reason = "single construction choke point: one precompute per body phase plus the full struct literal"
     )]
     pub(crate) fn from_filters(mut filters: Vec<PipelineFilter>) -> Self {
-        let bound_upstream_enabled = super::checks::uses_bound_upstream(&filters);
-        if bound_upstream_enabled {
-            enable_upstream_binding(&mut filters);
+        if super::checks::uses_bound_upstream(&filters) {
+            let catalog = build_cluster_application_catalog(&filters);
+            enable_upstream_binding(&mut filters, &catalog);
         }
         let body_capabilities = compute_body_capabilities(&filters);
         let compression = extract_compression_config(&filters);
@@ -127,7 +128,6 @@ impl FilterPipeline {
         let selected_upstream_request_body_filter_indices = selected_upstream_request_body_indices(&filters);
         let bound_upstream_request_body_filter_indices = bound_upstream_request_body_indices(&filters);
         let response_trailer_filter_indices = super::body::response_trailer_filter_indices(&filters);
-        let cluster_application_catalog = build_cluster_application_catalog(&filters, bound_upstream_enabled);
         let id_generator = Arc::new(IdGenerator::new());
         let time_source: Arc<dyn praxis_core::time::TimeSource> = Arc::new(SystemTimeSource);
         let mut pipeline = Self {
@@ -140,7 +140,6 @@ impl FilterPipeline {
             bound_upstream_request_body_filter_indices,
             allow_private_upstreams: false,
             response_trailer_filter_indices,
-            cluster_application_catalog,
             health_registry: None,
             id_generator: Arc::clone(&id_generator),
             kv_stores: None,
@@ -364,14 +363,15 @@ impl FilterPipeline {
     }
 }
 
-/// Enable logical binding only on routers in a pipeline that actually uses it.
-fn enable_upstream_binding(filters: &mut [PipelineFilter]) {
+/// Enable logical binding only on routers in a pipeline that actually uses it,
+/// handing each the pipeline's cluster catalog.
+fn enable_upstream_binding(filters: &mut [PipelineFilter], catalog: &Arc<ClusterApplicationCatalog>) {
     for pf in filters {
         if let AnyFilter::Http(filter) = &mut pf.filter {
-            filter.enable_upstream_binding();
+            filter.enable_upstream_binding(Arc::clone(catalog));
         }
         for branch in &mut pf.branches {
-            enable_upstream_binding(&mut branch.filters);
+            enable_upstream_binding(&mut branch.filters, catalog);
         }
     }
 }
@@ -411,23 +411,15 @@ fn warn_tcp_unsupported_fields(filter: &AnyFilter, entry: &FilterEntry) {
 ///
 /// Ordinary routing resolves metadata from the load balancer that owns the
 /// selected endpoint, so it neither needs this global catalog nor requires
-/// declarations in independent dispatch paths to agree. Returns `None` when
-/// binding is disabled or no filter declares a cluster. Conflicting
-/// declarations in a binding-enabled pipeline are ignored here and surfaced by
-/// [`check_cluster_metadata_conflicts`], which blocks a conflicting
-/// pipeline from serving traffic; the runtime map is only consulted once
-/// validation has passed.
+/// declarations in independent dispatch paths to agree. Conflicting
+/// declarations are ignored here and surfaced by
+/// [`check_cluster_metadata_conflicts`], which blocks a conflicting pipeline
+/// from serving traffic.
 ///
 /// [`check_cluster_metadata_conflicts`]: super::checks::check_cluster_metadata_conflicts
-fn build_cluster_application_catalog(
-    filters: &[PipelineFilter],
-    bound_upstream_enabled: bool,
-) -> Option<Arc<super::catalog::ClusterApplicationCatalog>> {
-    if !bound_upstream_enabled {
-        return None;
-    }
+fn build_cluster_application_catalog(filters: &[PipelineFilter]) -> Arc<ClusterApplicationCatalog> {
     let (catalog, _conflicts) = super::catalog::build_catalog(super::collect_cluster_declarations(filters));
-    (!catalog.is_empty()).then(|| Arc::new(catalog))
+    Arc::new(catalog)
 }
 
 /// Scan the filter list for a compression filter and extract its config.

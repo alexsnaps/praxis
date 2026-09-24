@@ -701,24 +701,23 @@ impl HttpFilterContext<'_> {
         Ok(())
     }
 
-    /// Resolve `cluster` through the injected pipeline catalog and publish the
-    /// binding.
+    /// Resolve `cluster` through the pipeline `catalog` and publish the binding.
     ///
     /// The trusted built-in router calls this before it commits its
-    /// exchange-local route fields. Application metadata (protocol/provider) is
-    /// looked up in the pipeline cluster catalog; a cluster absent from the
-    /// catalog — or one declared without tags — binds with no metadata rather
-    /// than failing, so plain routing pipelines keep working.
+    /// exchange-local route fields. A cluster absent from the catalog, or one
+    /// declared without tags, binds with no metadata rather than failing.
     ///
     /// # Errors
     ///
     /// Returns [`BindingFrozen`] if the binding is frozen and `cluster` differs
     /// from the frozen one.
-    pub(crate) fn bind_upstream(&mut self, cluster: Arc<str>) -> Result<(), BindingFrozen> {
-        let (protocol, provider) = self
-            .extensions
-            .get::<Arc<ClusterApplicationCatalog>>()
-            .and_then(|catalog| catalog.lookup(&cluster))
+    pub(crate) fn bind_upstream(
+        &mut self,
+        cluster: Arc<str>,
+        catalog: &ClusterApplicationCatalog,
+    ) -> Result<(), BindingFrozen> {
+        let (protocol, provider) = catalog
+            .lookup(&cluster)
             .map_or((None, None), |meta| (meta.protocol_arc(), meta.provider_arc()));
         self.publish_bound_upstream(cluster, protocol, provider)
     }
