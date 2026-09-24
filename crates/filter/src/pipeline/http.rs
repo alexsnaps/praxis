@@ -36,10 +36,7 @@ use crate::{
     trace_context::{TraceContext, ensure_trace_context},
 };
 #[cfg(feature = "bound-upstream-request-body")]
-use crate::{
-    actions::BoundUpstreamBodyOutcome, body::BodyAccess, condition::SelectedUpstream,
-    extensions::BoundRequestBodyRewrite,
-};
+use crate::{actions::BoundUpstreamBodyOutcome, condition::SelectedUpstream, extensions::BoundRequestBodyRewrite};
 
 // -----------------------------------------------------------------------------
 // FilterPipeline HTTP
@@ -472,10 +469,8 @@ impl FilterPipeline {
             .await;
             ctx.current_filter_id = None;
             match outcome {
-                Ok(BoundUpstreamBodyOutcome::Continue) => {
-                    rewrote |= http_filter.bound_upstream_request_body_access() == BodyAccess::ReadWrite;
-                },
-                Ok(BoundUpstreamBodyOutcome::Reject(rejection)) => {
+                Ok((BoundUpstreamBodyOutcome::Continue, wrote)) => rewrote |= wrote,
+                Ok((BoundUpstreamBodyOutcome::Reject(rejection), _)) => {
                     result = Ok(FilterAction::Reject(rejection));
                     break;
                 },

@@ -1102,6 +1102,59 @@ async fn execute_request_body_skips_none_access_filters() {
 // -----------------------------------------------------------------------------
 
 #[tokio::test]
+async fn execute_selected_upstream_request_body_discards_a_read_only_edit() {
+    let pipeline = make_pipeline(vec![Box::new(SelectedUpstreamTamperFilter {
+        access: BodyAccess::ReadOnly,
+        error: false,
+    })]);
+    let req = crate::test_utils::make_request(Method::POST, "/upload");
+    let mut ctx = crate::test_utils::make_filter_context(&req);
+    let mut body = Some(Bytes::from_static(b"payload"));
+
+    let action = pipeline
+        .execute_http_selected_upstream_request_body(&mut ctx, &mut body)
+        .await
+        .unwrap();
+
+    assert!(
+        matches!(action, FilterAction::Continue),
+        "the filter continued: {action:?}"
+    );
+    assert_eq!(
+        body.as_deref(),
+        Some(&b"payload"[..]),
+        "a read-only filter works on a copy, so its edit never reaches the forwarded body"
+    );
+}
+
+#[tokio::test]
+async fn execute_selected_upstream_request_body_undoes_a_fail_open_writer_that_errors() {
+    let mut pipeline = make_pipeline(vec![Box::new(SelectedUpstreamTamperFilter {
+        access: BodyAccess::ReadWrite,
+        error: true,
+    })]);
+    pipeline.filters[0].failure_mode = FailureMode::Open;
+    let req = crate::test_utils::make_request(Method::POST, "/upload");
+    let mut ctx = crate::test_utils::make_filter_context(&req);
+    let mut body = Some(Bytes::from_static(b"payload"));
+
+    let action = pipeline
+        .execute_http_selected_upstream_request_body(&mut ctx, &mut body)
+        .await
+        .unwrap();
+
+    assert!(
+        matches!(action, FilterAction::Continue),
+        "fail-open swallows the error: {action:?}"
+    );
+    assert_eq!(
+        body.as_deref(),
+        Some(&b"payload"[..]),
+        "the writer's partial edit is undone before the error is swallowed"
+    );
+}
+
+#[tokio::test]
 async fn execute_selected_upstream_request_body_read_only() {
     let log = Arc::new(std::sync::Mutex::new(Vec::new()));
     let bodies = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -4449,6 +4502,46 @@ impl HttpFilter for SelectedUpstreamRewriteFilter {
     }
 }
 
+/// A selected-upstream body filter that appends `|tamper` whatever access it
+/// declared, then continues or errors.
+struct SelectedUpstreamTamperFilter {
+    access: BodyAccess,
+    error: bool,
+}
+
+#[async_trait]
+impl HttpFilter for SelectedUpstreamTamperFilter {
+    fn name(&self) -> &'static str {
+        "selected_upstream_tamper"
+    }
+
+    async fn on_request(&self, _ctx: &mut crate::HttpFilterContext<'_>) -> Result<FilterAction, FilterError> {
+        Ok(FilterAction::Continue)
+    }
+
+    fn selected_upstream_request_body_access(&self) -> BodyAccess {
+        self.access
+    }
+
+    fn request_body_mode(&self) -> BodyMode {
+        BodyMode::StreamBuffer { max_bytes: Some(4096) }
+    }
+
+    async fn on_selected_upstream_request_body(
+        &self,
+        _ctx: &mut crate::HttpFilterContext<'_>,
+        body: &mut Option<Bytes>,
+    ) -> Result<crate::SelectedUpstreamBodyOutcome, FilterError> {
+        let mut output = body.as_ref().map_or_else(Vec::new, |bytes| bytes.to_vec());
+        output.extend_from_slice(b"|tamper");
+        *body = Some(Bytes::from(output));
+        if self.error {
+            return Err(FilterError::from("tamper boom"));
+        }
+        Ok(crate::SelectedUpstreamBodyOutcome::Continue)
+    }
+}
+
 /// A selected-upstream request-body filter that always rejects with 413.
 struct SelectedUpstreamRejectFilter;
 
@@ -7040,6 +7133,103 @@ mod bound_upstream_body_barrier {
             errors.iter().any(|error| error
                 .contains("filter 'marking' requires a bound logical upstream (a bound-upstream request-body hook)")),
             "the barrier only fires after a top-level router, so the participant has no binding: {errors:?}"
+        );
+    }
+
+    /// Participant that appends `|tamper` whatever access it declared, then
+    /// continues or errors.
+    struct TamperingParticipant {
+        access: BodyAccess,
+        error: bool,
+    }
+
+    #[async_trait]
+    impl HttpFilter for TamperingParticipant {
+        fn name(&self) -> &'static str {
+            "tampering"
+        }
+
+        fn bound_upstream_request_body_access(&self) -> BodyAccess {
+            self.access
+        }
+
+        fn request_body_mode(&self) -> BodyMode {
+            BodyMode::StreamBuffer {
+                max_bytes: Some(65_536),
+            }
+        }
+
+        async fn on_request(&self, _ctx: &mut crate::HttpFilterContext<'_>) -> Result<FilterAction, FilterError> {
+            Ok(FilterAction::Continue)
+        }
+
+        async fn on_bound_upstream_request_body(
+            &self,
+            _ctx: &mut crate::HttpFilterContext<'_>,
+            body: &mut Option<Bytes>,
+        ) -> Result<crate::BoundUpstreamBodyOutcome, FilterError> {
+            let mut output = body.as_ref().map_or_else(Vec::new, |bytes| bytes.to_vec());
+            output.extend_from_slice(b"|tamper");
+            *body = Some(Bytes::from(output));
+            if self.error {
+                return Err(FilterError::from("tamper boom"));
+            }
+            Ok(crate::BoundUpstreamBodyOutcome::Continue)
+        }
+    }
+
+    #[tokio::test]
+    async fn read_only_participant_edits_never_reach_the_committed_body() {
+        let pipeline = make_pipeline(vec![
+            binding_router("inference"),
+            Box::new(TamperingParticipant {
+                access: BodyAccess::ReadOnly,
+                error: false,
+            }),
+        ]);
+        let req = crate::test_utils::make_request(Method::POST, "/");
+        let mut ctx = crate::test_utils::make_filter_context(&req);
+        ctx.buffered_request_body = Some(Bytes::from_static(b"payload"));
+
+        drop(pipeline.execute_http_request(&mut ctx).await.unwrap());
+
+        assert_eq!(
+            ctx.buffered_request_body.as_deref(),
+            Some(&b"payload"[..]),
+            "a read-only participant works on a copy, so later filters see the original body"
+        );
+        assert!(
+            ctx.take_bound_request_body_rewrite().is_none(),
+            "nothing is recorded as a rewrite, so the transport forwards the original too"
+        );
+    }
+
+    #[tokio::test]
+    async fn fail_open_writer_that_errors_leaves_the_body_for_the_next_participant() {
+        let (after, ..) = MarkingParticipant::new("after", None);
+        let mut pipeline = make_pipeline(vec![
+            binding_router("inference"),
+            Box::new(TamperingParticipant {
+                access: BodyAccess::ReadWrite,
+                error: true,
+            }),
+            Box::new(after),
+        ]);
+        pipeline.filters[1].failure_mode = FailureMode::Open;
+        let req = crate::test_utils::make_request(Method::POST, "/");
+        let mut ctx = crate::test_utils::make_filter_context(&req);
+        ctx.buffered_request_body = Some(Bytes::from_static(b"payload"));
+
+        let action = pipeline.execute_http_request(&mut ctx).await.unwrap();
+
+        assert!(
+            matches!(action, FilterAction::Continue),
+            "fail-open swallows the error: {action:?}"
+        );
+        assert_eq!(
+            ctx.take_bound_request_body_rewrite().as_deref(),
+            Some(&b"payload|after"[..]),
+            "the failed writer's partial edit is undone, so the next writer builds on the original"
         );
     }
 

@@ -20,6 +20,7 @@ use crate::{
     FilterError,
     actions::{FilterAction, Rejection, SelectedUpstreamBodyOutcome},
     any_filter::AnyFilter,
+    body::BodyAccess,
     condition::{SelectedUpstream, should_execute_from, should_execute_response_ref},
     context::{EffectiveHeaders, HttpFilterContext, Response},
     metrics::{
@@ -421,6 +422,34 @@ pub(super) async fn run_request_body_filter(
     dispatch_body_result(body_result, http_filter.name(), "request body", failure_mode)
 }
 
+/// The tracing span for one body hook invocation.
+fn body_hook_span(filter_name: &'static str, phase: &'static str) -> tracing::Span {
+    info_span!(
+        "filter",
+        "otel.name" = %format_args!("filter:{filter_name}:{phase}"),
+        "filter.name" = filter_name,
+        "filter.phase" = phase,
+        "filter.result" = tracing::field::Empty,
+    )
+}
+
+/// Await a body hook, recording its duration under `phase` when metrics are
+/// on.
+async fn timed_body_hook<T>(
+    metrics_enabled: bool,
+    filter_name: &'static str,
+    phase: &'static str,
+    hook: impl Future<Output = T>,
+) -> T {
+    if !metrics_enabled {
+        return hook.await;
+    }
+    let start = std::time::Instant::now();
+    let result = hook.await;
+    record_filter_duration(filter_name, phase, STREAM_BODY, start.elapsed().as_secs_f64());
+    result
+}
+
 /// Run a single selected-upstream request body filter hook with tracing
 /// and metrics.
 ///
@@ -435,33 +464,34 @@ pub(super) async fn run_selected_upstream_request_body_filter(
     failure_mode: FailureMode,
     metrics_enabled: bool,
 ) -> Result<SelectedUpstreamBodyOutcome, FilterError> {
-    let filter_span = info_span!(
-        "filter",
-        "otel.name" = %format_args!("filter:{}:selected_upstream_request_body", http_filter.name()),
-        "filter.name" = http_filter.name(),
-        "filter.phase" = "selected_upstream_request_body",
-        "filter.result" = tracing::field::Empty,
-    );
+    let filter_span = body_hook_span(http_filter.name(), "selected_upstream_request_body");
+    // A read-only filter works on a scratch copy so it cannot change the body
+    // it was promised not to; a writer that errors gets its partial edit
+    // undone before a fail-open swallows the error.
+    let before = body.clone();
+    let mut scratch = body.clone();
+    let target = if http_filter.selected_upstream_request_body_access() == BodyAccess::ReadWrite {
+        &mut *body
+    } else {
+        &mut scratch
+    };
     let body_result = async {
         trace!("on_selected_upstream_request_body");
-        let result = if metrics_enabled {
-            let start = std::time::Instant::now();
-            let result = http_filter.on_selected_upstream_request_body(ctx, body).await;
-            record_filter_duration(
-                http_filter.name(),
-                PHASE_SELECTED_UPSTREAM,
-                STREAM_BODY,
-                start.elapsed().as_secs_f64(),
-            );
-            result
-        } else {
-            http_filter.on_selected_upstream_request_body(ctx, body).await
-        };
+        let result = timed_body_hook(
+            metrics_enabled,
+            http_filter.name(),
+            PHASE_SELECTED_UPSTREAM,
+            http_filter.on_selected_upstream_request_body(ctx, target),
+        )
+        .await;
         record_selected_upstream_result(&tracing::Span::current(), &result);
         result
     }
     .instrument(filter_span)
     .await;
+    if body_result.is_err() {
+        *body = before;
+    }
     dispatch_selected_upstream_body_result(body_result, http_filter.name(), failure_mode)
 }
 
@@ -480,35 +510,35 @@ pub(super) async fn run_bound_upstream_request_body_filter(
     body: &mut Option<Bytes>,
     failure_mode: FailureMode,
     metrics_enabled: bool,
-) -> Result<BoundUpstreamBodyOutcome, FilterError> {
-    let filter_span = info_span!(
-        "filter",
-        "otel.name" = %format_args!("filter:{}:bound_upstream_request_body", http_filter.name()),
-        "filter.name" = http_filter.name(),
-        "filter.phase" = "bound_upstream_request_body",
-        "filter.result" = tracing::field::Empty,
-    );
+) -> Result<(BoundUpstreamBodyOutcome, bool), FilterError> {
+    // A read-only participant works on a scratch copy so it cannot change the
+    // body it was promised not to; a writer that errors gets its partial edit
+    // undone before a fail-open swallows the error. The flag says whether the
+    // body may now differ from `before`.
+    let writer = http_filter.bound_upstream_request_body_access() == BodyAccess::ReadWrite;
+    let before = body.clone();
+    let mut scratch = body.clone();
+    let target = if writer { &mut *body } else { &mut scratch };
+    let filter_span = body_hook_span(http_filter.name(), "bound_upstream_request_body");
     let body_result = async {
         trace!("on_bound_upstream_request_body");
-        let result = if metrics_enabled {
-            let start = std::time::Instant::now();
-            let result = http_filter.on_bound_upstream_request_body(ctx, body).await;
-            record_filter_duration(
-                http_filter.name(),
-                PHASE_BOUND_UPSTREAM,
-                STREAM_BODY,
-                start.elapsed().as_secs_f64(),
-            );
-            result
-        } else {
-            http_filter.on_bound_upstream_request_body(ctx, body).await
-        };
+        let result = timed_body_hook(
+            metrics_enabled,
+            http_filter.name(),
+            PHASE_BOUND_UPSTREAM,
+            http_filter.on_bound_upstream_request_body(ctx, target),
+        )
+        .await;
         record_bound_upstream_result(&tracing::Span::current(), &result);
         result
     }
     .instrument(filter_span)
     .await;
-    dispatch_bound_upstream_body_result(body_result, http_filter.name(), failure_mode)
+    let rewrote = writer && body_result.is_ok();
+    if body_result.is_err() {
+        *body = before;
+    }
+    dispatch_bound_upstream_body_result(body_result, http_filter.name(), failure_mode).map(|outcome| (outcome, rewrote))
 }
 
 /// Run a single response body filter hook with tracing and metrics.
