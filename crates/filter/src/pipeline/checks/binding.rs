@@ -2446,6 +2446,148 @@ mod tests {
     }
 
     #[test]
+    fn untagged_catch_all_beside_a_tagged_cluster_is_accepted() {
+        let errors = unsatisfiable_matchers(&[
+            binding_router(&["openai", "generic"]),
+            metadata_filter("catalog", "openai", None, Some("openai")),
+            noop_filter_with_conditions("guardrails", vec![bound_condition(None, Some("openai"))]),
+        ]);
+
+        assert!(
+            errors.is_empty(),
+            "an untagged cluster is a valid catch-all that simply does not match: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn nested_bound_matchers_are_checked_like_top_level_ones() {
+        for (provider, expected) in [("openai", 0), ("anthropic", 1)] {
+            let gated = noop_filter_with_conditions("guardrails", vec![bound_condition(None, Some(provider))]);
+
+            let errors = unsatisfiable_matchers(&[
+                binding_router(&["openai"]),
+                metadata_filter("catalog", "openai", None, Some("openai")),
+                host_with_branch(vec![host_with_branch(vec![gated])]),
+            ]);
+
+            assert_eq!(
+                errors.len(),
+                expected,
+                "a {provider} matcher two branches deep is judged against the bindable clusters: {errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn protocol_only_matcher_checks_the_protocol_tag() {
+        for (protocol, expected) in [("openai_responses", 0), ("anthropic_messages", 1)] {
+            let errors = unsatisfiable_matchers(&[
+                binding_router(&["responses"]),
+                metadata_filter("catalog", "responses", Some("openai_responses"), None),
+                noop_filter_with_conditions("guardrails", vec![bound_condition(Some(protocol), None)]),
+            ]);
+
+            assert_eq!(
+                errors.len(),
+                expected,
+                "a {protocol} matcher against a protocol-only tag: {errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn pair_matcher_needs_one_cluster_carrying_both_fields() {
+        let pipeline = |condition| {
+            vec![
+                binding_router(&["protocol-only", "provider-only"]),
+                metadata_filter("catalog", "protocol-only", Some("openai_responses"), None),
+                metadata_filter("catalog", "provider-only", None, Some("openai")),
+                noop_filter_with_conditions("guardrails", vec![condition]),
+            ]
+        };
+
+        let pair = unsatisfiable_matchers(&pipeline(bound_condition(Some("openai_responses"), Some("openai"))));
+        let protocol = unsatisfiable_matchers(&pipeline(bound_condition(Some("openai_responses"), None)));
+
+        assert_eq!(
+            pair.len(),
+            1,
+            "each half is tagged on a different, partially tagged cluster, so no binding matches both: {pair:?}"
+        );
+        assert!(
+            protocol.is_empty(),
+            "the protocol alone is carried by a bindable cluster: {protocol:?}"
+        );
+    }
+
+    #[test]
+    fn only_when_matchers_must_be_satisfiable() {
+        let pipeline = |conditions| {
+            vec![
+                binding_router(&["openai"]),
+                metadata_filter("catalog", "openai", None, Some("openai")),
+                noop_filter_with_conditions("guardrails", conditions),
+            ]
+        };
+
+        let satisfiable = unsatisfiable_matchers(&pipeline(vec![
+            bound_condition(None, Some("openai")),
+            bound_unless(None, Some("anthropic")),
+        ]));
+        let unsatisfiable = unsatisfiable_matchers(&pipeline(vec![
+            bound_condition(None, Some("anthropic")),
+            bound_unless(None, Some("openai")),
+        ]));
+
+        assert!(
+            satisfiable.is_empty(),
+            "an unless no binding matches just leaves the filter running: {satisfiable:?}"
+        );
+        assert_eq!(
+            unsatisfiable.len(),
+            1,
+            "the when half can never match, whatever the unless says: {unsatisfiable:?}"
+        );
+    }
+
+    #[test]
+    fn untagged_catch_all_falls_through_a_provider_gated_branch_to_an_ordinary_lb() {
+        let mut direct = named_noop_filter("headers", vec![bound_condition(None, Some("openai"))]);
+        let mut branch = make_branch_with_filters("direct", vec![bound_lb(&["openai-backend"])]);
+        branch.rejoin = RejoinTarget::Terminal;
+        direct.branches = vec![branch];
+        let filters = vec![
+            binding_router(&["openai-backend", "generic"]),
+            metadata_filter("catalog", "openai-backend", None, Some("openai")),
+            direct,
+            lb_filter(&["generic"]),
+        ];
+        let mut errors = Vec::new();
+
+        check_bound_cluster_coverage(&filters, &mut errors);
+
+        assert!(
+            errors.is_empty(),
+            "the untagged generic cluster skips the openai branch and reaches the ordinary load balancer: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn unless_bound_condition_with_pre_read_body_errors() {
+        let mut pf = body_filter();
+        pf.conditions = vec![bound_unless(None, Some("openai"))];
+        let mut errors = Vec::new();
+
+        check_bound_condition_with_pre_read_body(&[pf], BodyMode::StreamBuffer { max_bytes: Some(1024) }, &mut errors);
+
+        assert_eq!(
+            errors.len(),
+            1,
+            "an unless is evaluated before any binding exists, so the pre-read hook runs for every request: {errors:?}"
+        );
+    }
+
+    #[test]
     fn second_router_on_an_exclusive_path_is_rejected() {
         let mut gate = named_noop_filter("gate", vec![]);
         gate.branches = vec![conditional_branch("alternate", vec![], RejoinTarget::SkipTo(2))];
@@ -2798,6 +2940,14 @@ mod tests {
         PipelineFilter::new(0, AnyFilter::Http(Box::new(BindingFilter)), vec![], vec![])
     }
 
+    /// Build an `Unless` condition on the bound upstream's application tags.
+    fn bound_unless(protocol: Option<&str>, provider: Option<&str>) -> Condition {
+        match bound_condition(protocol, provider) {
+            Condition::When(matcher) => Condition::Unless(matcher),
+            unless @ Condition::Unless(_) => unless,
+        }
+    }
+
     /// Build a [`PipelineFilter`] that declares application metadata for one
     /// cluster, standing in for a `load_balancer` in catalog tests.
     fn cluster_metadata_filter(cluster: &str, protocol: Option<&str>, provider: Option<&str>) -> PipelineFilter {
@@ -2849,5 +2999,12 @@ mod tests {
             .collect();
         names.sort_unstable();
         names
+    }
+
+    /// Run the unsatisfiable-matcher check over `filters`.
+    fn unsatisfiable_matchers(filters: &[PipelineFilter]) -> Vec<String> {
+        let mut errors = Vec::new();
+        check_untagged_bound_cluster_fields(filters, &mut errors);
+        errors
     }
 }

@@ -1189,6 +1189,61 @@ mod tests {
     }
 
     #[test]
+    fn misaligned_check_accepts_router_clusters_served_only_in_a_conditional_branch() {
+        let mut host = noop_filter_with_conditions("headers", vec![]);
+        host.branches = vec![conditional_branch(
+            "maybe",
+            vec![bound_lb(&["a", "b"])],
+            RejoinTarget::Next,
+        )];
+        let mut errors = Vec::new();
+
+        check_misaligned_clusters(&[binding_router(&["a", "b"]), host], &mut errors);
+
+        assert!(
+            errors.is_empty(),
+            "whether a conditional bound LB serves the router is the coverage check's call: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn misaligned_check_still_reports_an_ordinary_selector_beside_a_binding_router() {
+        let filters = vec![
+            selector_filter("header_selector", &["x"]),
+            binding_router(&["a"]),
+            bound_lb(&["a"]),
+        ];
+        let mut errors = Vec::new();
+
+        check_misaligned_clusters(&filters, &mut errors);
+
+        assert_eq!(
+            errors.len(),
+            1,
+            "only the binding router's clusters are left to the coverage check: {errors:?}"
+        );
+        assert!(
+            errors[0].contains("'x'"),
+            "the other selector's cluster has no load balancer: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn misaligned_check_accepts_a_bound_branch_beside_an_ordinary_fallthrough_lb() {
+        let mut direct = noop_filter_with_conditions("headers", vec![bound_condition(None, Some("openai"))]);
+        direct.branches = vec![make_terminal_branch("direct", vec![bound_lb(&["a"])])];
+        let filters = vec![binding_router(&["a", "b"]), direct, lb_filter(&["b"])];
+        let mut errors = Vec::new();
+
+        check_misaligned_clusters(&filters, &mut errors);
+
+        assert!(
+            errors.is_empty(),
+            "the bound branch and the ordinary fall-through LB between them serve both clusters: {errors:?}"
+        );
+    }
+
+    #[test]
     fn misaligned_check_skips_a_binding_pipeline_without_any_load_balancer() {
         let filters = vec![
             selector_filter("header_selector", &["x"]),

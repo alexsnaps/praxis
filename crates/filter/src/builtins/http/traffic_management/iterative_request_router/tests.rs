@@ -4053,6 +4053,63 @@ steps:
 }
 
 #[test]
+fn irr_step_tags_and_pre_read_matrix() {
+    let router = r#"{filter: router, routes: [{path_prefix: "/", cluster: a}]}"#;
+    let gated = |provider: &str| {
+        format!(
+            r#"{{filter: headers, conditions: [{{when: {{bound_upstream: {{application_provider: {provider}}}}}}}], request_set: [{{name: x-gated, value: "true"}}]}}"#
+        )
+    };
+    let openai_a = r#"{name: a, http: {application_provider: openai}, endpoints: ["127.0.0.1:9"]}"#;
+    let anthropic_c = r#"{name: c, http: {application_provider: anthropic}, endpoints: ["127.0.0.1:10"]}"#;
+    let bound_lb =
+        |clusters: &str| format!("{{filter: load_balancer, cluster_source: bound_upstream, clusters: [{clusters}]}}");
+    let irr = |entry: &str, step_filters: &str| {
+        format!(
+            "{{filter: iterative_request_router, {entry}initial_step: s, steps: [{{name: s, filters: [{step_filters}], on_result: [{{default: true, done: true}}]}}]}}"
+        )
+    };
+    let cases: [(&str, String, &[&str]); 4] = [
+        (
+            "top-level matcher satisfied only by a step's tag",
+            format!("[{router}, {}, {}]", gated("openai"), irr("", &bound_lb(openai_a))),
+            &[],
+        ),
+        (
+            "top-level matcher only an unbindable cluster's tag satisfies",
+            format!(
+                "[{router}, {}, {}]",
+                gated("anthropic"),
+                irr("", &bound_lb(&format!("{openai_a}, {anthropic_c}")))
+            ),
+            &["filter 'headers' has a bound_upstream condition that matches no bindable cluster"],
+        ),
+        (
+            "bound conditions inside a step are not the IRR's own conditions",
+            format!(
+                "[{router}, {}]",
+                irr("", &format!("{}, {}", gated("openai"), bound_lb(openai_a)))
+            ),
+            &[],
+        ),
+        (
+            "IRR gated on its own binding, a known over-rejection since it reads the body after routing",
+            format!(
+                "[{router}, {}]",
+                irr(
+                    "conditions: [{when: {bound_upstream: {application_provider: openai}}}], ",
+                    &bound_lb(openai_a)
+                )
+            ),
+            &["filter 'iterative_request_router' combines an ordinary pre-read request-body hook"],
+        ),
+    ];
+    for (case, yaml, expected) in cases {
+        assert_parent_ordering_errors(case, &yaml, expected);
+    }
+}
+
+#[test]
 fn step_cluster_metadata_conflict_matrix() {
     let router = r#"{filter: router, routes: [{path_prefix: "/", cluster: shared}]}"#;
     let decl = |provider: &str| {
