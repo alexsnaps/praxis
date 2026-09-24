@@ -652,7 +652,7 @@ async fn on_request_publishes_selected_application_panic_mode() {
         Some("openai_chat_completions"),
         Some("vllm"),
     )]);
-    let registry = all_unhealthy_registry("llm", &["127.0.0.1:8080", "127.0.0.1:8081"]);
+    let registry = health_registry("llm", &["127.0.0.1:8080", "127.0.0.1:8081"], &[0, 1]);
     let req = crate::test_utils::make_request(http::Method::GET, "/");
     let mut ctx = crate::test_utils::make_filter_context(&req);
     ctx.cluster = Some(Arc::from("llm"));
@@ -1090,28 +1090,66 @@ async fn bound_upstream_source_honors_session_affinity() {
 }
 
 #[tokio::test]
-async fn bound_upstream_source_uses_cluster_health_state() {
+async fn bound_upstream_source_skips_unhealthy_endpoints() {
     let endpoints = ["127.0.0.1:8080", "127.0.0.1:8081"];
     let lb = LoadBalancerFilter::try_new_with_source(
         &[test_cluster("backend", &endpoints)],
         super::ClusterSource::BoundUpstream,
     )
     .unwrap();
-    let registry = all_unhealthy_registry("backend", &endpoints);
+    let registry = health_registry("backend", &endpoints, &[0]);
     let req = crate::test_utils::make_request(http::Method::GET, "/");
-    let mut ctx = crate::test_utils::make_filter_context(&req);
-    ctx.publish_bound_upstream(Arc::from("backend"), None, None).unwrap();
-    ctx.health_registry = Some(&registry);
 
-    drop(lb.on_request(&mut ctx).await.unwrap());
+    for _ in 0..4 {
+        let mut ctx = crate::test_utils::make_filter_context(&req);
+        ctx.publish_bound_upstream(Arc::from("backend"), None, None).unwrap();
+        ctx.health_registry = Some(&registry);
 
-    assert!(
-        ctx.upstream.is_some(),
-        "panic mode must still select from the bound cluster"
-    );
-    assert!(
-        ctx.selected_endpoint_index.is_some(),
-        "health-indexed selection must be recorded"
+        drop(lb.on_request(&mut ctx).await.unwrap());
+
+        assert_eq!(
+            ctx.upstream.as_ref().map(|upstream| upstream.address.as_ref()),
+            Some("127.0.0.1:8081"),
+            "the bound load balancer must skip the unhealthy endpoint"
+        );
+        assert_eq!(
+            ctx.selected_endpoint_index,
+            Some(1),
+            "the healthy endpoint's index must be recorded for release"
+        );
+    }
+}
+
+#[tokio::test]
+async fn bound_upstream_source_panics_to_all_endpoints_when_none_are_healthy() {
+    let endpoints = ["127.0.0.1:8080", "127.0.0.1:8081"];
+    let lb = LoadBalancerFilter::try_new_with_source(
+        &[test_cluster("backend", &endpoints)],
+        super::ClusterSource::BoundUpstream,
+    )
+    .unwrap();
+    let registry = health_registry("backend", &endpoints, &[0, 1]);
+    let req = crate::test_utils::make_request(http::Method::GET, "/");
+    let mut reached = std::collections::HashSet::new();
+
+    for _ in 0..4 {
+        let mut ctx = crate::test_utils::make_filter_context(&req);
+        ctx.publish_bound_upstream(Arc::from("backend"), None, None).unwrap();
+        ctx.health_registry = Some(&registry);
+
+        drop(lb.on_request(&mut ctx).await.unwrap());
+
+        assert!(
+            ctx.selected_endpoint_index.is_some(),
+            "panic mode must still record the selected endpoint for release"
+        );
+        reached.extend(ctx.upstream.map(|upstream| upstream.address.to_string()));
+    }
+
+    assert_eq!(
+        reached,
+        endpoints.iter().map(ToString::to_string).collect(),
+        "with every endpoint down, panic mode spreads over all of them"
     );
 }
 
@@ -1207,17 +1245,19 @@ fn cluster_with_application(name: &str, endpoints: &[&str], protocol: Option<&st
     }
 }
 
-/// Build a [`HealthRegistry`] whose every endpoint is marked unhealthy,
-/// forcing the load balancer into panic mode for `cluster`.
-fn all_unhealthy_registry(cluster: &str, endpoints: &[&str]) -> HealthRegistry {
+/// Build a [`HealthRegistry`] for `cluster` with the endpoints at `unhealthy`
+/// marked down.
+fn health_registry(cluster: &str, endpoints: &[&str], unhealthy: &[usize]) -> HealthRegistry {
     let entry: ClusterHealthState = Arc::new(ClusterHealthEntry::new(
         endpoints.iter().map(|_| EndpointHealth::new()).collect(),
         endpoints.iter().map(|s| Arc::from(*s)).collect(),
         None,
         None,
     ));
-    for ep in entry.endpoints() {
-        ep.mark_unhealthy();
+    for (idx, ep) in entry.endpoints().iter().enumerate() {
+        if unhealthy.contains(&idx) {
+            ep.mark_unhealthy();
+        }
     }
     Arc::new(HashMap::from([(Arc::from(cluster), entry)]))
 }
