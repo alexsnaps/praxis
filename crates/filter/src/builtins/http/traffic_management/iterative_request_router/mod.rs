@@ -449,10 +449,15 @@ impl HttpFilter for IterativeRequestRouterFilter {
             .any(|pipeline| pipeline.consumes_bound_upstream())
     }
 
-    fn requires_bound_upstream_on_entry(&self) -> bool {
-        self.step_pipelines
-            .values()
-            .any(|pipeline| pipeline.uses_bound_upstream())
+    fn nested_bound_upstream_readers(&self) -> Vec<String> {
+        let mut readers: Vec<String> = self
+            .step_pipelines
+            .iter()
+            .filter(|(_, pipeline)| pipeline.uses_bound_upstream())
+            .map(|(name, _)| name.to_string())
+            .collect();
+        readers.sort();
+        readers
     }
 
     fn bound_upstream_clusters(&self) -> Vec<String> {

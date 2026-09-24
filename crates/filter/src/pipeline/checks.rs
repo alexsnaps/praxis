@@ -3,15 +3,20 @@
 
 //! Ordering validation checks for filter pipelines.
 //!
-//! Detects structural misconfigurations that would cause runtime
-//! failures: load balancers without a preceding cluster selector,
-//! unreachable filters behind unconditional static responses, conditional
-//! security filters (bypass risk), duplicate routers or load balancers, and
-//! cluster name mismatches. Logical-binding checks live in the [`binding`]
-//! submodule. Operator-facing legacy checks honor their corresponding
-//! [`SkipPipelineChecks`] flags; binding invariants and security/lifecycle
-//! checks are not suppressible unless explicitly wired to an existing skip
-//! flag at the call site.
+//! Detects structural misconfigurations that would fail requests or bypass
+//! security at runtime: load balancers without a preceding cluster selector,
+//! filters unreachable behind an unconditional static response, conditional or
+//! fail-open security filters and branch jumps that skip them, duplicate
+//! routers, load balancers, or path rewriters, conflicting cluster selectors,
+//! cluster name mismatches, invalid condition header names, body filters in
+//! branches, and selected-upstream conditions evaluated before a cluster is
+//! chosen. A few advisory checks only warn. Logical-binding checks live in the
+//! [`binding`] submodule.
+//!
+//! Listener pipelines and outbound chains skip each check whose
+//! [`SkipPipelineChecks`] flag is set, and `allow_open_security_filters` turns
+//! the fail-open security error into a warning. IRR steps always run every
+//! check. Checks without a flag, including all binding checks, always run.
 //!
 //! Called by [`FilterPipeline::ordering_errors`] at startup and on
 //! dynamic config reload.

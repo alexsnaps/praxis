@@ -6,12 +6,21 @@
 //! A pipeline that uses binding (a `bound_upstream` condition, a
 //! `cluster_source: bound_upstream` load balancer, a bound-upstream body
 //! participant, or an IRR step that reads the binding) gets its routers
-//! promoted to binding publishers. These checks prove every consumer sees a
-//! binding, no path republishes one, every bindable cluster reaches a load
-//! balancer that can serve it, and cluster metadata declarations agree.
+//! promoted to binding publishers. These checks prove that:
 //!
-//! Called from [`FilterPipeline::ordering_errors`] through the re-exports in
-//! the parent `checks` module.
+//! - every consumer is reached only after the binding router has run;
+//! - only one router publishes, it sits at the top level, and no `ReEnter` runs it again;
+//! - once the pipeline has a load balancer or a bound consumer, every cluster the router can bind reaches a load
+//!   balancer that serves it, or a filter that answers the request itself;
+//! - cluster metadata declarations agree, and every top-level or branch `when: bound_upstream` matcher can match some
+//!   bindable cluster;
+//! - no filter pairs a `bound_upstream` condition with a pre-read body hook, which runs before any binding exists;
+//! - an IRR shares its chain with a router only when something consumes the binding;
+//! - bound-upstream body participants run at the top level in a bounded body mode.
+//!
+//! None of these checks honor `SkipPipelineChecks`. Called from
+//! [`FilterPipeline::ordering_errors`] through the re-exports in the parent
+//! `checks` module.
 //!
 //! [`FilterPipeline::ordering_errors`]: crate::pipeline::FilterPipeline::ordering_errors
 
@@ -97,10 +106,10 @@ pub(in crate::pipeline) fn check_bound_upstream_requires_binding(
     } else {
         reachable_from(filters, 0, router)
     };
-    for (idx, pf) in filters.iter().enumerate() {
-        let bound_on_entry = reachable.get(idx).copied().unwrap_or(false) && !unbound.get(idx).copied().unwrap_or(true);
+    for (((idx, pf), reached), reached_unbound) in filters.iter().enumerate().zip(reachable).zip(unbound) {
+        let bound_on_entry = reached && !reached_unbound;
         if !bound_on_entry && let Some(reason) = binding_requirement_reason(pf) {
-            errors.push(missing_binding_error(pf.filter.name(), reason));
+            errors.push(missing_binding_error(pf.filter.name(), &reason));
         }
         let bound_in_branches = bound_on_entry || Some(idx) == router;
         if !bound_in_branches {
@@ -113,7 +122,7 @@ pub(in crate::pipeline) fn check_bound_upstream_requires_binding(
 fn collect_branch_binding_consumers(branches: &[ResolvedBranch], errors: &mut Vec<String>) {
     for pf in branches.iter().flat_map(|branch| &branch.filters) {
         if let Some(reason) = binding_requirement_reason(pf) {
-            errors.push(missing_binding_error(pf.filter.name(), reason));
+            errors.push(missing_binding_error(pf.filter.name(), &reason));
         }
         collect_branch_binding_consumers(&pf.branches, errors);
     }
@@ -131,16 +140,18 @@ fn missing_binding_error(name: &str, reason: &str) -> String {
 /// Index of the pipeline's binding router: the first top-level publisher a
 /// request can reach, or the first one at all when none is reachable.
 fn binding_router_index(filters: &[PipelineFilter]) -> Option<usize> {
-    let reachable = reachable_from(filters, 0, None);
-    let mut publishers = filters
+    let publishers: Vec<(usize, bool)> = filters
         .iter()
+        .zip(reachable_from(filters, 0, None))
         .enumerate()
-        .filter(|(_, pf)| filter_binds_upstream(pf))
-        .map(|(idx, _)| idx);
-    let first = publishers.clone().next();
+        .filter(|(_, (pf, _))| filter_binds_upstream(pf))
+        .map(|(idx, (_, reached))| (idx, reached))
+        .collect();
     publishers
-        .find(|&idx| reachable.get(idx).copied().unwrap_or(false))
-        .or(first)
+        .iter()
+        .find(|(_, reached)| *reached)
+        .or_else(|| publishers.first())
+        .map(|&(idx, _)| idx)
 }
 
 /// Top-level filters reachable from the filter at `start`.
@@ -184,7 +195,7 @@ pub(in crate::pipeline) fn uses_bound_upstream(filters: &[PipelineFilter]) -> bo
             || matches!(&pf.filter, AnyFilter::Http(filter)
                 if crate::pipeline::body::participates_in_bound_upstream_body(filter.as_ref())
                     || filter.consumes_bound_upstream()
-                    || filter.requires_bound_upstream_on_entry())
+                    || !filter.nested_bound_upstream_readers().is_empty())
             || pf.branches.iter().any(|branch| uses_bound_upstream(&branch.filters))
     })
 }
@@ -665,10 +676,7 @@ fn collect_reentries_over_router(filters: &[PipelineFilter], router: usize, erro
             .copied()
             .unwrap_or(false)
     };
-    for (idx, pf) in filters.iter().enumerate() {
-        if !after_router.get(idx).copied().unwrap_or(false) {
-            continue;
-        }
+    for (pf, _) in filters.iter().zip(after_router).filter(|(_, reached)| *reached) {
         for branch in &pf.branches {
             if let RejoinTarget::ReEnter(target) = branch.rejoin
                 && reenters_router(target)
@@ -955,27 +963,31 @@ fn filter_binds_upstream(pf: &PipelineFilter) -> bool {
 /// Describe why a filter depends on a preceding binding, or `None` if it does
 /// not. Used to name the offending feature in the reachability diagnostic.
 ///
-/// Three features consume the logical binding and therefore require one to be
-/// guaranteed before the filter runs: a `bound_upstream` request condition
-/// (reads the binding), a bound-upstream request-body hook (runs only after the
-/// binding freezes), and a bound-consuming load balancer (selects its cluster
-/// from the binding). Any of them without a guaranteed preceding binding is a
+/// Four things read the logical binding and therefore need one guaranteed
+/// before the filter runs: a `bound_upstream` request condition, nested
+/// pipelines that read the binding (named, so an IRR diagnostic points at its
+/// steps), a bound-upstream request-body hook, and a bound-consuming load
+/// balancer. Any of them without a guaranteed preceding binding is a
 /// fail-closed misconfiguration.
-fn binding_requirement_reason(pf: &PipelineFilter) -> Option<&'static str> {
+fn binding_requirement_reason(pf: &PipelineFilter) -> Option<String> {
     if has_bound_upstream_condition(pf) {
-        return Some("a bound_upstream condition");
+        return Some("a bound_upstream condition".to_owned());
     }
     let AnyFilter::Http(f) = &pf.filter else {
         return None;
     };
-    if f.requires_bound_upstream_on_entry() && f.name() == "iterative_request_router" {
-        Some("an iterative_request_router step that observes or consumes bound_upstream")
+    let readers = f.nested_bound_upstream_readers();
+    if let [reader] = readers.as_slice() {
+        Some(format!("nested step '{reader}' reads the logical binding"))
+    } else if !readers.is_empty() {
+        Some(format!(
+            "nested steps '{}' read the logical binding",
+            readers.join("', '")
+        ))
     } else if crate::pipeline::body::participates_in_bound_upstream_body(f.as_ref()) {
-        Some("a bound-upstream request-body hook")
+        Some("a bound-upstream request-body hook".to_owned())
     } else if f.consumes_bound_upstream() {
-        Some("a bound_upstream load balancer")
-    } else if f.requires_bound_upstream_on_entry() {
-        Some("a nested pipeline that reads the logical binding on entry")
+        Some("a bound_upstream load balancer".to_owned())
     } else {
         None
     }
@@ -1343,10 +1355,7 @@ mod tests {
     }
 
     #[test]
-    fn irr_with_router_and_bound_consumer_ok() {
-        // A binding router whose IRR step consumes the binding is accepted
-        // (rule 11). The bound consumer lives in a branch here, standing in for
-        // an IRR step pipeline that folds its consumption up.
+    fn irr_with_router_and_branch_bound_consumer_ok() {
         let mut irr = named_noop_filter("iterative_request_router", vec![]);
         irr.branches = vec![make_branch_with_filters("inference", vec![bound_lb(&["inference"])])];
         let filters = vec![binding_router(&["inference"]), irr];
@@ -1355,7 +1364,7 @@ mod tests {
         check_irr_coexistence(&filters, &names, &mut errors);
         assert!(
             errors.is_empty(),
-            "router + IRR with a reachable bound consumer is allowed: {errors:?}"
+            "router + IRR with a bound consumer in the IRR's branch is allowed: {errors:?}"
         );
     }
 
@@ -1378,8 +1387,6 @@ mod tests {
 
     #[test]
     fn irr_with_both_router_and_lb_errors_twice() {
-        // A top-level LB (rule 10) plus a binding router with no bound consumer
-        // (rule 11) each fire.
         let filters = vec![
             named_noop_filter("iterative_request_router", vec![]),
             selector_filter("router", &["web"]),

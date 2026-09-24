@@ -3889,8 +3889,8 @@ steps:
     assert!(
         errors
             .iter()
-            .any(|error| error.contains("requires a bound logical upstream")),
-        "a nested bound condition must propagate its entry requirement: {errors:?}"
+            .any(|error| error.contains("(nested step 'dispatch' reads the logical binding)")),
+        "a nested bound condition must propagate its entry requirement, naming the step: {errors:?}"
     );
 }
 
@@ -3930,8 +3930,61 @@ steps:
     assert!(
         errors
             .iter()
-            .any(|error| { error.contains("iterative_request_router step") && error.contains("bound_upstream") }),
+            .any(|error| error.contains("(nested step 'dispatch' reads the logical binding)")),
         "a step bound LB cannot invent a parent binding: {errors:?}"
+    );
+}
+
+#[test]
+fn outer_pipeline_names_every_step_that_reads_the_binding() {
+    let reading_step = |name: &str, next: &str| {
+        format!(
+            r#"
+    - name: {name}
+      filters:
+        - filter: headers
+          conditions: [{{when: {{bound_upstream: {{application_provider: openai}}}}}}]
+          request_set: [{{name: x-{name}, value: "true"}}]
+      on_result: [{{default: true, next: {next}}}]"#
+        )
+    };
+    let yaml = format!(
+        r#"
+- filter: iterative_request_router
+  initial_step: echo
+  steps:
+    - name: echo
+      filters:
+        - filter: load_balancer
+          cluster_source: bound_upstream
+          clusters: [{{name: backend, endpoints: ["127.0.0.1:9"]}}]
+      on_result: [{{default: true, next: audit}}]
+    - name: audit
+      filters:
+        - filter: request_id
+      on_result: [{{default: true, next: delta}}]{}{}{}
+    - name: alpha
+      filters:
+        - filter: headers
+          conditions: [{{when: {{bound_upstream: {{application_provider: openai}}}}}}]
+          request_set: [{{name: x-alpha, value: "true"}}]
+      on_result: [{{default: true, done: true}}]
+"#,
+        reading_step("delta", "charlie"),
+        reading_step("charlie", "bravo"),
+        reading_step("bravo", "alpha"),
+    );
+    let mut entries: Vec<crate::FilterEntry> = serde_yaml::from_str(&yaml).unwrap();
+    let pipeline = crate::FilterPipeline::build(&mut entries, &crate::FilterRegistry::with_builtins()).unwrap();
+
+    let errors = pipeline.ordering_errors(&entries, false, &praxis_core::config::SkipPipelineChecks::default());
+
+    assert!(
+        errors.iter().any(|error| error.starts_with(
+            "filter 'iterative_request_router' requires a bound logical upstream \
+             (nested steps 'alpha', 'bravo', 'charlie', 'delta', 'echo' read the logical binding)"
+        )),
+        "the diagnostic names the reading steps in sorted order and skips the audit step: {errors:?}"
     );
 }
 
@@ -4128,9 +4181,10 @@ steps:
         filter.bound_upstream_clusters().is_empty(),
         "each step lacks the other's cluster, so any binding fails in one of them"
     );
-    assert!(
-        filter.requires_bound_upstream_on_entry(),
-        "a step load balancing from the binding needs one on entry"
+    assert_eq!(
+        filter.nested_bound_upstream_readers(),
+        vec!["first".to_owned(), "later".to_owned()],
+        "each step load balancing from the binding needs one on entry"
     );
 }
 
@@ -4161,9 +4215,10 @@ steps:
     .unwrap();
     let filter = super::IterativeRequestRouterFilter::from_config(&config).unwrap();
 
-    assert!(
-        filter.requires_bound_upstream_on_entry(),
-        "a later step load balancing from the binding needs one on entry"
+    assert_eq!(
+        filter.nested_bound_upstream_readers(),
+        vec!["later".to_owned()],
+        "only the later step load balancing from the binding needs one on entry"
     );
     assert_eq!(
         filter.bound_upstream_clusters(),
@@ -4305,7 +4360,7 @@ fn router_and_irr_binding_matrix() {
         (
             "step bound LB with no router",
             irr(&bound_lb(both)),
-            &["requires a bound logical upstream"],
+            &["requires a bound logical upstream (nested step 'dispatch' reads the logical binding)"],
         ),
         (
             "step bound LB missing a routed cluster",

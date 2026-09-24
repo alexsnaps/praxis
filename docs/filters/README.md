@@ -101,9 +101,9 @@ the binding router freezes `BoundUpstream`; a read-write
 participant replaces the canonical body used by direct
 dispatch, IRR, retries, and selected-upstream adaptation.
 Use `binds_upstream`, `consumes_bound_upstream`,
-`bound_upstream_clusters`, and `declared_cluster_metadata`
-only for routing filters whose capabilities must be visible
-to pipeline validation.
+`bound_upstream_clusters`, `declared_cluster_metadata`, and
+`nested_bound_upstream_readers` only for routing filters
+whose capabilities must be visible to pipeline validation.
 
 ### Common Patterns
 

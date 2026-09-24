@@ -182,15 +182,17 @@ pub trait HttpFilter: Send + Sync {
         false
     }
 
-    /// Whether this composite filter requires a logical binding to exist when
-    /// its own execution begins.
+    /// Names of the nested steps this composite filter runs that read the
+    /// logical binding, sorted.
     ///
-    /// Framework filters that own nested pipelines override this when a nested
-    /// consumer can be reached before any nested binding filter. This is
-    /// distinct from [`HttpFilter::consumes_bound_upstream`]: a nested condition or body
+    /// Framework filters that own nested step pipelines (the IRR) override
+    /// this. A non-empty list means the filter needs a binding to
+    /// exist when its own execution begins, and pipeline validation names these
+    /// pipelines when no binding is guaranteed. This is broader than
+    /// [`HttpFilter::consumes_bound_upstream`]: a nested condition or body
     /// participant observes the binding without selecting a cluster from it.
-    fn requires_bound_upstream_on_entry(&self) -> bool {
-        false
+    fn nested_bound_upstream_readers(&self) -> Vec<String> {
+        Vec::new()
     }
 
     /// Cluster names this filter can select from the frozen logical binding.
