@@ -6881,6 +6881,94 @@ mod bound_upstream_body_barrier {
         }
     }
 
+    #[tokio::test]
+    async fn barrier_runs_participants_in_order_and_honors_their_conditions() {
+        let gate = |protocol: &str| -> Vec<praxis_core::config::Condition> {
+            serde_yaml::from_str(&format!(
+                "- when:\n    bound_upstream:\n      application_protocol: {protocol}\n"
+            ))
+            .unwrap()
+        };
+        let (first, ..) = MarkingParticipant::new("first", None);
+        let (matching, ..) = MarkingParticipant::new("matching", None);
+        let (other, ..) = MarkingParticipant::new("other", None);
+        let pipeline = make_pipeline_with_conditions(vec![
+            (binding_router("inference"), vec![]),
+            (Box::new(first), vec![]),
+            (Box::new(matching), gate("p1")),
+            (Box::new(other), gate("p2")),
+        ]);
+        let req = crate::test_utils::make_request(Method::POST, "/");
+        let mut ctx = crate::test_utils::make_filter_context(&req);
+        ctx.buffered_request_body = Some(Bytes::from_static(b"payload"));
+
+        drop(pipeline.execute_http_request(&mut ctx).await.unwrap());
+
+        assert_eq!(
+            ctx.take_bound_request_body_rewrite().as_deref(),
+            Some(&b"payload|first|matching"[..]),
+            "participants rewrite in pipeline order, and one gated on another protocol is skipped"
+        );
+    }
+
+    #[tokio::test]
+    async fn barrier_records_bound_upstream_duration_metrics() {
+        crate::test_utils::install_metrics_recorder();
+        let (participant, ..) = MarkingParticipant::new("bound_metric_participant", None);
+        let mut pipeline = make_pipeline(vec![binding_router("inference"), Box::new(participant)]);
+        pipeline.set_record_filter_duration_metrics(true);
+        let req = crate::test_utils::make_request(Method::POST, "/");
+        let mut ctx = crate::test_utils::make_filter_context(&req);
+        ctx.buffered_request_body = Some(Bytes::from_static(b"payload"));
+
+        drop(pipeline.execute_http_request(&mut ctx).await.unwrap());
+
+        let rendered = crate::test_utils::render_metrics();
+        assert!(
+            rendered.lines().any(|line| {
+                line.contains("filter=\"bound_metric_participant\"")
+                    && line.contains("phase=\"bound_upstream\"")
+                    && line.contains("stream=\"body\"")
+            }),
+            "the executor times the participant's body hook under the bound_upstream phase: {rendered}"
+        );
+    }
+
+    #[tokio::test]
+    async fn barrier_rejection_runs_responses_only_for_filters_that_ran() {
+        let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (rejecting, _, rejecting_responses) = MarkingParticipant::new("rejecting", Some(403));
+        let pipeline = make_pipeline(vec![
+            Box::new(LoggingFilter {
+                label: "before",
+                log: Arc::clone(&log),
+            }),
+            binding_router("inference"),
+            Box::new(rejecting),
+        ]);
+        let req = crate::test_utils::make_request(Method::POST, "/");
+        let mut ctx = crate::test_utils::make_filter_context(&req);
+        ctx.buffered_request_body = Some(Bytes::from_static(b"payload"));
+
+        let action = pipeline.execute_http_request(&mut ctx).await.unwrap();
+        drop(pipeline.execute_http_response(&mut ctx).await.unwrap());
+
+        assert!(
+            matches!(&action, FilterAction::Reject(rejection) if rejection.status == 403),
+            "the barrier's rejection is returned unchanged: {action:?}"
+        );
+        assert_eq!(
+            *log.lock().unwrap(),
+            vec!["before"],
+            "a filter that ran before the router still gets its response hook"
+        );
+        assert_eq!(
+            rejecting_responses.load(Ordering::SeqCst),
+            0,
+            "the rejecting participant never reached its own request hook, so it gets no response hook"
+        );
+    }
+
     /// Read-write participant that appends `|bound` at the barrier and later, at
     /// its own header-phase position, takes the buffered body the way a
     /// body-consuming request filter does.
