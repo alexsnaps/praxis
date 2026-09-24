@@ -321,6 +321,64 @@ fn deny_branch_before_bound_dispatch_is_accepted_from_yaml() {
 }
 
 #[test]
+fn branch_trace_context_is_checked_by_where_its_branch_runs() {
+    let registry = FilterRegistry::with_builtins();
+    for (router_first, expect_error) in [(true, false), (false, true)] {
+        let trace_host = "
+- filter: headers
+  branch_chains:
+    - name: trace
+      chains:
+        - name: inline
+          filters:
+            - filter: trace_context
+              conditions: [{when: {bound_upstream: {application_provider: openai}}}]
+";
+        let router = r#"
+- filter: router
+  routes:
+    - path_prefix: "/"
+      cluster: backend
+"#;
+        let lb = r#"
+- filter: load_balancer
+  clusters:
+    - name: backend
+      http: {application_provider: openai}
+      endpoints: ["127.0.0.1:9"]
+"#;
+        let yaml = if router_first {
+            format!("{router}{trace_host}{lb}")
+        } else {
+            format!("{trace_host}{router}{lb}")
+        };
+        let mut entries: Vec<FilterEntry> = serde_yaml::from_str(&yaml).unwrap();
+        let pipeline = FilterPipeline::build_with_chains(
+            &mut entries,
+            &registry,
+            &HashMap::new(),
+            &praxis_core::config::InsecureOptions::default(),
+        )
+        .unwrap();
+
+        let errors = pipeline.ordering_errors(&entries, false, &SkipPipelineChecks::default());
+
+        assert_eq!(
+            errors
+                .iter()
+                .any(|error| error.contains("requires a bound logical upstream")),
+            expect_error,
+            "a branch trace_context before the router must be rejected, one after it accepted \
+             (router_first = {router_first}): {errors:?}"
+        );
+        assert!(
+            errors.iter().all(|error| !error.contains("before routing")),
+            "the top-level trace_context rule must not fire for a branch one: {errors:?}"
+        );
+    }
+}
+
+#[test]
 fn binding_enabled_router_in_branch_is_rejected_from_yaml() {
     let registry = FilterRegistry::with_builtins();
     let mut entries: Vec<FilterEntry> = serde_yaml::from_str(

@@ -225,8 +225,10 @@ serves traffic if, among other rules:
   path, or a `when bound_upstream` matcher cannot match any declared cluster;
 - a bound-body hook appears inside a branch or IRR step, where that lifecycle
   is not executed;
-- `trace_context` uses a bound or selected-upstream condition even though
-  propagation is decided before routing;
+- a top-level `trace_context` uses a bound or selected-upstream condition even
+  though it decides propagation before routing (one inside a branch is
+  evaluated when its branch runs, and the rules above cover a branch that runs
+  before the router);
 - cluster metadata declarations conflict across the
   top-level pipeline, a branch, and an IRR step when the pipeline uses logical
   binding. Ordinary router/load-balancer dispatch paths keep their local

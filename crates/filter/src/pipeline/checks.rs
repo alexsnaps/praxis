@@ -79,8 +79,13 @@ pub(super) fn check_condition_header_names(filters: &[PipelineFilter], errors: &
     }
 }
 
-/// `trace_context` decides propagation before request routing, so it cannot be
-/// gated on metadata that the router or load balancer publishes later.
+/// A top-level `trace_context` decides propagation before request routing, so
+/// it cannot be gated on metadata that the router or load balancer publishes
+/// later.
+///
+/// A `trace_context` inside a branch is evaluated when its branch runs, with
+/// whatever binding and selection exist by then; the general binding and
+/// selected-upstream ordering checks already cover one that runs too early.
 pub(super) fn check_trace_context_upstream_conditions(filters: &[PipelineFilter], errors: &mut Vec<String>) {
     for pf in filters {
         if pf.filter.name() == "trace_context"
@@ -93,9 +98,6 @@ pub(super) fn check_trace_context_upstream_conditions(filters: &[PipelineFilter]
                 "trace_context cannot use bound_upstream or selected_upstream conditions because trace propagation is decided before routing"
                     .to_owned(),
             );
-        }
-        for branch in &pf.branches {
-            check_trace_context_upstream_conditions(&branch.filters, errors);
         }
     }
 }
@@ -1131,8 +1133,34 @@ mod tests {
 
             check_trace_context_upstream_conditions(&filters, &mut errors);
 
-            assert_eq!(errors.len(), 1);
-            assert!(errors[0].contains("before routing"));
+            assert_eq!(
+                errors.len(),
+                1,
+                "a top-level trace_context decides before routing: {errors:?}"
+            );
+            assert!(
+                errors[0].contains("before routing"),
+                "the error should explain the timing: {errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn trace_context_in_a_branch_may_use_routing_dependent_conditions() {
+        for condition in [
+            bound_condition(None, Some("openai")),
+            selected_upstream_cond(None, Some("openai")),
+        ] {
+            let host = host_with_branch(vec![noop_filter_with_conditions("trace_context", vec![condition])]);
+            let filters = vec![binding_router(&["backend"]), host];
+            let mut errors = Vec::new();
+
+            check_trace_context_upstream_conditions(&filters, &mut errors);
+
+            assert!(
+                errors.is_empty(),
+                "a branch trace_context is evaluated when its branch runs, after routing: {errors:?}"
+            );
         }
     }
 
