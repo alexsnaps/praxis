@@ -87,8 +87,8 @@ request is also skipped on response and on every body hook, ordinary and
 selected-upstream. The bound-upstream body hook is the deliberate exception:
 its conditions are evaluated at the freeze, right after the binding router, so
 a later top-level participant receives the body before its own `on_request`
-position is reached, and its conditions may not depend on headers or results
-that later filters produce.
+position is reached, and a condition on a header or result that a later filter
+would produce does not match, because that filter has not run yet.
 
 The one exception is a `stream_buffer` pre-read, which
 runs the request-body hooks *before* the request phase.

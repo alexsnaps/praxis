@@ -149,8 +149,9 @@ that declare `bound_upstream_request_body_access` run their
 order, against the request as it stands at that point plus the fully buffered
 body. Their conditions are evaluated there, not at their own position, so a
 participant runs even if a later filter would have rejected or skipped the
-request; conditions that depend on later filters' headers or results are not
-allowed. A writer's output becomes the body that direct dispatch, the IRR,
+request, and a condition on a header or result that a later filter would
+produce sees the request before that filter ran, so it does not match. A
+writer's output becomes the body that direct dispatch, the IRR,
 retries, and later selected-upstream adaptation all see, and is checked against
 the request-body ceiling. A read-only participant works on a copy and cannot
 change the body. `selected_upstream` conditions are rejected on participants,
