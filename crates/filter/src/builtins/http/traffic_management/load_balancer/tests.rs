@@ -1229,6 +1229,10 @@ async fn bound_upstream_source_errors_when_unbound() {
         "a bound-source LB with no binding must fail closed: {error}"
     );
     assert!(ctx.upstream.is_none(), "no upstream may be selected without a binding");
+    assert!(
+        ctx.cluster.is_none(),
+        "a failed bound resolution must not seed the exchange cluster"
+    );
 }
 
 #[cfg(feature = "upstream-binding")]
@@ -1252,6 +1256,199 @@ async fn bound_upstream_source_errors_when_bound_cluster_not_declared() {
     assert!(
         ctx.upstream.is_none(),
         "no upstream may be selected for an undeclared cluster"
+    );
+    assert!(
+        ctx.cluster.is_none(),
+        "an undeclared bound cluster must not be seeded as the exchange cluster"
+    );
+}
+
+#[cfg(feature = "upstream-binding")]
+#[tokio::test]
+async fn bound_upstream_source_accepts_matching_context_cluster() {
+    let lb = LoadBalancerFilter::try_new_with_source(
+        &[test_cluster("backend", &["127.0.0.1:8080"])],
+        super::ClusterSource::BoundUpstream,
+    )
+    .expect("a valid bound-source load balancer builds");
+    let req = crate::test_utils::make_request(http::Method::GET, "/");
+    let mut ctx = crate::test_utils::make_filter_context(&req);
+    ctx.cluster = Some(Arc::from("backend"));
+    ctx.publish_bound_upstream(Arc::from("backend"), None, None)
+        .expect("publish before freeze succeeds");
+
+    let action = lb
+        .on_request(&mut ctx)
+        .await
+        .expect("an exchange cluster that agrees with the binding is accepted");
+
+    assert!(
+        matches!(action, FilterAction::Continue),
+        "an agreeing exchange cluster should continue: {action:?}"
+    );
+    assert_eq!(
+        ctx.upstream.as_ref().map(|upstream| upstream.address.as_ref()),
+        Some("127.0.0.1:8080"),
+        "the endpoint must come from the bound cluster"
+    );
+    assert_eq!(
+        ctx.cluster.as_deref(),
+        Some("backend"),
+        "an agreeing exchange cluster is left in place"
+    );
+}
+
+#[cfg(feature = "upstream-binding")]
+#[test]
+fn bound_upstream_clusters_lists_declared_clusters_only_for_the_bound_source() {
+    let clusters = r#"
+clusters:
+  - name: alpha
+    endpoints: ["127.0.0.1:8080"]
+  - name: beta
+    endpoints: ["127.0.0.1:8081"]
+"#;
+    let bound: serde_yaml::Value =
+        serde_yaml::from_str(&format!("cluster_source: bound_upstream{clusters}")).expect("valid YAML");
+    let router: serde_yaml::Value = serde_yaml::from_str(clusters).expect("valid YAML");
+    let bound_lb = LoadBalancerFilter::from_config(&bound).expect("the bound source parses");
+    let router_lb = LoadBalancerFilter::from_config(&router).expect("the default source parses");
+
+    let mut declared = bound_lb.bound_upstream_clusters();
+    declared.sort();
+
+    assert_eq!(
+        declared,
+        vec!["alpha".to_owned(), "beta".to_owned()],
+        "a bound-source load balancer reports every cluster it can resolve from the binding"
+    );
+    assert!(
+        router_lb.bound_upstream_clusters().is_empty(),
+        "a router-source load balancer resolves nothing from the binding"
+    );
+}
+
+#[cfg(feature = "upstream-binding")]
+#[test]
+fn declared_cluster_metadata_is_sorted_and_keeps_untagged_clusters() {
+    let lb = LoadBalancerFilter::new(&[
+        cluster_with_application("zeta", &["127.0.0.1:8080"], Some("openai_responses"), Some("openai")),
+        test_cluster("alpha", &["127.0.0.1:8081"]),
+        cluster_with_application("mid", &["127.0.0.1:8082"], Some("openai_chat_completions"), None),
+    ]);
+
+    let declared = lb.declared_cluster_metadata();
+
+    let names: Vec<&str> = declared.iter().map(|decl| decl.name.as_ref()).collect();
+    assert_eq!(
+        names,
+        vec!["alpha", "mid", "zeta"],
+        "declarations are sorted by cluster name so the catalog is deterministic"
+    );
+    let tags: Vec<(Option<&str>, Option<&str>)> = declared
+        .iter()
+        .map(|decl| (decl.metadata.protocol(), decl.metadata.provider()))
+        .collect();
+    assert_eq!(
+        tags,
+        vec![
+            (None, None),
+            (Some("openai_chat_completions"), None),
+            (Some("openai_responses"), Some("openai")),
+        ],
+        "every cluster is declared, with untagged ones carrying no metadata"
+    );
+}
+
+#[cfg(feature = "upstream-binding")]
+#[test]
+fn explicit_router_cluster_source_parses_as_the_default() {
+    let config: serde_yaml::Value = serde_yaml::from_str(
+        r#"
+cluster_source: router
+clusters:
+  - name: backend
+    endpoints: ["127.0.0.1:8080"]
+"#,
+    )
+    .expect("valid YAML");
+
+    let lb = LoadBalancerFilter::from_config(&config).expect("an explicit router source is accepted");
+
+    assert!(
+        !lb.consumes_bound_upstream(),
+        "an explicit router source behaves like the omitted default"
+    );
+    assert!(
+        lb.bound_upstream_clusters().is_empty(),
+        "an explicit router source resolves nothing from the binding"
+    );
+    assert_eq!(
+        lb.load_balancer_clusters(),
+        vec!["backend".to_owned()],
+        "the declared cluster is still served through the router path"
+    );
+}
+
+#[cfg(feature = "upstream-binding")]
+#[tokio::test]
+async fn bound_source_releases_least_connections_on_response() {
+    let cluster = cluster_with_strategy(
+        "backend",
+        &["127.0.0.1:8080"],
+        LoadBalancerStrategy::Simple(SimpleStrategy::LeastConnections),
+    );
+    let lb = LoadBalancerFilter::try_new_with_source(&[cluster], super::ClusterSource::BoundUpstream)
+        .expect("a valid bound-source load balancer builds");
+    let req = crate::test_utils::make_request(http::Method::GET, "/");
+    let mut ctx = crate::test_utils::make_filter_context(&req);
+    ctx.publish_bound_upstream(Arc::from("backend"), None, None)
+        .expect("publish before freeze succeeds");
+
+    drop(lb.on_request(&mut ctx).await.expect("bound selection succeeds"));
+
+    assert_eq!(
+        least_connections_load(&lb, "backend", "127.0.0.1:8080"),
+        Some(1),
+        "the bound selection is counted in flight"
+    );
+
+    drop(lb.on_response(&mut ctx).await.expect("release succeeds"));
+
+    assert_eq!(
+        least_connections_load(&lb, "backend", "127.0.0.1:8080"),
+        Some(0),
+        "on_response releases the in-flight count through the cluster the bound path seeded"
+    );
+}
+
+#[cfg(feature = "upstream-binding")]
+#[tokio::test]
+async fn bound_source_panic_mode_metric_uses_the_bound_cluster() {
+    crate::test_utils::install_metrics_recorder();
+    let endpoints = ["127.0.0.1:8080", "127.0.0.1:8081"];
+    let lb = LoadBalancerFilter::try_new_with_source(
+        &[test_cluster("bound-panic", &endpoints)],
+        super::ClusterSource::BoundUpstream,
+    )
+    .expect("a valid bound-source load balancer builds");
+    let registry = health_registry("bound-panic", &endpoints, &[0, 1]);
+    let req = crate::test_utils::make_request(http::Method::GET, "/");
+    let mut ctx = crate::test_utils::make_filter_context(&req);
+    ctx.publish_bound_upstream(Arc::from("bound-panic"), None, None)
+        .expect("publish before freeze succeeds");
+    ctx.health_registry = Some(&registry);
+
+    drop(
+        lb.on_request(&mut ctx)
+            .await
+            .expect("panic mode still selects an endpoint"),
+    );
+
+    let rendered = crate::test_utils::render_metrics();
+    assert!(
+        rendered.contains("praxis_lb_panic_mode_total{cluster=\"bound-panic\"}"),
+        "panic mode under the bound source must label the counter with the bound cluster:\n{rendered}"
     );
 }
 
@@ -1298,6 +1495,16 @@ fn cluster_with_strategy(name: &str, endpoints: &[&str], strategy: LoadBalancerS
     Cluster {
         load_balancer_strategy: strategy,
         ..Cluster::with_defaults(name, endpoints.iter().map(|s| (*s).into()).collect())
+    }
+}
+
+#[cfg(feature = "upstream-binding")]
+/// In-flight count the least-connections strategy tracks for `endpoint` in
+/// `cluster`, or `None` when the cluster is unknown or uses another strategy.
+fn least_connections_load(lb: &LoadBalancerFilter, cluster: &str, endpoint: &str) -> Option<usize> {
+    match lb.clusters.get(cluster)?.strategy.inner() {
+        SharedStrategy::LeastConnections(lc) => Some(lc.load_for(endpoint)),
+        _ => None,
     }
 }
 

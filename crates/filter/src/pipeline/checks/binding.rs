@@ -3243,6 +3243,208 @@ mod tests {
         );
     }
 
+    #[test]
+    fn binding_control_flow_unconditional_reenter_keeps_the_fall_through() {
+        let mut looper = named_noop_filter("looper", vec![]);
+        looper.branches = vec![ResolvedBranch {
+            condition: None,
+            filters: vec![],
+            max_iterations: Some(1),
+            name: Arc::from("again"),
+            rejoin: RejoinTarget::ReEnter(0),
+        }];
+        let filters = vec![
+            named_noop_filter("start", vec![]),
+            looper,
+            named_noop_filter("end", vec![]),
+        ];
+
+        assert_eq!(
+            binding_control_flow_edges(&filters),
+            vec![(0, 1), (1, 2), (1, 0)],
+            "a bounded ReEnter loop still exits through the fall-through, so both edges stay"
+        );
+    }
+
+    #[test]
+    fn reenter_before_the_router_is_not_a_rebind() {
+        let mut looper = named_noop_filter("looper", vec![]);
+        looper.branches = vec![conditional_branch("again", vec![], RejoinTarget::ReEnter(0))];
+        let filters = vec![looper, binding_router(&["a"]), bound_lb(&["a"])];
+        let mut errors = Vec::new();
+
+        check_no_rebind_after_binding(&filters, false, &mut errors);
+
+        assert!(
+            errors.is_empty(),
+            "a loop that finishes before the router binds cannot run it twice: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn only_serving_load_balancer_being_conditional_is_uncovered() {
+        let mut lb = lb_filter(&["a"]);
+        lb.conditions = vec![make_condition()];
+        let filters = vec![binding_router(&["a"]), lb];
+        let mut errors = Vec::new();
+
+        check_bound_cluster_coverage(&filters, &mut errors);
+
+        assert_eq!(
+            errors.len(),
+            1,
+            "a request that skips the conditional load balancer runs off the end: {errors:?}"
+        );
+        assert!(
+            errors.first().is_some_and(|error| error.contains("cluster 'a'")),
+            "the error names the uncovered cluster: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn two_distinct_conflicting_clusters_are_both_reported() {
+        let filters = vec![
+            binding_router(&["a", "b"]),
+            metadata_filter("first_a", "a", Some("openai_responses"), None),
+            metadata_filter("second_a", "a", Some("openai_chat_completions"), None),
+            metadata_filter("first_b", "b", None, Some("openai")),
+            metadata_filter("second_b", "b", None, Some("azure")),
+            bound_lb(&["a", "b"]),
+        ];
+        let mut errors = Vec::new();
+
+        check_cluster_metadata_conflicts(&filters, &mut errors);
+
+        assert_eq!(errors.len(), 2, "each disagreeing cluster is reported once: {errors:?}");
+        assert!(
+            errors.iter().any(|error| error.contains("cluster 'a'")),
+            "the conflict on 'a' is reported: {errors:?}"
+        );
+        assert!(
+            errors.iter().any(|error| error.contains("cluster 'b'")),
+            "the conflict on 'b' is reported: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn unless_matcher_state_never_matches_the_tagged_cluster() {
+        let metadata = crate::pipeline::catalog::ClusterApplicationMetadata::new(
+            Some(Arc::from("openai_responses")),
+            Some(Arc::from("openai")),
+        );
+
+        let state = binding_condition_state(&[bound_unless(Some("openai_responses"), None)], Some(&metadata));
+
+        assert!(
+            matches!(state, BindingConditionState::Never),
+            "an unless matcher the bound tags satisfy can never let the filter run"
+        );
+    }
+
+    #[test]
+    fn a_when_matcher_with_a_path_predicate_is_only_maybe() {
+        let metadata =
+            crate::pipeline::catalog::ClusterApplicationMetadata::new(Some(Arc::from("openai_responses")), None);
+        let condition = Condition::When(ConditionMatch {
+            grpc: None,
+            path: None,
+            path_prefix: Some("/v1".to_owned()),
+            methods: None,
+            headers: None,
+            bound_upstream: Some(praxis_core::config::ApplicationMatch {
+                application_protocol: Some("openai_responses".to_owned()),
+                application_provider: None,
+            }),
+            selected_upstream: None,
+        });
+
+        let state = binding_condition_state(&[condition], Some(&metadata));
+
+        assert!(
+            matches!(state, BindingConditionState::Maybe),
+            "a matching bound tag paired with a request predicate depends on the request"
+        );
+    }
+
+    #[cfg(feature = "iterative-request-router")]
+    #[test]
+    fn bound_consumer_clusters_include_branch_consumers() {
+        let nested = host_with_named_branch("inner", vec![bound_lb(&["a"])]);
+        let filters = vec![
+            binding_router(&["a", "b"]),
+            host_with_named_branch("outer", vec![nested]),
+            bound_lb(&["b"]),
+        ];
+
+        let clusters = bound_consumer_clusters(&filters);
+
+        assert_eq!(
+            clusters,
+            std::collections::HashSet::from(["a".to_owned(), "b".to_owned()]),
+            "consumers nested two branches deep count alongside top-level ones"
+        );
+    }
+
+    #[cfg(feature = "bound-upstream-request-body")]
+    #[test]
+    fn step_bound_body_participant_inside_a_branch_is_rejected() {
+        let mut host = named_noop_filter("headers", vec![]);
+        host.branches = vec![make_branch_with_filters(
+            "nested",
+            vec![bound_body_filter(
+                "bound_body",
+                BodyAccess::ReadOnly,
+                BodyMode::StreamBuffer { max_bytes: Some(4096) },
+            )],
+        )];
+        let filters = vec![host];
+        let mut errors = Vec::new();
+
+        check_bound_upstream_body_participants(&filters, true, &mut errors);
+
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("bound_body") && error.contains("iterative_request_router step")),
+            "the step rule recurses into branches to find the participant: {errors:?}"
+        );
+        assert!(
+            errors.iter().any(|error| error.contains("in branch 'nested'")),
+            "the branch placement is reported as well: {errors:?}"
+        );
+    }
+
+    #[cfg(feature = "bound-upstream-request-body")]
+    #[test]
+    fn top_level_participant_in_a_step_is_rejected() {
+        let filters = vec![bound_body_filter(
+            "bound_body",
+            BodyAccess::ReadWrite,
+            BodyMode::StreamBuffer { max_bytes: Some(4096) },
+        )];
+        let mut step_errors = Vec::new();
+        let mut parent_errors = Vec::new();
+
+        check_bound_upstream_body_participants(&filters, true, &mut step_errors);
+        check_bound_upstream_body_participants(&filters, false, &mut parent_errors);
+
+        assert_eq!(
+            step_errors.len(),
+            1,
+            "a bounded top-level participant breaks only the step rule: {step_errors:?}"
+        );
+        assert!(
+            step_errors
+                .first()
+                .is_some_and(|error| error.contains("bound_body") && error.contains("before the IRR")),
+            "the error names the filter and the fix: {step_errors:?}"
+        );
+        assert!(
+            parent_errors.is_empty(),
+            "the same participant is legitimate in the parent pipeline: {parent_errors:?}"
+        );
+    }
+
     // -------------------------------------------------------------------------
     // Test Utilities
     // -------------------------------------------------------------------------

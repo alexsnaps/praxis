@@ -3117,4 +3117,25 @@ content-length: 0
             "an idempotent republish must not clear the frozen provider"
         );
     }
+
+    #[cfg(feature = "upstream-binding")]
+    #[test]
+    fn freeze_before_any_binding_still_lets_the_first_publish_through() {
+        let req = crate::test_utils::make_request(Method::GET, "/");
+        let mut ctx = crate::test_utils::make_filter_context(&req);
+        ctx.freeze_bound_upstream();
+
+        ctx.publish_bound_upstream(Arc::from("a"), None, None)
+            .expect("a frozen but unbound context publishes defensively instead of failing");
+
+        assert_eq!(
+            ctx.bound_cluster(),
+            Some("a"),
+            "the first binding lands even after an early freeze"
+        );
+        assert!(
+            ctx.bound_upstream_frozen(),
+            "the freeze marker survives the defensive publish"
+        );
+    }
 }
