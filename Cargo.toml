@@ -67,7 +67,7 @@ pingora-proxy = { version = "0.10.0", package = "quixotic-plecostomus-proxy", fe
 percent-encoding = "2.3.2"
 rand = "0.10.3"
 plotters = { version = "0.3.7", default-features = false, features = ["svg_backend", "line_series"] }
-ppe = { version = "0.3.0", package = "praxis-policy", features = ["builtins"] }
+ppe = { version = "0.3.1", package = "praxis-policy", features = ["builtins"] }
 parking_lot = "0.12.5"
 portable-atomic = "1.15.0"
 proptest = "1.11.0"
@@ -113,7 +113,7 @@ syn = { version = "3.0.6", features = ["full", "extra-traits", "visit"] }
 tempfile = "3.27.0"
 tokio-rustls = "0.26.5"
 tokio-tungstenite = "0.30.0"
-thiserror = "2.0.20"
+thiserror = "2.0.21"
 tikv-jemallocator = "0.7.0"
 tonic = "0.14.6"
 tonic-prost = "0.14.6"
