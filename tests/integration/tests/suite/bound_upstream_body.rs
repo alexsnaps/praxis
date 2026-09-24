@@ -173,6 +173,38 @@ impl HttpFilter for EmptyBoundThenReportSelected {
     }
 }
 
+/// Removes the body at the barrier, handing the transport `None` rather than
+/// an empty buffer.
+struct EmptyBoundBody;
+
+#[async_trait::async_trait]
+impl HttpFilter for EmptyBoundBody {
+    fn name(&self) -> &'static str {
+        "empty_bound_body"
+    }
+
+    async fn on_request(&self, _ctx: &mut HttpFilterContext<'_>) -> Result<FilterAction, FilterError> {
+        Ok(FilterAction::Continue)
+    }
+
+    fn bound_upstream_request_body_access(&self) -> BodyAccess {
+        BodyAccess::ReadWrite
+    }
+
+    fn request_body_mode(&self) -> BodyMode {
+        BodyMode::StreamBuffer { max_bytes: Some(4096) }
+    }
+
+    async fn on_bound_upstream_request_body(
+        &self,
+        _ctx: &mut HttpFilterContext<'_>,
+        body: &mut Option<Bytes>,
+    ) -> Result<BoundUpstreamBodyOutcome, FilterError> {
+        *body = None;
+        Ok(BoundUpstreamBodyOutcome::Continue)
+    }
+}
+
 struct OversizedBoundRewrite;
 
 #[async_trait::async_trait]
@@ -300,6 +332,15 @@ fn append(body: &mut Option<Bytes>, marker: &[u8]) {
     let mut output = body.as_ref().map_or_else(Vec::new, |bytes| bytes.to_vec());
     output.extend_from_slice(marker);
     *body = Some(Bytes::from(output));
+}
+
+/// Look up a request header the header-echo backend reflected in its
+/// response body, by case-insensitive name.
+fn echoed_request_header(raw_response: &str, name: &str) -> Option<String> {
+    parse_body(raw_response).lines().find_map(|line| {
+        let (key, value) = line.split_once(':')?;
+        key.trim().eq_ignore_ascii_case(name).then(|| value.trim().to_owned())
+    })
 }
 
 fn direct_yaml(proxy_port: u16, backend_port: u16, filter_name: &str) -> String {
@@ -515,6 +556,66 @@ fn rewrite_repairs_chunked_request_framing() {
             .any(|line| line.trim_start().starts_with("transfer-encoding:")),
         "transfer-encoding must be removed after canonical buffering: {echoed}"
     );
+}
+
+#[test]
+fn rewrite_adds_a_body_to_a_bodiless_request() {
+    let headers = start_header_echo_backend();
+    let bodies = start_echo_backend();
+    let header_port = free_port();
+    let body_port = free_port();
+    let registry = registry_with("append_bound_marker", || Box::new(AppendBoundMarker));
+    let header_config = Config::from_yaml(&direct_yaml(header_port, headers.port(), "append_bound_marker")).unwrap();
+    let body_config = Config::from_yaml(&direct_yaml(body_port, bodies.port(), "append_bound_marker")).unwrap();
+    let header_proxy = start_full_proxy_with_registry(&header_config, &registry);
+    let body_proxy = start_full_proxy_with_registry(&body_config, &registry);
+    let request = "GET /echo HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+
+    let framing = http_send(header_proxy.addr(), request);
+    let echoed = http_send(body_proxy.addr(), request);
+
+    assert_eq!(parse_status(&framing), 200, "the bodiless request should be forwarded");
+    assert_eq!(
+        echoed_request_header(&framing, "content-length").as_deref(),
+        Some("6"),
+        "content-length must describe the body the rewrite added: {framing}"
+    );
+    assert_eq!(
+        echoed_request_header(&framing, "transfer-encoding"),
+        None,
+        "an added body is forwarded with a length, not chunked: {framing}"
+    );
+    assert_eq!(parse_body(&echoed), "|bound", "the added body must reach the upstream");
+}
+
+#[test]
+fn emptied_rewrite_reaches_the_upstream_as_content_length_zero() {
+    let headers = start_header_echo_backend();
+    let bodies = start_echo_backend();
+    let header_port = free_port();
+    let body_port = free_port();
+    let registry = registry_with("empty_bound_body", || Box::new(EmptyBoundBody));
+    let header_config = Config::from_yaml(&direct_yaml(header_port, headers.port(), "empty_bound_body")).unwrap();
+    let body_config = Config::from_yaml(&direct_yaml(body_port, bodies.port(), "empty_bound_body")).unwrap();
+    let header_proxy = start_full_proxy_with_registry(&header_config, &registry);
+    let body_proxy = start_full_proxy_with_registry(&body_config, &registry);
+    let request = "POST /echo HTTP/1.1\r\nHost: localhost\r\nContent-Length: 7\r\nConnection: close\r\n\r\npayload";
+
+    let framing = http_send(header_proxy.addr(), request);
+    let echoed = http_send(body_proxy.addr(), request);
+
+    assert_eq!(parse_status(&framing), 200, "the emptied request should be forwarded");
+    assert_eq!(
+        echoed_request_header(&framing, "content-length").as_deref(),
+        Some("0"),
+        "an emptied rewrite must be framed as content-length zero: {framing}"
+    );
+    assert_eq!(
+        echoed_request_header(&framing, "transfer-encoding"),
+        None,
+        "an emptied rewrite must not be forwarded chunked: {framing}"
+    );
+    assert_eq!(parse_body(&echoed), "", "the upstream must receive an empty body");
 }
 
 #[test]
