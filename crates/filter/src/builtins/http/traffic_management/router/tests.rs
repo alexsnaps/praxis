@@ -258,6 +258,7 @@ async fn on_request_sets_cluster_on_match() {
     );
 }
 
+#[cfg(feature = "upstream-binding")]
 #[tokio::test]
 async fn on_request_publishes_name_only_binding_with_empty_catalog() {
     let router = make_router(vec![prefix_route("/", "default")]);
@@ -377,6 +378,7 @@ async fn on_request_catalog_miss_publishes_name_only_binding() {
     );
 }
 
+#[cfg(feature = "upstream-binding")]
 #[tokio::test]
 async fn on_request_rebind_replaces_previous_binding() {
     let router = make_router(vec![prefix_route("/", "default")]);

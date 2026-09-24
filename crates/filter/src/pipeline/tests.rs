@@ -212,6 +212,7 @@ fn binding_enabled_routing_requires_global_cluster_metadata_agreement() {
     );
 }
 
+#[cfg(feature = "upstream-binding")]
 #[tokio::test]
 async fn built_binding_router_resolves_metadata_from_pipeline_catalog() {
     let registry = FilterRegistry::with_builtins();
@@ -323,6 +324,7 @@ fn deny_branch_before_bound_dispatch_is_accepted_from_yaml() {
     );
 }
 
+#[cfg(feature = "upstream-binding")]
 #[test]
 fn branch_trace_context_is_checked_by_where_its_branch_runs() {
     let registry = FilterRegistry::with_builtins();
@@ -446,6 +448,7 @@ fn binding_enabled_router_in_branch_is_rejected_from_yaml() {
     );
 }
 
+#[cfg(feature = "upstream-binding")]
 #[tokio::test]
 async fn unmatched_conditional_router_publishes_no_binding_or_route_metrics() {
     let registry = FilterRegistry::with_builtins();
@@ -6699,6 +6702,7 @@ async fn binding_freezes_without_bound_body_participants() {
     );
 }
 
+#[cfg(feature = "upstream-binding")]
 #[tokio::test]
 async fn reenter_over_the_real_router_republishes_or_fails_closed() {
     for (prefix, rebinds) in [("/c", false), ("/b", true)] {
