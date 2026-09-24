@@ -6764,6 +6764,123 @@ mod bound_upstream_body_barrier {
         );
     }
 
+    /// Read-write participant that appends `|<name>` at the barrier, or rejects
+    /// there, and counts its own request and response hooks.
+    struct MarkingParticipant {
+        name: &'static str,
+        reject: Option<u16>,
+        requests: Arc<AtomicUsize>,
+        responses: Arc<AtomicUsize>,
+    }
+
+    impl MarkingParticipant {
+        fn new(name: &'static str, reject: Option<u16>) -> (Self, Arc<AtomicUsize>, Arc<AtomicUsize>) {
+            let requests = Arc::new(AtomicUsize::new(0));
+            let responses = Arc::new(AtomicUsize::new(0));
+            let filter = Self {
+                name,
+                reject,
+                requests: Arc::clone(&requests),
+                responses: Arc::clone(&responses),
+            };
+            (filter, requests, responses)
+        }
+    }
+
+    #[async_trait]
+    impl HttpFilter for MarkingParticipant {
+        fn name(&self) -> &'static str {
+            self.name
+        }
+
+        fn bound_upstream_request_body_access(&self) -> BodyAccess {
+            BodyAccess::ReadWrite
+        }
+
+        fn request_body_mode(&self) -> BodyMode {
+            BodyMode::StreamBuffer {
+                max_bytes: Some(65_536),
+            }
+        }
+
+        async fn on_request(&self, _ctx: &mut crate::HttpFilterContext<'_>) -> Result<FilterAction, FilterError> {
+            self.requests.fetch_add(1, Ordering::SeqCst);
+            Ok(FilterAction::Continue)
+        }
+
+        async fn on_response(&self, _ctx: &mut crate::HttpFilterContext<'_>) -> Result<FilterAction, FilterError> {
+            self.responses.fetch_add(1, Ordering::SeqCst);
+            Ok(FilterAction::Continue)
+        }
+
+        async fn on_bound_upstream_request_body(
+            &self,
+            _ctx: &mut crate::HttpFilterContext<'_>,
+            body: &mut Option<Bytes>,
+        ) -> Result<crate::BoundUpstreamBodyOutcome, FilterError> {
+            if let Some(status) = self.reject {
+                return Ok(crate::BoundUpstreamBodyOutcome::Reject(crate::Rejection::status(
+                    status,
+                )));
+            }
+            let mut output = body.as_ref().map_or_else(Vec::new, |bytes| bytes.to_vec());
+            output.push(b'|');
+            output.extend_from_slice(self.name.as_bytes());
+            *body = Some(Bytes::from(output));
+            Ok(crate::BoundUpstreamBodyOutcome::Continue)
+        }
+    }
+
+    #[tokio::test]
+    async fn barrier_runs_a_participant_the_request_never_reaches() {
+        let skip_past = |target| ResolvedBranch {
+            condition: None,
+            filters: vec![],
+            max_iterations: None,
+            name: Arc::from("past"),
+            rejoin: target,
+        };
+        let cases: [(&str, Box<dyn HttpFilter>, Vec<ResolvedBranch>); 3] = [
+            ("a rejecting filter", Box::new(RejectFilter), vec![]),
+            (
+                "a SkipTo branch",
+                Box::new(PassthroughFilter),
+                vec![skip_past(RejoinTarget::SkipTo(3))],
+            ),
+            (
+                "a terminal branch",
+                Box::new(PassthroughFilter),
+                vec![skip_past(RejoinTarget::Terminal)],
+            ),
+        ];
+        for (case, interposer, router_branches) in cases {
+            let (participant, requests, _) = MarkingParticipant::new("late", None);
+            let mut pipeline = make_pipeline(vec![
+                binding_router("inference"),
+                interposer,
+                Box::new(participant),
+                Box::new(PassthroughFilter),
+            ]);
+            pipeline.filters[0].branches = router_branches;
+            let req = crate::test_utils::make_request(Method::POST, "/");
+            let mut ctx = crate::test_utils::make_filter_context(&req);
+            ctx.buffered_request_body = Some(Bytes::from_static(b"payload"));
+
+            drop(pipeline.execute_http_request(&mut ctx).await.unwrap());
+
+            assert_eq!(
+                ctx.take_bound_request_body_rewrite().as_deref(),
+                Some(&b"payload|late"[..]),
+                "with {case} between the router and the participant, the barrier still ran its body hook"
+            );
+            assert_eq!(
+                requests.load(Ordering::SeqCst),
+                0,
+                "with {case} between the router and the participant, its request hook never ran"
+            );
+        }
+    }
+
     /// Read-write participant that appends `|bound` at the barrier and later, at
     /// its own header-phase position, takes the buffered body the way a
     /// body-consuming request filter does.
