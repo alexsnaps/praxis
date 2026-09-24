@@ -458,18 +458,49 @@ async fn unmatched_conditional_router_publishes_no_binding_or_route_metrics() {
     - when:
         bound_upstream: {application_provider: openai}
   request_set: [{name: x-routed, value: "true"}]
+- filter: load_balancer
+  conditions:
+    - when: {path_prefix: "/routed"}
+  clusters:
+    - name: backend
+      http: {application_provider: openai}
+      endpoints: ["127.0.0.1:9"]
 "#,
     )
     .unwrap();
     let pipeline = FilterPipeline::build(&mut entries, &registry).unwrap();
-    let req = crate::test_utils::make_request(Method::GET, "/skipped");
-    let mut ctx = crate::test_utils::make_filter_context(&req);
+    let routed = crate::test_utils::make_request(Method::GET, "/routed");
+    let mut routed_ctx = crate::test_utils::make_filter_context(&routed);
+    let skipped = crate::test_utils::make_request(Method::GET, "/skipped");
+    let mut ctx = crate::test_utils::make_filter_context(&skipped);
 
-    drop(pipeline.execute_http_request(&mut ctx).await.unwrap());
+    drop(pipeline.execute_http_request(&mut routed_ctx).await.unwrap());
+    let action = pipeline.execute_http_request(&mut ctx).await.unwrap();
 
-    assert!(ctx.bound_cluster().is_none());
-    assert!(ctx.cluster.is_none());
-    assert!(ctx.metrics_route.is_none());
+    assert!(
+        routed_ctx
+            .request_headers_to_set
+            .iter()
+            .any(|(name, _)| name == "x-routed"),
+        "a routed request binds the openai cluster and runs the bound-gated filter"
+    );
+    assert!(
+        matches!(action, FilterAction::Continue),
+        "a skipped router lets the request continue rather than rejecting it: {action:?}"
+    );
+    assert!(
+        ctx.bound_cluster().is_none(),
+        "a skipped binding router must not publish a binding"
+    );
+    assert!(ctx.cluster.is_none(), "a skipped router must not select a cluster");
+    assert!(
+        ctx.metrics_route.is_none(),
+        "a skipped router must not label the request with a route"
+    );
+    assert!(
+        ctx.request_headers_to_set.is_empty(),
+        "the bound-gated filter must not run for an unbound request"
+    );
 }
 
 #[test]

@@ -381,15 +381,13 @@ async fn on_request_rebind_replaces_previous_binding() {
         "the first match binds the cluster"
     );
 
-    // Publication remains replaceable until the executor freezes the first
-    // successful pipeline binding.
     let rerouter = make_router(vec![prefix_route("/", "other")]);
     let action = rerouter.on_request(&mut ctx).await.unwrap();
     assert!(matches!(action, FilterAction::Continue), "a rebind continues normally");
     assert_eq!(
         ctx.bound_cluster(),
         Some("other"),
-        "the later binding replaces the previous cluster"
+        "until the executor freezes it, a later router replaces the binding"
     );
 }
 
@@ -399,18 +397,22 @@ async fn frozen_same_cluster_republication_is_idempotent() {
     let req = crate::test_utils::make_request(http::Method::GET, "/");
     let mut ctx = crate::test_utils::make_filter_context(&req);
 
-    assert!(matches!(
-        router.on_request(&mut ctx).await.unwrap(),
-        FilterAction::Continue
-    ));
+    assert!(
+        matches!(router.on_request(&mut ctx).await.unwrap(), FilterAction::Continue),
+        "the first match binds and continues"
+    );
     ctx.freeze_bound_upstream();
-    assert!(matches!(
-        router.on_request(&mut ctx).await.unwrap(),
-        FilterAction::Continue
-    ));
+    assert!(
+        matches!(router.on_request(&mut ctx).await.unwrap(), FilterAction::Continue),
+        "republishing the frozen cluster is an idempotent no-op"
+    );
 
-    assert_eq!(ctx.bound_cluster(), Some("stable"));
-    assert_eq!(ctx.cluster.as_deref(), Some("stable"));
+    assert_eq!(ctx.bound_cluster(), Some("stable"), "the frozen binding is unchanged");
+    assert_eq!(
+        ctx.cluster.as_deref(),
+        Some("stable"),
+        "the exchange cluster still names the bound cluster"
+    );
 }
 
 #[tokio::test]
@@ -448,25 +450,45 @@ routes:
     let req = crate::test_utils::make_request(http::Method::GET, "/");
     let mut ctx = crate::test_utils::make_filter_context(&req);
 
-    assert!(matches!(
-        first.on_request(&mut ctx).await.unwrap(),
-        FilterAction::Continue
-    ));
-    assert_eq!(ctx.metrics_route.as_deref(), Some("/"));
-    assert_eq!(ctx.route_retry_policy.as_ref().unwrap().per_try_timeout_ms, Some(101));
+    assert!(
+        matches!(first.on_request(&mut ctx).await.unwrap(), FilterAction::Continue),
+        "the first router binds and continues"
+    );
+    assert_eq!(
+        ctx.metrics_route.as_deref(),
+        Some("/"),
+        "the first router labels its route"
+    );
+    assert_eq!(
+        ctx.route_retry_policy.as_ref().unwrap().per_try_timeout_ms,
+        Some(101),
+        "the first router installs its route retry policy"
+    );
     ctx.freeze_bound_upstream();
     let prior_route = ctx.metrics_route.clone();
     let prior_cluster = ctx.cluster.clone();
     let prior_policy = ctx.route_retry_policy.clone();
 
-    assert!(matches!(
-        second.on_request(&mut ctx).await.unwrap(),
-        FilterAction::Reject(rejection) if rejection.status == 500
-    ));
-    assert_eq!(ctx.bound_cluster(), Some("first"));
-    assert_eq!(ctx.cluster, prior_cluster);
-    assert_eq!(ctx.metrics_route, prior_route);
-    assert_eq!(ctx.route_retry_policy, prior_policy);
+    assert!(
+        matches!(
+            second.on_request(&mut ctx).await.unwrap(),
+            FilterAction::Reject(rejection) if rejection.status == 500
+        ),
+        "rebinding a different cluster after the freeze fails closed"
+    );
+    assert_eq!(ctx.bound_cluster(), Some("first"), "the frozen binding survives");
+    assert_eq!(
+        ctx.cluster, prior_cluster,
+        "the failed rebind must not move the cluster"
+    );
+    assert_eq!(
+        ctx.metrics_route, prior_route,
+        "the failed rebind must not relabel the route"
+    );
+    assert_eq!(
+        ctx.route_retry_policy, prior_policy,
+        "the failed rebind must not swap the retry policy"
+    );
 }
 
 #[tokio::test]
