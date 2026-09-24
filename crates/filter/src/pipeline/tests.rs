@@ -6325,6 +6325,58 @@ impl HttpFilter for BindingRouterFilter {
     }
 }
 
+/// An unconditional `Next` branch over `filters`.
+fn always_branch(filters: Vec<PipelineFilter>) -> ResolvedBranch {
+    ResolvedBranch {
+        condition: None,
+        filters,
+        max_iterations: None,
+        name: Arc::from("always"),
+        rejoin: RejoinTarget::Next,
+    }
+}
+
+/// A pipeline filter that counts its request-phase runs into `counter`.
+fn counting_filter(
+    filter_id: usize,
+    counter: &Arc<AtomicUsize>,
+    conditions: Vec<praxis_core::config::Condition>,
+) -> PipelineFilter {
+    PipelineFilter::new(
+        filter_id,
+        AnyFilter::Http(Box::new(CountingFilter {
+            counter: Arc::clone(counter),
+        })),
+        conditions,
+        vec![],
+    )
+}
+
+/// A request condition that matches a binding tagged with the openai provider.
+fn openai_gate() -> Vec<praxis_core::config::Condition> {
+    serde_yaml::from_str("- when:\n    bound_upstream:\n      application_provider: openai\n").unwrap()
+}
+
+/// Run the request phase of a pipeline that binds a cluster tagged with
+/// `provider` and then runs `host`.
+async fn run_bound_to(provider: &'static str, host: PipelineFilter) {
+    let router = PipelineFilter::new(
+        0,
+        AnyFilter::Http(Box::new(BindingRouterFilter {
+            cluster: "inference",
+            protocol: None,
+            provider: Some(provider),
+        })),
+        vec![],
+        vec![],
+    );
+    let pipeline = test_pipeline(BodyCapabilities::default(), vec![router, host]);
+    let req = crate::test_utils::make_request(Method::POST, "/");
+    let mut ctx = crate::test_utils::make_filter_context(&req);
+
+    drop(pipeline.execute_http_request(&mut ctx).await.unwrap());
+}
+
 #[tokio::test]
 async fn bound_upstream_condition_runs_filter_on_match() {
     let counter = Arc::new(AtomicUsize::new(0));
@@ -6394,58 +6446,37 @@ async fn bound_upstream_condition_skips_filter_on_mismatch() {
 }
 
 #[tokio::test]
-async fn bound_upstream_condition_runs_inside_branch_subchain() {
-    let counter = Arc::new(AtomicUsize::new(0));
-    let condition: Vec<praxis_core::config::Condition> =
-        serde_yaml::from_str("- when:\n    bound_upstream:\n      application_provider: openai\n").unwrap();
-    let mut host = PipelineFilter::new(
-        1,
-        AnyFilter::Http(Box::new(CountingFilter {
-            counter: Arc::new(AtomicUsize::new(0)),
-        })),
-        vec![],
-        vec![],
-    );
-    host.branches = vec![ResolvedBranch {
-        condition: None,
-        filters: vec![PipelineFilter::new(
-            2,
-            AnyFilter::Http(Box::new(CountingFilter {
-                counter: Arc::clone(&counter),
-            })),
-            condition,
-            vec![],
-        )],
-        max_iterations: None,
-        name: Arc::from("bound"),
-        rejoin: RejoinTarget::Next,
-    }];
-    let pipeline = test_pipeline(
-        BodyCapabilities::default(),
-        vec![
-            PipelineFilter::new(
-                0,
-                AnyFilter::Http(Box::new(BindingRouterFilter {
-                    cluster: "inference",
-                    protocol: None,
-                    provider: Some("openai"),
-                })),
-                vec![],
-                vec![],
-            ),
-            host,
-        ],
-    );
-    let req = crate::test_utils::make_request(Method::POST, "/");
-    let mut ctx = crate::test_utils::make_filter_context(&req);
+async fn bound_upstream_condition_inside_branch_subchain_follows_the_binding() {
+    for (provider, expected) in [("openai", 1), ("anthropic", 0)] {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let mut host = counting_filter(1, &Arc::new(AtomicUsize::new(0)), vec![]);
+        host.branches = vec![always_branch(vec![counting_filter(2, &counter, openai_gate())])];
 
-    drop(pipeline.execute_http_request(&mut ctx).await.unwrap());
+        run_bound_to(provider, host).await;
 
-    assert_eq!(
-        counter.load(Ordering::SeqCst),
-        1,
-        "a bound_upstream-gated filter inside a branch sub-chain must run when the binding matches"
-    );
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            expected,
+            "an openai-gated filter inside a branch sub-chain, with the request bound to {provider}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn bound_gated_branch_host_fires_its_branch_only_when_the_binding_matches() {
+    for (provider, expected) in [("openai", 1), ("anthropic", 0)] {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let mut host = counting_filter(1, &Arc::new(AtomicUsize::new(0)), openai_gate());
+        host.branches = vec![always_branch(vec![counting_filter(2, &counter, vec![])])];
+
+        run_bound_to(provider, host).await;
+
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            expected,
+            "the branch of an openai-gated host, with the request bound to {provider}"
+        );
+    }
 }
 
 #[tokio::test]
