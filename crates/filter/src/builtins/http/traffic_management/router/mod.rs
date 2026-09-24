@@ -281,11 +281,12 @@ impl RouterFilter {
     /// cannot inherit a policy the newly matched route did not declare.
     ///
     /// Publishing resolves the cluster's application metadata through the
-    /// pipeline catalog. Before the bound-upstream barrier freezes the binding a
-    /// later router replaces it; afterwards the binding is frozen and retargeting
-    /// to a different cluster fails closed. Valid configurations never hit that
-    /// case (validation forbids a second binding after the barrier), so treat it
-    /// as an internal error.
+    /// pipeline catalog. The pipeline freezes the binding as soon as the first
+    /// router publishes it, so a later router, or this one run again by a
+    /// `ReEnter` loop, may only republish the same cluster; retargeting to a
+    /// different cluster fails closed. Valid configurations never hit that case
+    /// (validation allows one binding router and no `ReEnter` back over it), so
+    /// treat it as an internal error.
     fn apply_matched_route(&self, ctx: &mut HttpFilterContext<'_>, resolved: &ResolvedRoute) -> FilterAction {
         if let Some(catalog) = &self.binding_catalog
             && let Err(frozen) = ctx.bind_upstream(Arc::clone(&resolved.route.cluster), catalog)

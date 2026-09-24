@@ -6586,6 +6586,66 @@ async fn binding_freezes_without_bound_body_participants() {
     );
 }
 
+#[tokio::test]
+async fn reenter_over_the_real_router_republishes_or_fails_closed() {
+    for (prefix, rebinds) in [("/c", false), ("/b", true)] {
+        let mut entries: Vec<FilterEntry> = serde_yaml::from_str(&format!(
+            r#"
+- filter: router
+  name: route
+  routes:
+    - {{path_prefix: "/b", cluster: b}}
+    - {{path_prefix: "/", cluster: a}}
+- filter: path_rewrite
+  add_prefix: "{prefix}"
+  branch_chains:
+    - name: again
+      rejoin: route
+      max_iterations: 1
+      chains: [{{name: again-chain, filters: [{{filter: headers, request_set: [{{name: x-pass, value: "2"}}]}}]}}]
+- filter: load_balancer
+  cluster_source: bound_upstream
+  clusters:
+    - {{name: a, http: {{application_provider: openai}}, endpoints: ["127.0.0.1:9"]}}
+    - {{name: b, endpoints: ["127.0.0.1:10"]}}
+"#
+        ))
+        .unwrap();
+        let pipeline = FilterPipeline::build_with_chains(
+            &mut entries,
+            &FilterRegistry::with_builtins(),
+            &HashMap::new(),
+            &praxis_core::config::InsecureOptions::default(),
+        )
+        .unwrap();
+        let req = crate::test_utils::make_request(Method::GET, "/x");
+        let mut ctx = crate::test_utils::make_filter_context(&req);
+
+        let action = pipeline.execute_http_request(&mut ctx).await.unwrap();
+
+        assert_eq!(
+            matches!(&action, FilterAction::Reject(rejection) if rejection.status == 500),
+            rebinds,
+            "the second pass routes {prefix}/x, so the router {} its frozen binding: {action:?}",
+            if rebinds {
+                "fails closed instead of replacing"
+            } else {
+                "republishes"
+            }
+        );
+        assert_eq!(
+            ctx.bound_cluster(),
+            Some("a"),
+            "the first pass's binding survives the loop"
+        );
+        assert_eq!(
+            ctx.bound_application_provider(),
+            Some("openai"),
+            "the frozen binding keeps its catalog metadata through the loop"
+        );
+    }
+}
+
 // -----------------------------------------------------------------------------
 // Bound-Upstream Request-Body Barrier
 // -----------------------------------------------------------------------------
@@ -6933,6 +6993,44 @@ mod bound_upstream_body_barrier {
             ran.load(Ordering::SeqCst),
             1,
             "the barrier drains only on the first binding, so participants run once with two binding filters"
+        );
+    }
+
+    #[tokio::test]
+    async fn bound_upstream_barrier_runs_once_through_a_reenter_loop() {
+        let (participant, ran, _) = BoundBodyRecordingFilter::new("bound_body", BoundBodyBehavior::Continue);
+        let mut looping = PipelineFilter::new(1, AnyFilter::Http(Box::new(participant)), vec![], vec![]);
+        looping.branches = vec![ResolvedBranch {
+            condition: None,
+            filters: vec![],
+            max_iterations: Some(2),
+            name: Arc::from("again"),
+            rejoin: RejoinTarget::ReEnter(0),
+        }];
+        let filters = vec![
+            PipelineFilter::new(0, AnyFilter::Http(binding_router("inference")), vec![], vec![]),
+            looping,
+        ];
+        let pipeline = test_pipeline(compute_body_capabilities(&filters), filters);
+        let req = crate::test_utils::make_request(Method::POST, "/v1/responses");
+        let mut ctx = crate::test_utils::make_filter_context(&req);
+        ctx.buffered_request_body = Some(Bytes::from_static(b"payload"));
+
+        let action = pipeline.execute_http_request(&mut ctx).await.unwrap();
+
+        assert!(
+            matches!(action, FilterAction::Continue),
+            "republishing the same cluster on each pass continues: {action:?}"
+        );
+        assert_eq!(
+            ctx.branch_iterations.get("again").copied(),
+            Some(3),
+            "the loop re-entered the router twice and then fell through"
+        );
+        assert_eq!(
+            ran.load(Ordering::SeqCst),
+            1,
+            "the frozen binding keeps the barrier from replaying the body hooks on a re-entered pass"
         );
     }
 
