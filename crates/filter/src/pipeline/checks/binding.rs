@@ -407,8 +407,9 @@ enum Ending {
     Failed,
     /// The path left the chain with no load balancer and no answer.
     FellThrough,
-    /// A load balancer serving the cluster selected an upstream; control keeps
-    /// going through any branch rejoin.
+    /// A load balancer serving the cluster selected an upstream. The scan stops
+    /// here; a nested `terminal` rejoin turns it into `Failed`, since a branch
+    /// that ends the pipeline needs a top-level selection to forward.
     Selected,
 }
 
@@ -838,9 +839,11 @@ pub(in crate::pipeline) fn check_bound_upstream_body_participants(
 /// against the complete, frozen request body, which requires a bounded
 /// [`BodyMode::StreamBuffer`]. Reject a participant whose [`request_body_mode`]
 /// is `Stream`, `SizeLimit`, or an unbounded `StreamBuffer`, mirroring
-/// [`check_selected_upstream_body_mode`]. Branch nesting is a separate concern
-/// handled by [`check_branch_bound_upstream_body_filters`], so this walks only
-/// top-level filters.
+/// [`check_selected_upstream_body_mode`], and one carrying a
+/// `selected_upstream` condition, since no endpoint is selected when it runs.
+/// Branch nesting is a separate concern handled by
+/// [`check_branch_bound_upstream_body_filters`], so this walks only top-level
+/// filters.
 ///
 /// [`check_selected_upstream_body_mode`]: super::check_selected_upstream_body_mode
 ///
