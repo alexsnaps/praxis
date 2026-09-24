@@ -12,7 +12,11 @@
 use std::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use praxis_tls::{CertKeyPair, setup::sni, test_utils::gen_test_certs};
+use praxis_tls::{
+    CertKeyPair,
+    setup::sni,
+    test_utils::{TestCerts, gen_test_certs},
+};
 
 // -----------------------------------------------------------------------------
 // Benchmarks
@@ -142,60 +146,43 @@ fn bench_case_insensitive_lookup(c: &mut Criterion) {
 // Resolver Construction
 // -----------------------------------------------------------------------------
 
-/// Build a resolver with `n` exact hostnames (host-0.example.com .. host-{n-1}.example.com).
+/// Build a resolver with `count` exact hostnames (host-0.example.com .. host-{count-1}.example.com).
 fn build_resolver_with_exact_hostnames(count: usize) -> sni::SniCertResolver {
-    let certificates: Vec<CertKeyPair> = (0..count)
-        .map(|i| {
-            let certs = gen_test_certs();
-            CertKeyPair {
-                cert_path: certs.cert_path.to_str().unwrap().to_owned(),
-                key_path: certs.key_path.to_str().unwrap().to_owned(),
-                server_names: vec![format!("host-{i}.example.com")],
-                default: false,
-            }
-        })
-        .collect();
-    sni::build_sni_resolver(&certificates).unwrap()
+    build_resolver((0..count).map(|i| (vec![format!("host-{i}.example.com")], false)))
 }
 
-/// Build a resolver with `n` wildcard entries (*.domain-0.com .. *.domain-{n-1}.com).
+/// Build a resolver with `count` wildcard entries (*.domain-0.com .. *.domain-{count-1}.com).
 fn build_resolver_with_wildcards(count: usize) -> sni::SniCertResolver {
-    let certificates: Vec<CertKeyPair> = (0..count)
-        .map(|i| {
-            let certs = gen_test_certs();
-            CertKeyPair {
-                cert_path: certs.cert_path.to_str().unwrap().to_owned(),
-                key_path: certs.key_path.to_str().unwrap().to_owned(),
-                server_names: vec![format!("*.domain-{i}.com")],
-                default: false,
-            }
-        })
-        .collect();
-    sni::build_sni_resolver(&certificates).unwrap()
+    build_resolver((0..count).map(|i| (vec![format!("*.domain-{i}.com")], false)))
 }
 
-/// Build a resolver with `n` exact hostnames plus a default certificate.
+/// Build a resolver with `count` exact hostnames plus a default certificate.
 fn build_resolver_with_default(count: usize) -> sni::SniCertResolver {
-    let mut certificates: Vec<CertKeyPair> = (0..count)
-        .map(|i| {
+    build_resolver(
+        (0..count)
+            .map(|i| (vec![format!("host-{i}.example.com")], false))
+            .chain(std::iter::once((Vec::new(), true))),
+    )
+}
+
+/// Build a resolver with one generated certificate per `(server_names, default)` entry.
+///
+/// Each [`TestCerts`] owns the temp dir holding its PEM files, so all of them
+/// are kept alive until the resolver has loaded the files from disk.
+fn build_resolver(entries: impl Iterator<Item = (Vec<String>, bool)>) -> sni::SniCertResolver {
+    let (generated, certificates): (Vec<TestCerts>, Vec<CertKeyPair>) = entries
+        .map(|(server_names, default)| {
             let certs = gen_test_certs();
-            CertKeyPair {
+            let pair = CertKeyPair {
                 cert_path: certs.cert_path.to_str().unwrap().to_owned(),
                 key_path: certs.key_path.to_str().unwrap().to_owned(),
-                server_names: vec![format!("host-{i}.example.com")],
-                default: false,
-            }
+                server_names,
+                default,
+            };
+            (certs, pair)
         })
-        .collect();
-
-    // Add default cert
-    let default_certs = gen_test_certs();
-    certificates.push(CertKeyPair {
-        cert_path: default_certs.cert_path.to_str().unwrap().to_owned(),
-        key_path: default_certs.key_path.to_str().unwrap().to_owned(),
-        server_names: Vec::new(),
-        default: true,
-    });
-
-    sni::build_sni_resolver(&certificates).unwrap()
+        .unzip();
+    let resolver = sni::build_sni_resolver(&certificates).unwrap();
+    drop(generated);
+    resolver
 }
