@@ -484,9 +484,13 @@ impl HttpFilter for IterativeRequestRouterFilter {
         // Fold every step pipeline's cluster declarations into the parent
         // catalog so a step cluster's application metadata resolves at runtime
         // and participates in the parent's conflict and untagged-field checks.
-        self.step_pipelines
-            .values()
-            .flat_map(|pipeline| pipeline.cluster_metadata_declarations())
+        // Steps go in name order so the catalog, and which side of a conflict
+        // is reported first, do not depend on hash order.
+        let mut steps: Vec<_> = self.step_pipelines.iter().collect();
+        steps.sort_by_key(|&(name, _)| name);
+        steps
+            .into_iter()
+            .flat_map(|(_, pipeline)| pipeline.cluster_metadata_declarations())
             .collect()
     }
 

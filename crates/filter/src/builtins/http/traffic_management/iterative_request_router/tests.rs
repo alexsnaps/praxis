@@ -3666,6 +3666,49 @@ steps:
 }
 
 #[test]
+fn step_cluster_metadata_folds_in_step_name_order() {
+    let config: serde_yaml::Value = serde_yaml::from_str(
+        r#"
+initial_step: b_step
+steps:
+  - name: b_step
+    filters:
+      - filter: load_balancer
+        cluster_source: bound_upstream
+        clusters:
+          - name: shared
+            http: {application_provider: azure}
+            endpoints: ["127.0.0.1:10"]
+    on_result: [{default: true, next: a_step}]
+  - name: a_step
+    filters:
+      - filter: load_balancer
+        cluster_source: bound_upstream
+        clusters:
+          - name: shared
+            http: {application_provider: openai}
+            endpoints: ["127.0.0.1:9"]
+    on_result: [{default: true, done: true}]
+"#,
+    )
+    .unwrap();
+
+    for _ in 0..16 {
+        let filter = super::IterativeRequestRouterFilter::from_config(&config).unwrap();
+        let providers: Vec<Option<String>> = filter
+            .declared_cluster_metadata()
+            .iter()
+            .map(|declaration| declaration.metadata.provider().map(str::to_owned))
+            .collect();
+        assert_eq!(
+            providers,
+            vec![Some("openai".to_owned()), Some("azure".to_owned())],
+            "step declarations must fold in step-name order, not hash order"
+        );
+    }
+}
+
+#[test]
 fn step_cluster_metadata_conflicts_fold_to_parent_validation() {
     let registry = crate::FilterRegistry::with_builtins();
     let config: serde_yaml::Value = serde_yaml::from_str(

@@ -291,7 +291,8 @@ impl HttpFilter for LoadBalancerFilter {
     }
 
     fn declared_cluster_metadata(&self) -> Vec<ClusterMetadataDeclaration> {
-        self.clusters
+        let mut declarations: Vec<ClusterMetadataDeclaration> = self
+            .clusters
             .iter()
             .map(|(name, entry)| ClusterMetadataDeclaration {
                 name: Arc::clone(name),
@@ -300,7 +301,9 @@ impl HttpFilter for LoadBalancerFilter {
                     entry.application_provider.clone(),
                 ),
             })
-            .collect()
+            .collect();
+        declarations.sort_by(|left, right| left.name.cmp(&right.name));
+        declarations
     }
 
     async fn on_request(&self, ctx: &mut HttpFilterContext<'_>) -> Result<FilterAction, FilterError> {
