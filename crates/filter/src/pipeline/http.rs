@@ -32,8 +32,10 @@ use crate::{
     FilterError,
     actions::{BoundUpstreamBodyOutcome, FilterAction, Rejection, SelectedUpstreamBodyOutcome},
     any_filter::AnyFilter,
+    body::BodyAccess,
     condition::{SelectedUpstream, should_execute_bound_selected},
     context::{EffectiveHeaders, HttpFilterContext},
+    extensions::BoundRequestBodyRewrite,
     trace_context::{TraceContext, ensure_trace_context},
 };
 
@@ -379,12 +381,13 @@ impl FilterPipeline {
         if self.bound_upstream_request_body_filter_indices.is_empty() {
             return Ok(FilterAction::Continue);
         }
-        let action = self.execute_http_bound_upstream_request_body(ctx).await?;
-        if matches!(action, FilterAction::Continue)
-            && self.body_capabilities.any_bound_upstream_request_body_writer
-            && ctx.buffered_request_body.as_ref().map_or(0, Bytes::len) > self.selected_upstream_request_body_limit()
-        {
-            return Ok(FilterAction::Reject(Rejection::status(413)));
+        let (action, rewrote) = self.execute_http_bound_upstream_request_body(ctx).await?;
+        if rewrote && matches!(action, FilterAction::Continue) {
+            let rewritten = ctx.buffered_request_body.clone().unwrap_or_default();
+            if rewritten.len() > self.selected_upstream_request_body_limit() {
+                return Ok(FilterAction::Reject(Rejection::status(413)));
+            }
+            ctx.extensions.insert(BoundRequestBodyRewrite(rewritten));
         }
         Ok(action)
     }
@@ -402,7 +405,8 @@ impl FilterPipeline {
     /// Each participant is gated by its own request conditions against the
     /// frozen binding view rather than [`executed_filter_indices`], which is
     /// not yet set for participants ordered after the binding filter when the
-    /// barrier fires.
+    /// barrier fires. The returned flag is `true` when a read-write participant
+    /// ran, so the caller records a rewrite only when one can exist.
     ///
     /// # Errors
     ///
@@ -419,9 +423,10 @@ impl FilterPipeline {
     async fn execute_http_bound_upstream_request_body(
         &self,
         ctx: &mut HttpFilterContext<'_>,
-    ) -> Result<FilterAction, FilterError> {
+    ) -> Result<(FilterAction, bool), FilterError> {
         let mut body = ctx.buffered_request_body.take();
         let mut result = Ok(FilterAction::Continue);
+        let mut rewrote = false;
         for &idx in &self.bound_upstream_request_body_filter_indices {
             let Some(pf) = self.filters.get(idx) else {
                 continue;
@@ -455,7 +460,9 @@ impl FilterPipeline {
             .await;
             ctx.current_filter_id = None;
             match outcome {
-                Ok(BoundUpstreamBodyOutcome::Continue) => {},
+                Ok(BoundUpstreamBodyOutcome::Continue) => {
+                    rewrote |= http_filter.bound_upstream_request_body_access() == BodyAccess::ReadWrite;
+                },
                 Ok(BoundUpstreamBodyOutcome::Reject(rejection)) => {
                     result = Ok(FilterAction::Reject(rejection));
                     break;
@@ -467,7 +474,7 @@ impl FilterPipeline {
             }
         }
         ctx.buffered_request_body = body;
-        result
+        result.map(|action| (action, rewrote))
     }
 
     /// Run all HTTP response body filters in reverse order.

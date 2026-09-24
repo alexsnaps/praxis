@@ -69,7 +69,7 @@ struct AdaptedRequestBody(Option<Bytes>);
 /// Kept distinct from [`AdaptedRequestBody`]: this representation is replayed
 /// for direct dispatch and is also the input to exchange-local selected-upstream
 /// adaptation.
-struct CanonicalRequestBody(Option<Bytes>);
+struct CanonicalRequestBody(Bytes);
 
 // -----------------------------------------------------------------------------
 // Request Filters
@@ -295,18 +295,39 @@ async fn run_pipeline(
         adapted_body,
     ) = {
         let selected_upstream_participates = pipeline.body_capabilities().needs_selected_upstream_request_body;
+        // Canonical pre-read body for the selected-upstream phase. Read before
+        // building the filter context, which borrows nothing from `ctx`.
+        let pre_read_body = if selected_upstream_participates {
+            ctx.pre_read_body.as_ref().and_then(|chunks| {
+                // `StreamBuffer` accumulation freezes the whole pre-read body into
+                // a single chunk (mirrored by `store_adapted_request_body`), so the
+                // phase only ever consumes the front chunk. Assert the invariant so
+                // a future multi-chunk representation cannot silently truncate the
+                // body handed to the selected-upstream phase.
+                debug_assert!(
+                    chunks.len() <= 1,
+                    "pre_read_body should be a single frozen chunk, found {}",
+                    chunks.len()
+                );
+                chunks.front().cloned()
+            })
+        } else {
+            None
+        };
+
         let mut filter_ctx = ctx.build_filter_context(pipeline, &request, None);
 
         let mut action = pipeline.execute_http_request(&mut filter_ctx).await;
-        let canonical_body = pipeline
-            .body_capabilities()
-            .any_bound_upstream_request_body_writer
-            .then(|| CanonicalRequestBody(filter_ctx.buffered_request_body.clone()));
-        // Selected-upstream adaptation must observe the canonical output of the
-        // bound-upstream phase, not the original pre-read transport buffer.
-        let mut working_body = selected_upstream_participates
-            .then(|| filter_ctx.buffered_request_body.clone())
-            .flatten();
+        let canonical_body = filter_ctx.take_bound_request_body_rewrite().map(CanonicalRequestBody);
+        // A bound rewrite is the body this request forwards, so adaptation
+        // starts from it; an emptied rewrite reads as no body, like an empty
+        // pre-read.
+        let mut working_body = match &canonical_body {
+            Some(CanonicalRequestBody(rewritten)) if selected_upstream_participates => {
+                Some(rewritten.clone()).filter(|body| !body.is_empty())
+            },
+            _ => pre_read_body,
+        };
 
         // #1139: selected-upstream request-body phase. Runs on the SAME live
         // filter_ctx after upstream selection, before the fields are extracted.
@@ -434,7 +455,7 @@ async fn run_pipeline(
             ctx.retry_policy = retry_policy;
             ctx.route_retry_policy = route_retry_policy;
             if let Some(CanonicalRequestBody(body)) = canonical_body {
-                store_canonical_request_body(ctx, body);
+                store_canonical_request_body(ctx, Some(body));
             }
             if let Some(AdaptedRequestBody(body)) = adapted_body {
                 store_adapted_request_body(ctx, body);

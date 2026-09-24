@@ -91,7 +91,9 @@ use crate::{
     SubRequestResponseMode, SubResponse,
     actions::Rejection,
     context::PendingStreamChunks,
-    extensions::{BoundUpstream, BoundUpstreamFrozen, RequestExtensions, SelectedClusterApplication},
+    extensions::{
+        BoundRequestBodyRewrite, BoundUpstream, BoundUpstreamFrozen, RequestExtensions, SelectedClusterApplication,
+    },
     results::RetainedFilterResults,
 };
 
@@ -101,6 +103,9 @@ struct ParentUpstreamState {
     binding: Option<BoundUpstream>,
     /// Whether the parent binding had already reached its freeze point.
     frozen: bool,
+    /// Body the parent's bound-upstream phase rewrote, kept away from the
+    /// nested pipeline so its executor cannot take it as its own.
+    body_rewrite: Option<BoundRequestBodyRewrite>,
 }
 
 /// Stack form supports filtered sub-requests nested inside another filtered
@@ -113,6 +118,7 @@ fn enter_nested_upstream_scope(extensions: &mut RequestExtensions) {
     let state = ParentUpstreamState {
         binding: extensions.get::<BoundUpstream>().cloned(),
         frozen: extensions.get::<BoundUpstreamFrozen>().is_some(),
+        body_rewrite: extensions.remove::<BoundRequestBodyRewrite>(),
     };
     let mut states = extensions.remove::<ParentUpstreamStates>().unwrap_or_default();
     states.0.push(state);
@@ -131,11 +137,15 @@ fn restore_parent_upstream_scope(extensions: &mut RequestExtensions) {
     };
     extensions.remove::<BoundUpstream>();
     extensions.remove::<BoundUpstreamFrozen>();
+    extensions.remove::<BoundRequestBodyRewrite>();
     if let Some(binding) = state.binding {
         extensions.insert(binding);
     }
     if state.frozen {
         extensions.insert(BoundUpstreamFrozen);
+    }
+    if let Some(body_rewrite) = state.body_rewrite {
+        extensions.insert(body_rewrite);
     }
     if !states.0.is_empty() {
         extensions.insert(states);
@@ -729,8 +739,8 @@ impl FilteredSubrequestExecutor {
             if self.accounting.exceeds_limit(&filter_ctx.extensions) {
                 return Ok(RawResponse::Rejected(Rejection::status(413)));
             }
-            if pipeline.body_capabilities().any_bound_upstream_request_body_writer {
-                request_body.clone_from(&filter_ctx.buffered_request_body);
+            if let Some(rewritten) = filter_ctx.take_bound_request_body_rewrite() {
+                request_body = Some(rewritten);
             }
             if !pre_read_body {
                 let action = pipeline

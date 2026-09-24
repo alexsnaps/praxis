@@ -6448,6 +6448,99 @@ async fn bound_upstream_barrier_runs_participant_and_commits_body() {
         Some(&b"payload"[..]),
         "the barrier must commit the body back into the context"
     );
+    assert!(
+        ctx.take_bound_request_body_rewrite().is_none(),
+        "a read-only participant must not replace the forwarded body"
+    );
+}
+
+/// Read-write participant that appends `|bound` at the barrier and later, at
+/// its own header-phase position, takes the buffered body the way a
+/// body-consuming request filter does.
+struct AppendThenTakeFilter;
+
+#[async_trait]
+impl HttpFilter for AppendThenTakeFilter {
+    fn name(&self) -> &'static str {
+        "append_then_take"
+    }
+
+    fn bound_upstream_request_body_access(&self) -> BodyAccess {
+        BodyAccess::ReadWrite
+    }
+
+    fn request_body_mode(&self) -> BodyMode {
+        BodyMode::StreamBuffer {
+            max_bytes: Some(65_536),
+        }
+    }
+
+    async fn on_request(&self, ctx: &mut crate::HttpFilterContext<'_>) -> Result<FilterAction, FilterError> {
+        drop(ctx.buffered_request_body.take());
+        Ok(FilterAction::Continue)
+    }
+
+    async fn on_bound_upstream_request_body(
+        &self,
+        _ctx: &mut crate::HttpFilterContext<'_>,
+        body: &mut Option<Bytes>,
+    ) -> Result<crate::BoundUpstreamBodyOutcome, FilterError> {
+        let mut output = body.as_ref().map_or_else(Vec::new, |bytes| bytes.to_vec());
+        output.extend_from_slice(b"|bound");
+        *body = Some(Bytes::from(output));
+        Ok(crate::BoundUpstreamBodyOutcome::Continue)
+    }
+}
+
+#[tokio::test]
+async fn bound_upstream_barrier_rewrite_survives_a_later_take() {
+    let pipeline = make_pipeline(vec![binding_router("inference"), Box::new(AppendThenTakeFilter)]);
+    let req = crate::test_utils::make_request(Method::POST, "/v1/responses");
+    let mut ctx = crate::test_utils::make_filter_context(&req);
+    ctx.buffered_request_body = Some(Bytes::from_static(b"payload"));
+
+    let action = pipeline.execute_http_request(&mut ctx).await.unwrap();
+
+    assert!(matches!(action, FilterAction::Continue), "pipeline should continue");
+    assert!(
+        ctx.buffered_request_body.is_none(),
+        "the participant's own on_request took the buffered body"
+    );
+    assert_eq!(
+        ctx.take_bound_request_body_rewrite().as_deref(),
+        Some(&b"payload|bound"[..]),
+        "the barrier must record the writer's output where later filters cannot reach it"
+    );
+    assert!(
+        ctx.take_bound_request_body_rewrite().is_none(),
+        "the rewrite is handed to the transport once"
+    );
+}
+
+#[tokio::test]
+async fn bound_upstream_barrier_skipped_writer_records_no_rewrite() {
+    let mismatch: Vec<praxis_core::config::Condition> =
+        serde_yaml::from_str("- when:\n    bound_upstream:\n      application_protocol: other\n").unwrap();
+    let pipeline = make_pipeline_with_conditions(vec![
+        (binding_router("inference"), vec![]),
+        (Box::new(AppendThenTakeFilter), mismatch),
+    ]);
+    let req = crate::test_utils::make_request(Method::POST, "/v1/responses");
+    let mut ctx = crate::test_utils::make_filter_context(&req);
+    ctx.buffered_request_body = Some(Bytes::from_static(b"payload"));
+
+    let action = pipeline.execute_http_request(&mut ctx).await.unwrap();
+
+    assert!(matches!(action, FilterAction::Continue), "pipeline should continue");
+    assert!(
+        ctx.take_bound_request_body_rewrite().is_none(),
+        "a writer skipped by its conditions must not replace the forwarded body"
+    );
+    assert_eq!(
+        ctx.buffered_request_body.as_deref(),
+        Some(&b"payload"[..]),
+        "a skipped writer leaves the buffered body untouched"
+    );
 }
 
 #[tokio::test]

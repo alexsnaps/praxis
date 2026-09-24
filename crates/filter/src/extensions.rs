@@ -24,6 +24,8 @@ use std::{
     sync::Arc,
 };
 
+use bytes::Bytes;
+
 // -----------------------------------------------------------------------------
 // AuthenticatedIdentity
 // -----------------------------------------------------------------------------
@@ -196,6 +198,19 @@ pub(crate) struct BoundUpstream {
     /// Opaque application provider of the bound cluster, if tagged.
     application_provider: Option<Arc<str>>,
 }
+
+/// The request body a bound-upstream read-write participant produced at the
+/// binding barrier.
+///
+/// Recorded only when a writer actually ran, so the transport forwards and
+/// replays the barrier's output even if a later request filter takes or
+/// replaces the buffered body. Crate-private so no filter can forge it; the
+/// transport reads it through
+/// [`HttpFilterContext::take_bound_request_body_rewrite`].
+///
+/// [`HttpFilterContext::take_bound_request_body_rewrite`]: crate::HttpFilterContext::take_bound_request_body_rewrite
+#[derive(Clone, Debug)]
+pub(crate) struct BoundRequestBodyRewrite(pub(crate) Bytes);
 
 /// Request-scoped marker that freezes [`BoundUpstream`] and records that the
 /// once-per-request bound-body barrier has run.

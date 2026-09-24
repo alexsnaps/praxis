@@ -22,7 +22,9 @@ use crate::{
     FilterError, IterationState,
     body::BodyMode,
     condition::{ConditionError, HeaderSource},
-    extensions::{BoundUpstream, BoundUpstreamFrozen, RequestExtensions, SelectedClusterApplication},
+    extensions::{
+        BoundRequestBodyRewrite, BoundUpstream, BoundUpstreamFrozen, RequestExtensions, SelectedClusterApplication,
+    },
     pipeline::{body::merge_body_mode, catalog::ClusterApplicationCatalog},
     results::FilterResultSet,
 };
@@ -729,6 +731,19 @@ impl HttpFilterContext<'_> {
     /// retarget the request after body processing.
     pub(crate) fn bound_upstream_frozen(&self) -> bool {
         self.extensions.get::<BoundUpstreamFrozen>().is_some()
+    }
+
+    /// Take the request body the bound-upstream body phase rewrote, if a
+    /// read-write participant ran for this request.
+    ///
+    /// The transport calls this once after the request phase and forwards the
+    /// returned body, replaying it on retry, in place of the pre-read body.
+    /// `None` means the pre-read body stands.
+    #[doc(hidden)]
+    pub fn take_bound_request_body_rewrite(&mut self) -> Option<bytes::Bytes> {
+        self.extensions
+            .remove::<BoundRequestBodyRewrite>()
+            .map(|rewrite| rewrite.0)
     }
 
     /// Freeze the request's logical upstream binding.

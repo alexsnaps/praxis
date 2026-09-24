@@ -1130,6 +1130,30 @@ fn error_into_parts_restores_parent_upstream_scope() {
 }
 
 #[test]
+fn nested_upstream_scope_shields_parent_body_rewrite() {
+    use crate::extensions::BoundRequestBodyRewrite;
+
+    let mut extensions = crate::RequestExtensions::default();
+    extensions.insert(BoundRequestBodyRewrite(bytes::Bytes::from_static(b"parent")));
+
+    super::enter_nested_upstream_scope(&mut extensions);
+    assert!(
+        extensions.get::<BoundRequestBodyRewrite>().is_none(),
+        "the nested pipeline's executor must not take the parent's rewrite as its own"
+    );
+    extensions.insert(BoundRequestBodyRewrite(bytes::Bytes::from_static(b"child")));
+    super::restore_parent_upstream_scope(&mut extensions);
+
+    assert_eq!(
+        extensions
+            .get::<BoundRequestBodyRewrite>()
+            .map(|rewrite| rewrite.0.as_ref()),
+        Some(&b"parent"[..]),
+        "leaving the nested scope must drop the child's rewrite and restore the parent's"
+    );
+}
+
+#[test]
 fn nested_upstream_scope_restores_parent_binding_and_freeze() {
     use std::sync::Arc;
 

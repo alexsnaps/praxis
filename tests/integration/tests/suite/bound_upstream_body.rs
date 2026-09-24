@@ -46,6 +46,39 @@ impl HttpFilter for AppendBoundMarker {
     }
 }
 
+/// Appends `|bound` at the barrier, then takes the buffered body in its own
+/// later `on_request`, the way a request filter that consumes the body does.
+struct AppendBoundThenTakeBuffered;
+
+#[async_trait::async_trait]
+impl HttpFilter for AppendBoundThenTakeBuffered {
+    fn name(&self) -> &'static str {
+        "append_bound_then_take_buffered"
+    }
+
+    async fn on_request(&self, ctx: &mut HttpFilterContext<'_>) -> Result<FilterAction, FilterError> {
+        drop(ctx.buffered_request_body.take());
+        Ok(FilterAction::Continue)
+    }
+
+    fn bound_upstream_request_body_access(&self) -> BodyAccess {
+        BodyAccess::ReadWrite
+    }
+
+    fn request_body_mode(&self) -> BodyMode {
+        BodyMode::StreamBuffer { max_bytes: Some(4096) }
+    }
+
+    async fn on_bound_upstream_request_body(
+        &self,
+        _ctx: &mut HttpFilterContext<'_>,
+        body: &mut Option<Bytes>,
+    ) -> Result<BoundUpstreamBodyOutcome, FilterError> {
+        append(body, b"|bound");
+        Ok(BoundUpstreamBodyOutcome::Continue)
+    }
+}
+
 struct AppendBoundAndSelectedMarkers;
 
 #[async_trait::async_trait]
@@ -85,6 +118,52 @@ impl HttpFilter for AppendBoundAndSelectedMarkers {
         body: &mut Option<Bytes>,
     ) -> Result<SelectedUpstreamBodyOutcome, FilterError> {
         append(body, b"|selected");
+        Ok(SelectedUpstreamBodyOutcome::Continue)
+    }
+}
+
+/// Empties the body at the barrier, then reports whether the selected-upstream
+/// phase received `none` or `some` body.
+struct EmptyBoundThenReportSelected;
+
+#[async_trait::async_trait]
+impl HttpFilter for EmptyBoundThenReportSelected {
+    fn name(&self) -> &'static str {
+        "empty_bound_then_report_selected"
+    }
+
+    async fn on_request(&self, _ctx: &mut HttpFilterContext<'_>) -> Result<FilterAction, FilterError> {
+        Ok(FilterAction::Continue)
+    }
+
+    fn bound_upstream_request_body_access(&self) -> BodyAccess {
+        BodyAccess::ReadWrite
+    }
+
+    fn selected_upstream_request_body_access(&self) -> BodyAccess {
+        BodyAccess::ReadWrite
+    }
+
+    fn request_body_mode(&self) -> BodyMode {
+        BodyMode::StreamBuffer { max_bytes: Some(4096) }
+    }
+
+    async fn on_bound_upstream_request_body(
+        &self,
+        _ctx: &mut HttpFilterContext<'_>,
+        body: &mut Option<Bytes>,
+    ) -> Result<BoundUpstreamBodyOutcome, FilterError> {
+        *body = Some(Bytes::new());
+        Ok(BoundUpstreamBodyOutcome::Continue)
+    }
+
+    async fn on_selected_upstream_request_body(
+        &self,
+        _ctx: &mut HttpFilterContext<'_>,
+        body: &mut Option<Bytes>,
+    ) -> Result<SelectedUpstreamBodyOutcome, FilterError> {
+        let observed: &'static [u8] = if body.is_none() { b"none" } else { b"some" };
+        *body = Some(Bytes::from_static(observed));
         Ok(SelectedUpstreamBodyOutcome::Continue)
     }
 }
@@ -339,6 +418,30 @@ fn rewrite_reaches_direct_bound_dispatch_exactly_once() {
 }
 
 #[test]
+fn rewrite_survives_a_later_filter_taking_the_buffered_body() {
+    let backend = start_echo_backend();
+    let proxy_port = free_port();
+    let config = Config::from_yaml(&direct_yaml(
+        proxy_port,
+        backend.port(),
+        "append_bound_then_take_buffered",
+    ))
+    .unwrap();
+    let registry = registry_with("append_bound_then_take_buffered", || {
+        Box::new(AppendBoundThenTakeBuffered)
+    });
+    let proxy = start_full_proxy_with_registry(&config, &registry);
+
+    let (status, body) = http_post(proxy.addr(), "/echo", "original");
+
+    assert_eq!(status, 200, "the rewritten request should be forwarded");
+    assert_eq!(
+        body, "original|bound",
+        "the body forwarded is the barrier's output, not whatever the buffer holds when the request phase ends"
+    );
+}
+
+#[test]
 fn rewrite_repairs_chunked_request_framing() {
     let backend = start_header_echo_backend();
     let proxy_port = free_port();
@@ -398,6 +501,30 @@ fn selected_phase_receives_bound_rewrite() {
 
     assert_eq!(status, 200);
     assert_eq!(body, "original|bound|selected");
+}
+
+#[test]
+fn selected_phase_sees_no_body_after_bound_rewrite_empties_it() {
+    let backend = start_echo_backend();
+    let proxy_port = free_port();
+    let config = Config::from_yaml(&direct_yaml(
+        proxy_port,
+        backend.port(),
+        "empty_bound_then_report_selected",
+    ))
+    .unwrap();
+    let registry = registry_with("empty_bound_then_report_selected", || {
+        Box::new(EmptyBoundThenReportSelected)
+    });
+    let proxy = start_full_proxy_with_registry(&config, &registry);
+
+    let (status, body) = http_post(proxy.addr(), "/echo", "original");
+
+    assert_eq!(status, 200, "the request should be forwarded");
+    assert_eq!(
+        body, "none",
+        "an emptied bound rewrite must reach the selected-upstream phase as no body"
+    );
 }
 
 #[test]

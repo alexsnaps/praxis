@@ -244,8 +244,7 @@ fn selected_upstream_body_mode(filter: &dyn crate::filter::HttpFilter) -> BodyMo
 /// effective `request_body_mode`) because the bound-upstream barrier operates
 /// on the same buffered request body: the pipeline must buffer it (a bounded
 /// `StreamBuffer`) so the canonical body is populated before the request
-/// phase reaches the binding router. It also sets bound-specific flags so
-/// the executor can skip the barrier entirely when no filter participates.
+/// phase reaches the binding router.
 ///
 /// The contributed mode is promoted defensively to a bounded `StreamBuffer`
 /// capped at [`ABSOLUTE_MAX_BODY_BYTES`], mirroring the selected-upstream
@@ -260,7 +259,6 @@ fn accumulate_bound_upstream_request_body(caps: &mut BodyCapabilities, filter: &
     caps.needs_bound_upstream_request_body = true;
     caps.needs_request_body = true;
     if access == BodyAccess::ReadWrite {
-        caps.any_bound_upstream_request_body_writer = true;
         caps.any_request_body_writer = true;
     }
     merge_body_mode(&mut caps.request_body_mode, buffered_body_mode(filter));
@@ -848,10 +846,6 @@ mod tests {
             "bound participant must contribute to the global request-body need"
         );
         assert!(
-            caps.any_bound_upstream_request_body_writer,
-            "ReadWrite bound participant should set the bound writer flag"
-        );
-        assert!(
             caps.any_request_body_writer,
             "ReadWrite bound participant must contribute to the global writer flag"
         );
@@ -882,10 +876,6 @@ mod tests {
         assert!(
             caps.needs_request_body,
             "read-only bound participant needs request body"
-        );
-        assert!(
-            !caps.any_bound_upstream_request_body_writer,
-            "read-only bound participant must not set the bound writer flag"
         );
         assert!(
             !caps.any_request_body_writer,
