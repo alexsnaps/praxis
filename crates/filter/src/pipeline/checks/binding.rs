@@ -266,8 +266,8 @@ pub(in crate::pipeline) fn check_irr_coexistence(filters: &[PipelineFilter], nam
         errors.push(
             "iterative_request_router and a top-level router in the same chain, \
              but no load_balancer with cluster_source: bound_upstream runs after \
-             the router (an answering filter's branch_chains run only when it \
-             fails open): add one on the direct path or inside a reachable IRR \
+             the router (an IRR's own branch_chains run only when it fails \
+             open): add one on the direct path or inside a reachable IRR \
              step, or remove the router along with anything that reads its \
              binding"
                 .to_owned(),
@@ -530,6 +530,15 @@ impl<'a> ClusterScan<'a> {
     fn run(&self, filters: &[PipelineFilter], pf: &PipelineFilter, nested: bool, endings: &mut Endings) -> bool {
         if let Some(ending) = self.ends_request(pf) {
             endings.add(ending);
+            if falls_back_to_branches(pf) {
+                for branch in fallback_branches(pf) {
+                    let fallback = self.chain(&branch.filters, 0, true);
+                    endings.merge(fallback.without(Ending::FellThrough));
+                    if !fallback.has(Ending::FellThrough) {
+                        break;
+                    }
+                }
+            }
             return false;
         }
         for branch in &pf.branches {
@@ -949,16 +958,15 @@ pub(super) fn any_consumes_bound_upstream(filters: &[PipelineFilter]) -> bool {
 /// from the logical binding.
 ///
 /// A filter that always answers the request never continues to its branches,
-/// so they only count when it fails open and an error falls through to them.
+/// so they only count when it can fail open into them.
 fn hosts_bound_consumer(pf: &PipelineFilter) -> bool {
-    let runs_branches = !always_answers(pf) || pf.failure_mode == FailureMode::Open;
+    let consumes = |branch: &ResolvedBranch| branch.filters.iter().any(hosts_bound_consumer);
     pf.filter.consumes_bound_upstream()
-        || (runs_branches
-            && pf
-                .branches
-                .iter()
-                .flat_map(|branch| &branch.filters)
-                .any(hosts_bound_consumer))
+        || if always_answers(pf) {
+            falls_back_to_branches(pf) && fallback_branches(pf).any(consumes)
+        } else {
+            pf.branches.iter().any(consumes)
+        }
 }
 
 // -----------------------------------------------------------------------------
@@ -976,11 +984,32 @@ fn has_bound_upstream_condition(pf: &PipelineFilter) -> bool {
     })
 }
 
-/// Whether the filter always answers the request itself instead of passing it
-/// on.
+/// Whether validation treats the filter as answering every request itself: a
+/// built-in answering filter, or one that declares terminal responses (the
+/// IRR).
+///
+/// Declaring terminal responses only says a filter *may* answer; like the
+/// control-flow walk, the binding checks assume it never continues past
+/// itself. Only a fail-open IRR runs its branches, as a fallback (see
+/// [`falls_back_to_branches`]).
 fn always_answers(pf: &PipelineFilter) -> bool {
     ANSWERING_FILTERS.contains(&pf.filter.name())
         || matches!(&pf.filter, AnyFilter::Http(filter) if filter.produces_terminal_response())
+}
+
+/// Whether an answering filter can fail open, which runs its branches as a
+/// fallback. The built-in answering filters never fail, so only a filter that
+/// declares terminal responses (the IRR) with `failure_mode: open` does.
+fn falls_back_to_branches(pf: &PipelineFilter) -> bool {
+    pf.failure_mode == FailureMode::Open
+        && !ANSWERING_FILTERS.contains(&pf.filter.name())
+        && matches!(&pf.filter, AnyFilter::Http(filter) if filter.produces_terminal_response())
+}
+
+/// The branches a failed filter can fall back to: an error writes no filter
+/// results, so only its unconditional branches can fire.
+fn fallback_branches(pf: &PipelineFilter) -> impl Iterator<Item = &ResolvedBranch> {
+    pf.branches.iter().filter(|branch| branch.condition.is_none())
 }
 
 /// Whether the filter publishes a logical upstream binding.
@@ -1387,6 +1416,85 @@ mod tests {
     }
 
     #[test]
+    fn answering_builtins_never_fall_back_to_their_branches() {
+        let mut redirect = terminal_filter("redirect");
+        redirect.branches = vec![make_branch_with_filters("fallback", vec![bound_lb(&["a"])])];
+        redirect.failure_mode = FailureMode::Open;
+        let filters = vec![
+            binding_router(&["a"]),
+            redirect,
+            terminal_filter("iterative_request_router"),
+        ];
+
+        let errors = coexistence_errors(&filters);
+
+        assert_eq!(
+            errors.len(),
+            1,
+            "a redirect never errors, so failing open never runs its branch: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn fail_open_irr_fallback_must_serve_every_bound_cluster() {
+        let cases = [
+            (FailureMode::Open, vec!["a"], 1),
+            (FailureMode::Open, vec!["a", "b"], 0),
+            (FailureMode::Closed, vec!["a"], 0),
+        ];
+        for (failure_mode, fallback, expected) in cases {
+            let mut irr = terminal_filter("iterative_request_router");
+            irr.branches = vec![make_branch_with_filters("fallback", vec![bound_lb(&fallback)])];
+            irr.failure_mode = failure_mode;
+            let mut errors = Vec::new();
+
+            check_bound_cluster_coverage(&[binding_router(&["a", "b"]), irr], &mut errors);
+
+            assert_eq!(
+                errors.len(),
+                expected,
+                "an IRR failing {failure_mode:?} into a fallback serving {fallback:?}: {errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn fail_open_fallbacks_that_cannot_fail_a_bound_request_are_accepted() {
+        let lb_branch = make_branch_with_filters("fallback", vec![bound_lb(&["a"])]);
+        let answer_branch = make_branch_with_filters("fallback", vec![terminal_filter("answers")]);
+        let cases = [
+            ("a redirect, which never errors", fail_open("redirect", vec![lb_branch])),
+            ("an IRR with no fallback", fail_open("iterative_request_router", vec![])),
+            (
+                "an IRR whose fallback answers",
+                fail_open("iterative_request_router", vec![answer_branch]),
+            ),
+        ];
+        for (case, host) in cases {
+            let errors = fallback_coverage_errors(host);
+
+            assert!(errors.is_empty(), "{case}: {errors:?}");
+        }
+    }
+
+    #[test]
+    fn terminal_fallback_that_lets_a_cluster_fall_through_is_not_a_failure() {
+        let mut gated = bound_lb(&["a"]);
+        gated.conditions = vec![bound_condition(None, Some("openai"))];
+        let host = fail_open(
+            "iterative_request_router",
+            vec![make_terminal_branch("fallback", vec![gated])],
+        );
+
+        let errors = fallback_coverage_errors(host);
+
+        assert!(
+            errors.is_empty(),
+            "the untagged cluster skips the gated fallback, which the IRR error already failed: {errors:?}"
+        );
+    }
+
+    #[test]
     fn irr_own_branches_count_as_consumers_only_when_it_fails_open() {
         for (failure_mode, allowed) in [(FailureMode::Closed, false), (FailureMode::Open, true)] {
             let mut irr = terminal_filter("iterative_request_router");
@@ -1409,7 +1517,7 @@ mod tests {
         let irr = || named_noop_filter("iterative_request_router", vec![]);
         let mut jump = named_noop_filter("jump", vec![]);
         jump.branches = vec![make_skip_branch("past", 3)];
-        let answer = terminal_filter("static_response");
+        let answer = terminal_filter("answers");
         let cases = [
             ("before the router", vec![consumer(), binding_router(&["a"]), irr()]),
             (
@@ -2988,6 +3096,28 @@ mod tests {
         let names: Vec<&str> = filters.iter().map(|pf| pf.filter.name()).collect();
         let mut errors = Vec::new();
         check_irr_coexistence(filters, &names, &mut errors);
+        errors
+    }
+
+    /// A filter with `failure_mode: open` that declares terminal responses and
+    /// owns `branches`.
+    fn fail_open(name: &'static str, branches: Vec<ResolvedBranch>) -> PipelineFilter {
+        let mut pf = terminal_filter(name);
+        pf.branches = branches;
+        pf.failure_mode = FailureMode::Open;
+        pf
+    }
+
+    /// Coverage errors for a router binding `a` (tagged openai) and untagged
+    /// `b`, followed by `host`.
+    fn fallback_coverage_errors(host: PipelineFilter) -> Vec<String> {
+        let filters = vec![
+            binding_router(&["a", "b"]),
+            metadata_filter("catalog", "a", None, Some("openai")),
+            host,
+        ];
+        let mut errors = Vec::new();
+        check_bound_cluster_coverage(&filters, &mut errors);
         errors
     }
 
