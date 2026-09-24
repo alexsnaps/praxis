@@ -98,4 +98,5 @@ harness = false
 # stays lean; `make test-integration` builds these with --all-features.
 [features]
 policy-engine = ["praxis-filter/policy-engine"]
+upstream-binding = ["praxis-filter/upstream-binding"]
 dhat-heap = ["dep:dhat"]

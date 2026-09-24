@@ -6,9 +6,10 @@
 use std::collections::HashMap;
 
 use praxis_core::config::{Cluster, Config};
+#[cfg(feature = "upstream-binding")]
+use praxis_test_utils::start_full_proxy;
 use praxis_test_utils::{
-    free_port, http_get, http_send, parse_header, parse_status, start_backend_with_shutdown, start_full_proxy,
-    start_proxy,
+    free_port, http_get, http_send, parse_header, parse_status, start_backend_with_shutdown, start_proxy,
 };
 
 // ---------------------------------------------------------------------------
@@ -147,6 +148,7 @@ fn cluster_application_metadata_example_proxies_request() {
     assert_eq!(body, "llm", "response body should come from the tagged backend");
 }
 
+#[cfg(feature = "upstream-binding")]
 #[test]
 fn bound_upstream_condition_example_gates_on_bound_cluster() {
     let openai = start_backend_with_shutdown("openai");

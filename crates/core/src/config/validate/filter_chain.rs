@@ -188,6 +188,15 @@ fn validate_condition_bound_upstream(
     let Some(bound) = &matcher.bound_upstream else {
         return Ok(());
     };
+    #[cfg(not(feature = "upstream-binding"))]
+    {
+        let _ = bound;
+        Err(ProxyError::Config(format!(
+            "filter '{filter}' in chain '{chain_name}': condition {idx} uses \
+             bound_upstream, which needs the upstream-binding build feature"
+        )))
+    }
+    #[cfg(feature = "upstream-binding")]
     if bound.application_protocol.is_none() && bound.application_provider.is_none() {
         return Err(ProxyError::Config(format!(
             "filter '{filter}' in chain '{chain_name}': condition {idx} \
@@ -195,14 +204,17 @@ fn validate_condition_bound_upstream(
              application_protocol or application_provider"
         )));
     }
-    let context = format!("filter '{filter}' in chain '{chain_name}': condition {idx} bound_upstream");
-    if let Some(protocol) = bound.application_protocol.as_deref() {
-        super::validate_application_identifier(protocol, "application_protocol", &context)?;
+    #[cfg(feature = "upstream-binding")]
+    {
+        let context = format!("filter '{filter}' in chain '{chain_name}': condition {idx} bound_upstream");
+        if let Some(protocol) = bound.application_protocol.as_deref() {
+            super::validate_application_identifier(protocol, "application_protocol", &context)?;
+        }
+        if let Some(provider) = bound.application_provider.as_deref() {
+            super::validate_application_identifier(provider, "application_provider", &context)?;
+        }
+        Ok(())
     }
-    if let Some(provider) = bound.application_provider.as_deref() {
-        super::validate_application_identifier(provider, "application_provider", &context)?;
-    }
-    Ok(())
 }
 
 /// Reject empty response-condition predicates on one filter entry.
@@ -667,7 +679,37 @@ fn validate_listener_references(chains: &[FilterChainConfig], listeners: &[Liste
 mod tests {
     use std::fmt::Write as _;
 
-    use crate::config::{Condition, Config};
+    #[cfg(feature = "upstream-binding")]
+    use crate::config::Condition;
+    use crate::config::Config;
+
+    #[cfg(not(feature = "upstream-binding"))]
+    #[test]
+    fn bound_upstream_condition_needs_the_upstream_binding_feature() {
+        let yaml = r#"
+listeners:
+  - name: web
+    address: "127.0.0.1:8080"
+    filter_chains: [main]
+filter_chains:
+  - name: main
+    filters:
+      - filter: router
+        routes: [{path_prefix: "/", cluster: backend}]
+      - filter: headers
+        conditions: [{when: {bound_upstream: {application_provider: openai}}}]
+        response_set: [{name: x-provider, value: openai}]
+      - filter: load_balancer
+        clusters: [{name: backend, endpoints: ["127.0.0.1:9"]}]
+"#;
+
+        let error = Config::from_yaml(yaml).expect_err("a bound_upstream condition is rejected without the feature");
+
+        assert!(
+            error.to_string().contains("needs the upstream-binding build feature"),
+            "the error names the missing feature instead of failing later: {error}"
+        );
+    }
 
     #[test]
     fn reject_empty_chain_name() {
@@ -781,6 +823,7 @@ filter_chains:
         );
     }
 
+    #[cfg(feature = "upstream-binding")]
     #[test]
     fn accept_bound_upstream_condition() {
         let yaml = r#"
@@ -823,6 +866,7 @@ insecure_options:
         );
     }
 
+    #[cfg(feature = "upstream-binding")]
     #[test]
     fn reject_empty_bound_upstream_condition() {
         let yaml = r#"
@@ -859,6 +903,7 @@ insecure_options:
         );
     }
 
+    #[cfg(feature = "upstream-binding")]
     #[test]
     fn reject_non_canonical_bound_upstream_identifier() {
         let yaml = r#"
@@ -896,6 +941,7 @@ insecure_options:
         );
     }
 
+    #[cfg(feature = "upstream-binding")]
     #[test]
     fn reject_malformed_bound_upstream_provider() {
         for (provider, expected) in [
@@ -924,6 +970,7 @@ clusters:
         }
     }
 
+    #[cfg(feature = "upstream-binding")]
     #[test]
     fn reject_malformed_or_empty_bound_upstream_identifier_when_nested() {
         for (location, value, expected) in [
@@ -975,6 +1022,7 @@ filter_chains:
         }
     }
 
+    #[cfg(feature = "upstream-binding")]
     #[test]
     fn reject_malformed_bound_upstream_identifier() {
         let yaml = r#"
@@ -994,6 +1042,7 @@ clusters:
         );
     }
 
+    #[cfg(feature = "upstream-binding")]
     #[test]
     fn reject_empty_bound_upstream_identifier() {
         let yaml = r#"
@@ -1012,6 +1061,7 @@ clusters: [{name: backend, endpoints: ["10.0.0.1:80"]}]
         );
     }
 
+    #[cfg(feature = "upstream-binding")]
     #[test]
     fn reject_scalar_bound_upstream_condition() {
         let error = serde_yaml::from_str::<Condition>("when:\n  bound_upstream: openai\n").unwrap_err();
@@ -1021,6 +1071,7 @@ clusters: [{name: backend, endpoints: ["10.0.0.1:80"]}]
         );
     }
 
+    #[cfg(feature = "upstream-binding")]
     #[test]
     fn bound_upstream_unless_round_trips() {
         let condition: Condition =
@@ -1044,6 +1095,7 @@ clusters: [{name: backend, endpoints: ["10.0.0.1:80"]}]
         );
     }
 
+    #[cfg(feature = "upstream-binding")]
     #[test]
     fn reject_bound_upstream_typo_in_inline_branch_and_irr_step() {
         for (location, nested) in [
@@ -1091,6 +1143,7 @@ filter_chains:
         }
     }
 
+    #[cfg(feature = "upstream-binding")]
     #[test]
     fn reject_bound_upstream_typo_under_unless() {
         let yaml = r#"
@@ -1111,6 +1164,7 @@ clusters:
         );
     }
 
+    #[cfg(feature = "upstream-binding")]
     #[test]
     fn accept_unless_bound_upstream_naming_a_nested_cluster() {
         let yaml = r#"
@@ -1498,6 +1552,7 @@ clusters:
         );
     }
 
+    #[cfg(feature = "upstream-binding")]
     #[test]
     fn reject_bound_upstream_provider_matching_no_cluster() {
         let yaml = r#"
@@ -1518,6 +1573,7 @@ clusters:
         );
     }
 
+    #[cfg(feature = "upstream-binding")]
     #[test]
     fn accept_bound_upstream_matcher_with_untagged_fallthrough_cluster() {
         let yaml = r#"

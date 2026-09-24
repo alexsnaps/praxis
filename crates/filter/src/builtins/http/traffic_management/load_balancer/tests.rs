@@ -853,6 +853,7 @@ async fn irr_style_reuse_untagged_step_clears_prior_application() {
 // Bound Upstream Source Tests
 // -----------------------------------------------------------------------------
 
+#[cfg(feature = "upstream-binding")]
 #[test]
 fn consumes_bound_upstream_reflects_cluster_source() {
     let router_lb = LoadBalancerFilter::new(&[test_cluster("backend", &["127.0.0.1:8080"])]);
@@ -893,6 +894,7 @@ clusters:
     );
 }
 
+#[cfg(feature = "upstream-binding")]
 #[tokio::test]
 async fn bound_upstream_source_selects_bound_cluster_from_config() {
     let config: serde_yaml::Value = serde_yaml::from_str(
@@ -948,6 +950,7 @@ clusters:
     );
 }
 
+#[cfg(feature = "upstream-binding")]
 #[tokio::test]
 async fn bound_upstream_source_does_not_mutate_binding() {
     let lb = LoadBalancerFilter::try_new_with_source(
@@ -988,6 +991,7 @@ async fn bound_upstream_source_does_not_mutate_binding() {
     );
 }
 
+#[cfg(feature = "upstream-binding")]
 #[tokio::test]
 async fn bound_upstream_source_rejects_conflicting_context_cluster() {
     let lb = LoadBalancerFilter::try_new_with_source(
@@ -1017,6 +1021,7 @@ async fn bound_upstream_source_rejects_conflicting_context_cluster() {
     );
 }
 
+#[cfg(feature = "upstream-binding")]
 #[tokio::test]
 async fn bound_upstream_source_preserves_retry_policy_when_conflict_is_rejected() {
     let lb = LoadBalancerFilter::try_new_with_source(
@@ -1047,6 +1052,7 @@ async fn bound_upstream_source_preserves_retry_policy_when_conflict_is_rejected(
     );
 }
 
+#[cfg(feature = "upstream-binding")]
 #[tokio::test]
 async fn bound_upstream_source_with_existing_upstream_preserves_context() {
     let lb = LoadBalancerFilter::try_new_with_source(
@@ -1083,6 +1089,7 @@ async fn bound_upstream_source_with_existing_upstream_preserves_context() {
     );
 }
 
+#[cfg(feature = "upstream-binding")]
 #[tokio::test]
 async fn bound_upstream_source_honors_session_affinity() {
     let lb = LoadBalancerFilter::try_new_with_source(
@@ -1109,6 +1116,7 @@ async fn bound_upstream_source_honors_session_affinity() {
     );
 }
 
+#[cfg(feature = "upstream-binding")]
 #[tokio::test]
 async fn bound_upstream_source_skips_unhealthy_endpoints() {
     let endpoints = ["127.0.0.1:8080", "127.0.0.1:8081"];
@@ -1140,6 +1148,7 @@ async fn bound_upstream_source_skips_unhealthy_endpoints() {
     }
 }
 
+#[cfg(feature = "upstream-binding")]
 #[tokio::test]
 async fn bound_upstream_source_panics_to_all_endpoints_when_none_are_healthy() {
     let endpoints = ["127.0.0.1:8080", "127.0.0.1:8081"];
@@ -1173,6 +1182,7 @@ async fn bound_upstream_source_panics_to_all_endpoints_when_none_are_healthy() {
     );
 }
 
+#[cfg(feature = "upstream-binding")]
 #[tokio::test]
 async fn bound_upstream_source_preserves_consistent_hash_selection() {
     let cluster = cluster_with_strategy(
@@ -1221,6 +1231,7 @@ async fn bound_upstream_source_errors_when_unbound() {
     assert!(ctx.upstream.is_none(), "no upstream may be selected without a binding");
 }
 
+#[cfg(feature = "upstream-binding")]
 #[tokio::test]
 async fn bound_upstream_source_errors_when_bound_cluster_not_declared() {
     let lb = LoadBalancerFilter::try_new_with_source(
@@ -1288,4 +1299,27 @@ fn cluster_with_strategy(name: &str, endpoints: &[&str], strategy: LoadBalancerS
         load_balancer_strategy: strategy,
         ..Cluster::with_defaults(name, endpoints.iter().map(|s| (*s).into()).collect())
     }
+}
+
+#[cfg(not(feature = "upstream-binding"))]
+#[test]
+fn bound_upstream_source_needs_the_upstream_binding_feature() {
+    let config: serde_yaml::Value = serde_yaml::from_str(
+        r#"
+cluster_source: bound_upstream
+clusters:
+  - name: backend
+    endpoints: ["127.0.0.1:9"]
+"#,
+    )
+    .unwrap();
+
+    let error = LoadBalancerFilter::from_config(&config)
+        .map(drop)
+        .expect_err("a bound source is rejected without the feature");
+
+    assert!(
+        error.to_string().contains("needs the upstream-binding build feature"),
+        "the error names the missing feature instead of failing at request time: {error}"
+    );
 }

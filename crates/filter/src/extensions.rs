@@ -24,6 +24,7 @@ use std::{
     sync::Arc,
 };
 
+#[cfg(feature = "bound-upstream-request-body")]
 use bytes::Bytes;
 
 // -----------------------------------------------------------------------------
@@ -209,11 +210,13 @@ pub(crate) struct BoundUpstream {
 /// [`HttpFilterContext::take_bound_request_body_rewrite`].
 ///
 /// [`HttpFilterContext::take_bound_request_body_rewrite`]: crate::HttpFilterContext::take_bound_request_body_rewrite
+#[cfg(feature = "bound-upstream-request-body")]
 #[derive(Clone, Debug)]
 pub(crate) struct BoundRequestBodyRewrite(pub(crate) Bytes);
 
 /// Request-scoped marker that freezes [`BoundUpstream`] and records that the
 /// once-per-request bound-body barrier has run.
+#[cfg(feature = "upstream-binding")]
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct BoundUpstreamFrozen;
 
@@ -222,6 +225,7 @@ impl BoundUpstream {
     /// metadata. The cluster name is mandatory (a route always names a
     /// cluster); protocol and provider are present only when the cluster
     /// declaration tagged them.
+    #[cfg(feature = "upstream-binding")]
     pub(crate) fn new(
         cluster: Arc<str>,
         application_protocol: Option<Arc<str>>,
@@ -409,6 +413,7 @@ mod tests {
     // BoundUpstream Tests
     // -------------------------------------------------------------------------
 
+    #[cfg(feature = "upstream-binding")]
     #[test]
     fn bound_upstream_exposes_cluster_and_metadata() {
         let bound = BoundUpstream::new(
@@ -429,6 +434,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "upstream-binding")]
     #[test]
     fn bound_upstream_allows_untagged_cluster() {
         let bound = BoundUpstream::new(Arc::from("backend"), None, None);

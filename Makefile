@@ -142,8 +142,8 @@ check:
 # caught on every PR rather than only in the all-on or all-off build.
 check-features:
 	@for f in policy-engine config-reload admin-api otel basic-auth-filter \
-	          cloud-events-filter iterative-request-router router-json-aliases \
-	          bound-upstream-request-body chain-binding spiffe; do \
+	          cloud-events-filter upstream-binding iterative-request-router \
+	          router-json-aliases bound-upstream-request-body chain-binding spiffe; do \
 		echo "== cargo check -p praxis-proxy --no-default-features --features $$f --all-targets =="; \
 		cargo check -p praxis-proxy --no-default-features --features "$$f" --all-targets || exit 1; \
 	done

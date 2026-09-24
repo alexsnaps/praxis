@@ -90,6 +90,7 @@ impl AnyFilter {
     /// Whether the filter selects its target cluster from the frozen logical
     /// binding rather than a preceding router (a `cluster_source:
     /// bound_upstream` load balancer). TCP filters never do.
+    #[cfg(feature = "upstream-binding")]
     pub fn consumes_bound_upstream(&self) -> bool {
         match self {
             Self::Http(f) => f.consumes_bound_upstream(),
@@ -99,6 +100,7 @@ impl AnyFilter {
 
     /// Cluster names this filter can load balance from the frozen logical
     /// binding. TCP filters never consume HTTP request bindings.
+    #[cfg(feature = "upstream-binding")]
     pub fn bound_upstream_clusters(&self) -> Vec<String> {
         match self {
             Self::Http(f) => f.bound_upstream_clusters(),
@@ -157,6 +159,7 @@ mod tests {
         assert_eq!(f.name(), "stub_tcp", "Tcp variant should delegate name to inner filter");
     }
 
+    #[cfg(feature = "upstream-binding")]
     #[test]
     fn http_variant_cluster_capabilities_delegate_to_inner_filter() {
         let f = AnyFilter::Http(Box::new(ClusterSelectingHttpFilter));
@@ -182,6 +185,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "upstream-binding")]
     #[test]
     fn http_variant_default_cluster_capabilities_are_empty() {
         let f = AnyFilter::Http(Box::new(StubHttpFilter));
@@ -203,6 +207,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "upstream-binding")]
     #[test]
     fn tcp_variant_has_no_http_cluster_capabilities() {
         let f = AnyFilter::Tcp(Box::new(StubTcpFilter));
@@ -270,9 +275,11 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "upstream-binding")]
     /// Stub HTTP filter with pipeline cluster capabilities.
     struct ClusterSelectingHttpFilter;
 
+    #[cfg(feature = "upstream-binding")]
     #[async_trait]
     impl HttpFilter for ClusterSelectingHttpFilter {
         fn name(&self) -> &'static str {
@@ -291,10 +298,12 @@ mod tests {
             vec!["web".to_owned(), "api".to_owned()]
         }
 
+        #[cfg(feature = "upstream-binding")]
         fn consumes_bound_upstream(&self) -> bool {
             true
         }
 
+        #[cfg(feature = "upstream-binding")]
         fn bound_upstream_clusters(&self) -> Vec<String> {
             vec!["web".to_owned(), "api".to_owned()]
         }

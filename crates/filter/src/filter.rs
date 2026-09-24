@@ -5,6 +5,7 @@
 //!
 //! Every HTTP filter implements this trait.
 
+#[cfg(feature = "upstream-binding")]
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -12,14 +13,13 @@ use bytes::Bytes;
 use praxis_core::config::InsecureOptions;
 
 pub(crate) use crate::context::HttpFilterContext;
+#[cfg(feature = "upstream-binding")]
+use crate::pipeline::catalog::{ClusterApplicationCatalog, ClusterMetadataDeclaration};
 use crate::{
     actions::{FilterAction, SelectedUpstreamBodyOutcome},
     body::{BodyAccess, BodyMode},
     builtins::http::payload_processing::compression_config::CompressionConfig,
-    pipeline::{
-        FilterPipeline,
-        catalog::{ClusterApplicationCatalog, ClusterMetadataDeclaration},
-    },
+    pipeline::FilterPipeline,
 };
 
 // -----------------------------------------------------------------------------
@@ -134,23 +134,22 @@ pub trait HttpFilter: Send + Sync {
     /// clusters leave the default empty list.
     ///
     /// [`load_balancer_clusters`]: HttpFilter::load_balancer_clusters
+    #[cfg(feature = "upstream-binding")]
     fn declared_cluster_metadata(&self) -> Vec<ClusterMetadataDeclaration> {
         Vec::new()
     }
 
-    /// Whether this filter publishes a logical upstream binding
-    /// (`BoundUpstream`) when it selects a cluster.
+    /// Whether this filter publishes the request's logical upstream binding.
     ///
-    /// Only a binding filter populates the view a `bound_upstream` condition
-    /// reads and triggers the bound-upstream request-body phase. Pipeline
-    /// validation uses this to reject a `bound_upstream` condition or a
-    /// bound-body hook that no binding filter can precede — the condition
-    /// would silently never match and the hook would silently never run.
-    /// The `router` overrides this; ordinary cluster selectors that only set
-    /// [`HttpFilterContext::cluster`] without publishing a binding leave the
-    /// default.
+    /// Framework-internal: only the built-in `router` can publish, because the
+    /// context API that writes the binding is crate-private, and it reports
+    /// `true` only after [`enable_upstream_binding`] handed it a catalog.
+    /// Pipeline validation treats the first filter that reports `true` as the
+    /// binding router, so an out-of-tree filter must leave the default.
     ///
-    /// [`HttpFilterContext::cluster`]: crate::HttpFilterContext::cluster
+    /// [`enable_upstream_binding`]: HttpFilter::enable_upstream_binding
+    #[doc(hidden)]
+    #[cfg(feature = "upstream-binding")]
     fn binds_upstream(&self) -> bool {
         false
     }
@@ -164,6 +163,7 @@ pub trait HttpFilter: Send + Sync {
     /// ordinary routing pipelines on their pre-binding fast path; other
     /// filters leave the default no-op implementation.
     #[doc(hidden)]
+    #[cfg(feature = "upstream-binding")]
     fn enable_upstream_binding(&mut self, _catalog: Arc<ClusterApplicationCatalog>) {}
 
     /// Whether this filter selects its cluster from the frozen logical
@@ -178,6 +178,7 @@ pub trait HttpFilter: Send + Sync {
     ///
     /// [`HttpFilterContext::cluster`]: crate::HttpFilterContext::cluster
     /// [`load_balancer_clusters`]: HttpFilter::load_balancer_clusters
+    #[cfg(feature = "upstream-binding")]
     fn consumes_bound_upstream(&self) -> bool {
         false
     }
@@ -191,6 +192,7 @@ pub trait HttpFilter: Send + Sync {
     /// pipelines when no binding is guaranteed. This is broader than
     /// [`HttpFilter::consumes_bound_upstream`]: a nested condition or body
     /// participant observes the binding without selecting a cluster from it.
+    #[cfg(feature = "iterative-request-router")]
     fn nested_bound_upstream_readers(&self) -> Vec<String> {
         Vec::new()
     }
@@ -204,6 +206,7 @@ pub trait HttpFilter: Send + Sync {
     /// across every reachable path so a cluster the binding router may bind
     /// must be served by some bound-consuming load balancer. Filters that do
     /// not consume the binding leave the default empty list.
+    #[cfg(feature = "upstream-binding")]
     fn bound_upstream_clusters(&self) -> Vec<String> {
         Vec::new()
     }

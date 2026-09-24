@@ -298,6 +298,7 @@ fn status_5xx_retry_reaches_healthy_backend() {
     assert_eq!(body, "ok");
 }
 
+#[cfg(feature = "upstream-binding")]
 #[test]
 fn status_5xx_retry_reaches_healthy_backend_through_bound_load_balancer() {
     let failing = Backend::status(503, "unavailable").start();

@@ -13,7 +13,7 @@
 # binding it reads would not yet exist and validation rejects the config.
 #
 # Usage:
-#   cargo run -p praxis-proxy -- -c examples/configs/traffic-management/bound-upstream-condition.yaml
+#   cargo run -p praxis-proxy --features upstream-binding -- -c examples/configs/traffic-management/bound-upstream-condition.yaml
 #   curl -i http://localhost:8080/openai/v1/chat/completions   # X-Bound-Provider: openai
 #   curl -i http://localhost:8080/anything                     # no X-Bound-Provider
 

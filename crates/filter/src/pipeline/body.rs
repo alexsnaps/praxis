@@ -138,6 +138,7 @@ pub(super) fn bound_upstream_request_body_indices(filters: &[PipelineFilter]) ->
 ///
 /// Always `false` unless the experimental `bound-upstream-request-body`
 /// feature compiles the hook in.
+#[cfg(feature = "upstream-binding")]
 pub(super) fn participates_in_bound_upstream_body(filter: &dyn crate::filter::HttpFilter) -> bool {
     #[cfg(feature = "bound-upstream-request-body")]
     {

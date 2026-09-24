@@ -195,7 +195,7 @@ pub(in crate::pipeline) fn uses_bound_upstream(filters: &[PipelineFilter]) -> bo
             || matches!(&pf.filter, AnyFilter::Http(filter)
                 if crate::pipeline::body::participates_in_bound_upstream_body(filter.as_ref())
                     || filter.consumes_bound_upstream()
-                    || !filter.nested_bound_upstream_readers().is_empty())
+                    || !nested_bound_upstream_readers(filter.as_ref()).is_empty())
             || pf.branches.iter().any(|branch| uses_bound_upstream(&branch.filters))
     })
 }
@@ -1012,6 +1012,18 @@ fn fallback_branches(pf: &PipelineFilter) -> impl Iterator<Item = &ResolvedBranc
     pf.branches.iter().filter(|branch| branch.condition.is_none())
 }
 
+/// Nested steps of `filter` that read the binding; only the IRR has any.
+#[cfg(feature = "iterative-request-router")]
+fn nested_bound_upstream_readers(filter: &dyn crate::filter::HttpFilter) -> Vec<String> {
+    filter.nested_bound_upstream_readers()
+}
+
+/// Nested steps of `filter` that read the binding; none without the IRR.
+#[cfg(not(feature = "iterative-request-router"))]
+fn nested_bound_upstream_readers(_filter: &dyn crate::filter::HttpFilter) -> Vec<String> {
+    Vec::new()
+}
+
 /// Whether the filter publishes a logical upstream binding.
 fn filter_binds_upstream(pf: &PipelineFilter) -> bool {
     matches!(&pf.filter, AnyFilter::Http(f) if f.binds_upstream())
@@ -1033,7 +1045,7 @@ fn binding_requirement_reason(pf: &PipelineFilter) -> Option<String> {
     let AnyFilter::Http(f) = &pf.filter else {
         return None;
     };
-    let readers = f.nested_bound_upstream_readers();
+    let readers = nested_bound_upstream_readers(f.as_ref());
     if let [reader] = readers.as_slice() {
         Some(format!("nested step '{reader}' reads the logical binding"))
     } else if !readers.is_empty() {

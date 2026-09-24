@@ -119,6 +119,7 @@ impl FilterPipeline {
             ctx.executed_filter_indices[idx] = true;
             // Freeze before this filter's branches run so they, every later
             // filter, and any ReEnter pass all see the one binding.
+            #[cfg(feature = "upstream-binding")]
             if published_first_binding(http_filter, ctx) {
                 ctx.freeze_bound_upstream();
                 #[cfg(feature = "bound-upstream-request-body")]
@@ -628,6 +629,7 @@ impl FilterPipeline {
 // -----------------------------------------------------------------------------
 
 /// Whether `filter` just published the request's first logical binding.
+#[cfg(feature = "upstream-binding")]
 fn published_first_binding(filter: &dyn crate::filter::HttpFilter, ctx: &HttpFilterContext<'_>) -> bool {
     filter.binds_upstream() && !ctx.bound_upstream_frozen() && ctx.bound_cluster().is_some()
 }

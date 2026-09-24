@@ -13,6 +13,7 @@
 use std::collections::HashSet;
 
 use super::filter::PipelineFilter;
+#[cfg(feature = "upstream-binding")]
 use crate::any_filter::AnyFilter;
 
 // -----------------------------------------------------------------------------
@@ -98,6 +99,7 @@ pub(super) fn reachable_lb_clusters(filters: &[PipelineFilter]) -> HashSet<Strin
 /// are exactly the names a bound-consuming load balancer must be able to
 /// resolve. Pipeline validation compares this set against reachable consumer
 /// coverage so every bindable cluster is served on its request path.
+#[cfg(feature = "upstream-binding")]
 pub(super) fn bindable_clusters(filters: &[PipelineFilter]) -> HashSet<String> {
     let mut out = HashSet::new();
     for pf in filters {
@@ -128,7 +130,9 @@ pub(super) fn bindable_clusters(filters: &[PipelineFilter]) -> HashSet<String> {
 )]
 mod tests {
     use super::*;
-    use crate::pipeline::test_filters::{binding_router, lb_filter, noop_filter, selector_filter};
+    #[cfg(feature = "upstream-binding")]
+    use crate::pipeline::test_filters::binding_router;
+    use crate::pipeline::test_filters::{lb_filter, noop_filter, selector_filter};
 
     #[test]
     fn extracts_selected_clusters() {
@@ -322,6 +326,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "upstream-binding")]
     #[test]
     fn bindable_clusters_collects_only_binding_publishers() {
         let filters = vec![
@@ -355,6 +360,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "upstream-binding")]
     #[test]
     fn bindable_clusters_recurses_into_branches() {
         let filters = vec![host_with(None, vec![binding_router(&["nested"])])];

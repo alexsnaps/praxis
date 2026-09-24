@@ -124,6 +124,7 @@ fn ordinary_router_in_terminal_branch_does_not_enable_binding() {
     );
 }
 
+#[cfg(feature = "upstream-binding")]
 #[test]
 fn ordinary_routing_does_not_require_global_cluster_metadata_agreement() {
     let registry = FilterRegistry::with_builtins();
@@ -164,6 +165,7 @@ fn ordinary_routing_does_not_require_global_cluster_metadata_agreement() {
     );
 }
 
+#[cfg(feature = "upstream-binding")]
 #[test]
 fn binding_enabled_routing_requires_global_cluster_metadata_agreement() {
     let registry = FilterRegistry::with_builtins();
@@ -258,6 +260,7 @@ async fn built_binding_router_resolves_metadata_from_pipeline_catalog() {
     );
 }
 
+#[cfg(feature = "upstream-binding")]
 #[test]
 fn deny_branch_before_bound_dispatch_is_accepted_from_yaml() {
     let registry = FilterRegistry::with_builtins();
@@ -378,6 +381,7 @@ fn branch_trace_context_is_checked_by_where_its_branch_runs() {
     }
 }
 
+#[cfg(feature = "upstream-binding")]
 #[test]
 fn binding_enabled_router_in_branch_is_rejected_from_yaml() {
     let registry = FilterRegistry::with_builtins();
@@ -6294,12 +6298,14 @@ fn set_session_stores_propagates_into_branch_nested_pipelines() {
 
 /// A filter that publishes a logical upstream binding during `on_request`,
 /// mirroring what the trusted `router` does after it resolves a route.
+#[cfg(feature = "upstream-binding")]
 struct BindingRouterFilter {
     cluster: &'static str,
     protocol: Option<&'static str>,
     provider: Option<&'static str>,
 }
 
+#[cfg(feature = "upstream-binding")]
 #[async_trait]
 impl HttpFilter for BindingRouterFilter {
     fn name(&self) -> &'static str {
@@ -6325,6 +6331,7 @@ impl HttpFilter for BindingRouterFilter {
     }
 }
 
+#[cfg(feature = "upstream-binding")]
 /// An unconditional `Next` branch over `filters`.
 fn always_branch(filters: Vec<PipelineFilter>) -> ResolvedBranch {
     ResolvedBranch {
@@ -6336,6 +6343,7 @@ fn always_branch(filters: Vec<PipelineFilter>) -> ResolvedBranch {
     }
 }
 
+#[cfg(feature = "upstream-binding")]
 /// A pipeline filter that counts its request-phase runs into `counter`.
 fn counting_filter(
     filter_id: usize,
@@ -6352,6 +6360,7 @@ fn counting_filter(
     )
 }
 
+#[cfg(feature = "upstream-binding")]
 /// A request condition that matches a binding tagged with the openai provider.
 fn openai_gate() -> Vec<praxis_core::config::Condition> {
     serde_yaml::from_str("- when:\n    bound_upstream:\n      application_provider: openai\n").unwrap()
@@ -6359,6 +6368,7 @@ fn openai_gate() -> Vec<praxis_core::config::Condition> {
 
 /// Run the request phase of a pipeline that binds a cluster tagged with
 /// `provider` and then runs `host`.
+#[cfg(feature = "upstream-binding")]
 async fn run_bound_to(provider: &'static str, host: PipelineFilter) {
     let router = PipelineFilter::new(
         0,
@@ -6377,6 +6387,7 @@ async fn run_bound_to(provider: &'static str, host: PipelineFilter) {
     drop(pipeline.execute_http_request(&mut ctx).await.unwrap());
 }
 
+#[cfg(feature = "upstream-binding")]
 #[tokio::test]
 async fn bound_upstream_condition_runs_filter_on_match() {
     let counter = Arc::new(AtomicUsize::new(0));
@@ -6411,6 +6422,7 @@ async fn bound_upstream_condition_runs_filter_on_match() {
     );
 }
 
+#[cfg(feature = "upstream-binding")]
 #[tokio::test]
 async fn bound_upstream_condition_skips_filter_on_mismatch() {
     let counter = Arc::new(AtomicUsize::new(0));
@@ -6445,6 +6457,7 @@ async fn bound_upstream_condition_skips_filter_on_mismatch() {
     );
 }
 
+#[cfg(feature = "upstream-binding")]
 #[tokio::test]
 async fn bound_upstream_condition_inside_branch_subchain_follows_the_binding() {
     for (provider, expected) in [("openai", 1), ("anthropic", 0)] {
@@ -6462,6 +6475,7 @@ async fn bound_upstream_condition_inside_branch_subchain_follows_the_binding() {
     }
 }
 
+#[cfg(feature = "upstream-binding")]
 #[tokio::test]
 async fn bound_gated_branch_host_fires_its_branch_only_when_the_binding_matches() {
     for (provider, expected) in [("openai", 1), ("anthropic", 0)] {
@@ -6479,6 +6493,7 @@ async fn bound_gated_branch_host_fires_its_branch_only_when_the_binding_matches(
     }
 }
 
+#[cfg(feature = "upstream-binding")]
 #[tokio::test]
 async fn bound_upstream_request_gate_controls_response_hook() {
     for (protocol, expected) in [("p1", vec!["gated"]), ("other", vec![])] {
@@ -6520,6 +6535,7 @@ async fn bound_upstream_request_gate_controls_response_hook() {
 // Bound-Upstream Freeze
 // -----------------------------------------------------------------------------
 
+#[cfg(feature = "upstream-binding")]
 fn binding_router(cluster: &'static str) -> Box<dyn HttpFilter> {
     Box::new(BindingRouterFilter {
         cluster,
@@ -6530,8 +6546,10 @@ fn binding_router(cluster: &'static str) -> Box<dyn HttpFilter> {
 
 /// A filter that claims to bind an upstream but publishes nothing, modelling a
 /// router that ran without resolving a route.
+#[cfg(feature = "upstream-binding")]
 struct NonPublishingBindingFilter;
 
+#[cfg(feature = "upstream-binding")]
 #[async_trait]
 impl HttpFilter for NonPublishingBindingFilter {
     fn name(&self) -> &'static str {
@@ -6547,6 +6565,7 @@ impl HttpFilter for NonPublishingBindingFilter {
     }
 }
 
+#[cfg(feature = "upstream-binding")]
 #[tokio::test]
 async fn binding_freeze_waits_for_a_binder_that_publishes() {
     let pipeline = make_pipeline(vec![Box::new(NonPublishingBindingFilter), binding_router("inference")]);
@@ -6567,6 +6586,7 @@ async fn binding_freeze_waits_for_a_binder_that_publishes() {
     assert!(ctx.bound_upstream_frozen(), "the published binding is frozen");
 }
 
+#[cfg(feature = "upstream-binding")]
 #[tokio::test]
 async fn binding_freezes_without_bound_body_participants() {
     let pipeline = make_pipeline(vec![binding_router("first"), binding_router("second")]);
@@ -7518,6 +7538,7 @@ fn conditions_match_selected_rejects_mismatched_selection() {
     );
 }
 
+#[cfg(feature = "upstream-binding")]
 #[test]
 fn filter_request_conditions_match_honors_bound_upstream_view() {
     let cond: Vec<praxis_core::config::Condition> =
@@ -7548,6 +7569,7 @@ fn filter_request_conditions_match_honors_bound_upstream_view() {
     );
 }
 
+#[cfg(feature = "upstream-binding")]
 #[test]
 fn filter_request_conditions_match_fails_closed_for_untagged_binding() {
     let condition: Vec<praxis_core::config::Condition> =

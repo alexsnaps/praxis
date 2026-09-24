@@ -1082,6 +1082,7 @@ async fn staged_upstream_clears_discarded_selection_metadata() {
     );
 }
 
+#[cfg(feature = "upstream-binding")]
 fn nested_upstream_extensions() -> crate::RequestExtensions {
     use std::sync::Arc;
 
@@ -1105,6 +1106,7 @@ fn nested_upstream_extensions() -> crate::RequestExtensions {
     extensions
 }
 
+#[cfg(feature = "upstream-binding")]
 fn assert_parent_upstream_scope(extensions: &crate::RequestExtensions) {
     let binding = extensions
         .get::<crate::extensions::BoundUpstream>()
@@ -1136,6 +1138,7 @@ fn assert_parent_upstream_scope(extensions: &crate::RequestExtensions) {
     );
 }
 
+#[cfg(feature = "upstream-binding")]
 #[test]
 fn error_into_parts_restores_parent_upstream_scope() {
     let extensions = nested_upstream_extensions();
@@ -1144,6 +1147,7 @@ fn error_into_parts_restores_parent_upstream_scope() {
     assert_parent_upstream_scope(&extensions);
 }
 
+#[cfg(feature = "bound-upstream-request-body")]
 #[test]
 fn nested_upstream_scope_shields_parent_body_rewrite() {
     use crate::extensions::BoundRequestBodyRewrite;
@@ -1168,6 +1172,7 @@ fn nested_upstream_scope_shields_parent_body_rewrite() {
     );
 }
 
+#[cfg(feature = "upstream-binding")]
 #[test]
 fn nested_upstream_scope_restores_parent_binding_and_freeze() {
     use std::sync::Arc;
@@ -1215,6 +1220,7 @@ fn nested_upstream_scope_restores_parent_binding_and_freeze() {
     );
 }
 
+#[cfg(feature = "upstream-binding")]
 #[test]
 fn into_parent_extensions_restores_parent_upstream_scope() {
     use std::sync::Arc;
@@ -1257,6 +1263,7 @@ fn into_parent_extensions_restores_parent_upstream_scope() {
     assert_parent_upstream_scope(&extensions);
 }
 
+#[cfg(feature = "upstream-binding")]
 #[test]
 fn into_completion_restores_parent_upstream_scope() {
     use std::sync::Arc;
@@ -1299,6 +1306,7 @@ fn into_completion_restores_parent_upstream_scope() {
     assert_parent_upstream_scope(&completion.extensions);
 }
 
+#[cfg(feature = "upstream-binding")]
 #[tokio::test]
 #[expect(clippy::large_futures, reason = "drives the full executor future in a test")]
 async fn expired_deadline_keeps_the_outer_scope_checkpoint() {
@@ -1359,6 +1367,7 @@ async fn expired_deadline_keeps_the_outer_scope_checkpoint() {
     );
 }
 
+#[cfg(feature = "upstream-binding")]
 #[tokio::test]
 #[expect(clippy::large_futures, reason = "drives the full executor future in a test")]
 async fn execute_restores_the_parent_binding_after_a_child_rebinds() {
@@ -1412,6 +1421,7 @@ async fn execute_restores_the_parent_binding_after_a_child_rebinds() {
     }
 }
 
+#[cfg(feature = "upstream-binding")]
 #[test]
 fn callout_scope_starts_unbound_and_restores_the_parent_binding() {
     use std::sync::Arc;
@@ -1450,6 +1460,7 @@ fn callout_scope_starts_unbound_and_restores_the_parent_binding() {
     );
 }
 
+#[cfg(feature = "upstream-binding")]
 #[tokio::test]
 #[expect(clippy::large_futures, reason = "drives the full executor future in a test")]
 async fn callout_with_its_own_binding_router_ignores_the_parent_binding() {
@@ -3652,6 +3663,7 @@ async fn selected_upstream_phase_enforces_retained_state_ceiling() {
 // Test Utilities: binding restore
 // -----------------------------------------------------------------------------
 
+#[cfg(feature = "upstream-binding")]
 /// Records the binding it sees, then replaces it with a child binding and
 /// clears the freeze, optionally failing afterwards.
 struct RebindChildFilter {
@@ -3659,6 +3671,7 @@ struct RebindChildFilter {
     fails: bool,
 }
 
+#[cfg(feature = "upstream-binding")]
 #[async_trait::async_trait]
 impl crate::HttpFilter for RebindChildFilter {
     fn name(&self) -> &'static str {
@@ -3683,6 +3696,7 @@ impl crate::HttpFilter for RebindChildFilter {
     }
 }
 
+#[cfg(feature = "upstream-binding")]
 /// A pipeline whose first filter rebinds, then routes to `addr`.
 fn rebinding_pipeline(
     addr: std::net::SocketAddr,
@@ -3720,6 +3734,7 @@ fn rebinding_pipeline(
 }
 
 /// Request extensions carrying a frozen parent binding.
+#[cfg(feature = "upstream-binding")]
 fn frozen_parent_extensions() -> crate::RequestExtensions {
     let mut extensions = crate::RequestExtensions::default();
     extensions.insert(crate::extensions::BoundUpstream::new(
@@ -3731,6 +3746,7 @@ fn frozen_parent_extensions() -> crate::RequestExtensions {
     extensions
 }
 
+#[cfg(feature = "upstream-binding")]
 /// A callout executor over a test connector.
 fn test_callout_executor() -> crate::FilteredSubrequestExecutor {
     let client = praxis_core::subrequest::SubRequestClient::new(crate::test_support::connector(1, None));

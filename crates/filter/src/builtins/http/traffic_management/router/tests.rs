@@ -306,6 +306,7 @@ async fn router_without_pipeline_binding_opt_in_skips_logical_publication() {
     );
 }
 
+#[cfg(feature = "upstream-binding")]
 #[tokio::test]
 async fn on_request_resolves_binding_metadata_from_catalog() {
     use std::sync::Arc;
@@ -341,6 +342,7 @@ async fn on_request_resolves_binding_metadata_from_catalog() {
     );
 }
 
+#[cfg(feature = "upstream-binding")]
 #[tokio::test]
 async fn on_request_catalog_miss_publishes_name_only_binding() {
     use std::sync::Arc;
@@ -398,6 +400,7 @@ async fn on_request_rebind_replaces_previous_binding() {
     );
 }
 
+#[cfg(feature = "upstream-binding")]
 #[tokio::test]
 async fn frozen_same_cluster_republication_is_idempotent() {
     let router = make_router(vec![prefix_route("/", "stable")]);
@@ -422,6 +425,7 @@ async fn frozen_same_cluster_republication_is_idempotent() {
     );
 }
 
+#[cfg(feature = "upstream-binding")]
 #[tokio::test]
 async fn frozen_rebind_rejects_without_mutating_route_context() {
     let mut first = RouterFilter::from_config(
@@ -2206,7 +2210,12 @@ fn json_alias_max_bytes_at_upper_bound_passes_bounds_check() {
 // -----------------------------------------------------------------------------
 
 fn make_router(routes: Vec<Route>) -> RouterFilter {
+    #[cfg_attr(
+        not(feature = "upstream-binding"),
+        expect(unused_mut, reason = "only binding enablement mutates the router")
+    )]
     let mut router = RouterFilter::new(routes).expect("test routes should be valid");
+    #[cfg(feature = "upstream-binding")]
     router.enable_upstream_binding(std::sync::Arc::default());
     router
 }

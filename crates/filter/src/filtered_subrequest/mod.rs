@@ -86,18 +86,21 @@ pub(crate) use self::{
 pub(crate) use self::{continuation::SubrequestCompletion, sanitize::normalize_response_status};
 #[cfg(feature = "chain-binding")]
 use crate::credentials::{PendingCredentials, ResolvedDestination};
+#[cfg(feature = "bound-upstream-request-body")]
+use crate::extensions::BoundRequestBodyRewrite;
+#[cfg(feature = "upstream-binding")]
+use crate::extensions::{BoundUpstream, BoundUpstreamFrozen};
 use crate::{
     FilterAction, FilterError, FilterPipeline, StreamTermination, StreamTerminationCause, SubRequest,
     SubRequestResponseMode, SubResponse,
     actions::Rejection,
     context::PendingStreamChunks,
-    extensions::{
-        BoundRequestBodyRewrite, BoundUpstream, BoundUpstreamFrozen, RequestExtensions, SelectedClusterApplication,
-    },
+    extensions::{RequestExtensions, SelectedClusterApplication},
     results::RetainedFilterResults,
 };
 
 /// Parent routing state shadowed while a nested pipeline executes.
+#[cfg(feature = "upstream-binding")]
 struct ParentUpstreamState {
     /// Parent request's logical cluster binding.
     binding: Option<BoundUpstream>,
@@ -105,11 +108,13 @@ struct ParentUpstreamState {
     frozen: bool,
     /// Body the parent's bound-upstream phase rewrote, kept away from the
     /// nested pipeline so its executor cannot take it as its own.
+    #[cfg(feature = "bound-upstream-request-body")]
     body_rewrite: Option<BoundRequestBodyRewrite>,
 }
 
 /// Stack form supports filtered sub-requests nested inside another filtered
 /// sub-request without overwriting the outer restoration checkpoint.
+#[cfg(feature = "upstream-binding")]
 #[derive(Default)]
 struct ParentUpstreamStates(Vec<ParentUpstreamState>);
 
@@ -120,6 +125,7 @@ struct ParentUpstreamStates(Vec<ParentUpstreamState>);
 /// binding router can publish without colliding with the parent's frozen one.
 /// The parent's bound-body rewrite is always set aside so the nested executor
 /// cannot take it as its own.
+#[cfg(feature = "upstream-binding")]
 fn enter_nested_upstream_scope(extensions: &mut RequestExtensions, inherits_binding: bool) {
     let (binding, frozen) = if inherits_binding {
         (
@@ -135,6 +141,7 @@ fn enter_nested_upstream_scope(extensions: &mut RequestExtensions, inherits_bind
     let state = ParentUpstreamState {
         binding,
         frozen,
+        #[cfg(feature = "bound-upstream-request-body")]
         body_rewrite: extensions.remove::<BoundRequestBodyRewrite>(),
     };
     let mut states = extensions.remove::<ParentUpstreamStates>().unwrap_or_default();
@@ -143,7 +150,15 @@ fn enter_nested_upstream_scope(extensions: &mut RequestExtensions, inherits_bind
     extensions.remove::<SelectedClusterApplication>();
 }
 
+/// Without the `upstream-binding` feature there is no binding to shadow; a
+/// nested pipeline only starts without the parent's upstream selection.
+#[cfg(not(feature = "upstream-binding"))]
+fn enter_nested_upstream_scope(extensions: &mut RequestExtensions, _inherits_binding: bool) {
+    extensions.remove::<SelectedClusterApplication>();
+}
+
 /// Remove nested routing state and restore the most recent parent checkpoint.
+#[cfg(feature = "upstream-binding")]
 fn restore_parent_upstream_scope(extensions: &mut RequestExtensions) {
     extensions.remove::<SelectedClusterApplication>();
     let Some(mut states) = extensions.remove::<ParentUpstreamStates>() else {
@@ -154,19 +169,29 @@ fn restore_parent_upstream_scope(extensions: &mut RequestExtensions) {
     };
     extensions.remove::<BoundUpstream>();
     extensions.remove::<BoundUpstreamFrozen>();
-    extensions.remove::<BoundRequestBodyRewrite>();
     if let Some(binding) = state.binding {
         extensions.insert(binding);
     }
     if state.frozen {
         extensions.insert(BoundUpstreamFrozen);
     }
-    if let Some(body_rewrite) = state.body_rewrite {
-        extensions.insert(body_rewrite);
+    #[cfg(feature = "bound-upstream-request-body")]
+    {
+        extensions.remove::<BoundRequestBodyRewrite>();
+        if let Some(body_rewrite) = state.body_rewrite {
+            extensions.insert(body_rewrite);
+        }
     }
     if !states.0.is_empty() {
         extensions.insert(states);
     }
+}
+
+/// Without the `upstream-binding` feature the only nested state to clear is
+/// the nested pipeline's upstream selection.
+#[cfg(not(feature = "upstream-binding"))]
+fn restore_parent_upstream_scope(extensions: &mut RequestExtensions) {
+    extensions.remove::<SelectedClusterApplication>();
 }
 
 // -----------------------------------------------------------------------------

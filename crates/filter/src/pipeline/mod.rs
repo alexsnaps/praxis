@@ -34,6 +34,7 @@ pub(crate) mod body;
 pub(crate) mod branch;
 mod build;
 pub(crate) mod build_branch;
+#[cfg(feature = "upstream-binding")]
 pub(crate) mod catalog;
 mod checks;
 mod clusters;
@@ -766,6 +767,7 @@ fn for_each_pipeline_filter(filters: &[PipelineFilter], visit: &mut dyn FnMut(&P
 /// catalog) and validation (which detects conflicting declarations). Walks
 /// the same reachable filter set as the other pipeline-wide scans so a
 /// cluster declared only inside a branch still contributes.
+#[cfg(feature = "upstream-binding")]
 pub(super) fn collect_cluster_declarations(filters: &[PipelineFilter]) -> Vec<catalog::ClusterMetadataDeclaration> {
     let mut declarations = Vec::new();
     for_each_pipeline_filter(filters, &mut |pf| {

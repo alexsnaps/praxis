@@ -32,9 +32,16 @@ cloud-events-filter = [
     "dep:url",
 ]
 
+# Logical upstream binding: the router publishes the matched cluster as a
+# request-wide binding that `bound_upstream` conditions and
+# `cluster_source: bound_upstream` load balancers read. Off by default;
+# experimental. Without it those config forms are rejected at load time and
+# the router never touches request extensions.
+upstream-binding = ["praxis-core/upstream-binding"]
 # The `iterative_request_router` filter (framework-level multi-sub-request
-# loop). Off by default; experimental. Carries no extra dependencies.
-iterative-request-router = []
+# loop). Off by default; experimental. Carries no extra dependencies. Its
+# steps dispatch from the logical binding, so it pulls in `upstream-binding`.
+iterative-request-router = ["upstream-binding"]
 
 # The `router` filter's JSON-alias body-routing groundwork. Off by default;
 # experimental and not yet wired into request routing.
@@ -43,7 +50,7 @@ router-json-aliases = []
 # The once-per-request bound-upstream request-body hook
 # (`HttpFilter::on_bound_upstream_request_body`), run at the logical-binding
 # barrier. Off by default; experimental. No in-tree filter uses it yet.
-bound-upstream-request-body = []
+bound-upstream-request-body = ["upstream-binding"]
 
 # The chain-binding registry extension API (register_chain_binding /
 # ChainBindingContext::bind_chain). Off by default; experimental. No in-tree

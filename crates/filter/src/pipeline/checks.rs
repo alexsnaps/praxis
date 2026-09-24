@@ -24,13 +24,32 @@
 //! [`SkipPipelineChecks`]: praxis_core::config::SkipPipelineChecks
 //! [`FilterPipeline::ordering_errors`]: super::FilterPipeline::ordering_errors
 
+#[cfg(feature = "upstream-binding")]
 mod binding;
+
+/// Without the `upstream-binding` feature no filter publishes or reads a
+/// binding, so the shared checks see a pipeline that never binds.
+#[cfg(not(feature = "upstream-binding"))]
+mod binding {
+    use super::PipelineFilter;
+
+    /// No filter can consume a binding without the feature.
+    pub(super) fn any_consumes_bound_upstream(_filters: &[PipelineFilter]) -> bool {
+        false
+    }
+
+    /// No router publishes a binding without the feature.
+    pub(super) fn binding_router_clusters(_filters: &[PipelineFilter]) -> std::collections::HashSet<String> {
+        std::collections::HashSet::new()
+    }
+}
 
 #[cfg(feature = "bound-upstream-request-body")]
 pub(super) use binding::check_bound_upstream_body_participants;
 use binding::{any_consumes_bound_upstream, binding_router_clusters};
 #[cfg(feature = "iterative-request-router")]
 pub(super) use binding::{bound_consumer_clusters, serves_bound_cluster};
+#[cfg(feature = "upstream-binding")]
 pub(super) use binding::{
     check_bound_cluster_coverage, check_bound_condition_with_pre_read_body, check_bound_upstream_requires_binding,
     check_cluster_metadata_conflicts, check_irr_coexistence, check_no_rebind_after_binding,
@@ -51,6 +70,20 @@ use crate::{
 // -----------------------------------------------------------------------------
 // Constants
 // -----------------------------------------------------------------------------
+
+/// Whether a filter selects its cluster from the logical binding; never
+/// without the `upstream-binding` feature.
+#[cfg(feature = "upstream-binding")]
+fn consumes_bound_upstream(pf: &PipelineFilter) -> bool {
+    pf.filter.consumes_bound_upstream()
+}
+
+/// Whether a filter selects its cluster from the logical binding; never
+/// without the `upstream-binding` feature.
+#[cfg(not(feature = "upstream-binding"))]
+fn consumes_bound_upstream(_pf: &PipelineFilter) -> bool {
+    false
+}
 
 /// Filters that rewrite the request path.
 const REWRITE_FILTERS: &[&str] = &["path_rewrite", "url_rewrite"];
@@ -117,7 +150,7 @@ pub(super) fn check_trace_context_upstream_conditions(filters: &[PipelineFilter]
 pub(super) fn check_lb_without_cluster_selector(filters: &[PipelineFilter], errors: &mut Vec<String>) {
     for (i, filter) in filters.iter().enumerate() {
         if filter.filter.name() == "load_balancer"
-            && !filter.filter.consumes_bound_upstream()
+            && !consumes_bound_upstream(filter)
             && !filters
                 .get(..i)
                 .unwrap_or_default()
@@ -1079,9 +1112,9 @@ mod tests {
     use praxis_core::config::{ConditionMatch, SelectedUpstreamMatch};
 
     use super::*;
-    use crate::pipeline::test_filters::{
-        binding_router, bound_lb, lb_filter, noop_filter_with_conditions, selector_filter, terminal_filter,
-    };
+    #[cfg(feature = "upstream-binding")]
+    use crate::pipeline::test_filters::{binding_router, bound_lb, terminal_filter};
+    use crate::pipeline::test_filters::{lb_filter, noop_filter_with_conditions, selector_filter};
 
     #[test]
     fn invalid_condition_header_name_rejected_at_build() {
@@ -1149,6 +1182,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "upstream-binding")]
     #[test]
     fn trace_context_in_a_branch_may_use_routing_dependent_conditions() {
         for condition in [
@@ -1168,6 +1202,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "upstream-binding")]
     #[test]
     fn misaligned_check_leaves_bound_clusters_to_the_coverage_check() {
         let filters = vec![binding_router(&["a", "b"]), bound_lb(&["a"])];
@@ -1188,6 +1223,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "upstream-binding")]
     #[test]
     fn misaligned_check_accepts_router_clusters_served_only_in_a_conditional_branch() {
         let mut host = noop_filter_with_conditions("headers", vec![]);
@@ -1206,6 +1242,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "upstream-binding")]
     #[test]
     fn misaligned_check_still_reports_an_ordinary_selector_beside_a_binding_router() {
         let filters = vec![
@@ -1228,6 +1265,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "upstream-binding")]
     #[test]
     fn misaligned_check_accepts_a_bound_branch_beside_an_ordinary_fallthrough_lb() {
         let mut direct = noop_filter_with_conditions("headers", vec![bound_condition(None, Some("openai"))]);
@@ -1243,6 +1281,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "upstream-binding")]
     #[test]
     fn misaligned_check_skips_a_binding_pipeline_without_any_load_balancer() {
         let filters = vec![
@@ -1282,6 +1321,7 @@ mod tests {
         assert!(errors.is_empty(), "router before LB should produce no errors");
     }
 
+    #[cfg(feature = "upstream-binding")]
     #[test]
     fn bound_lb_without_router_no_error() {
         let filters = vec![bound_lb(&["chat"])];
@@ -1927,6 +1967,7 @@ mod tests {
         assert!(warnings.is_empty(), "router with LB should produce no warnings");
     }
 
+    #[cfg(feature = "upstream-binding")]
     #[test]
     fn router_without_lb_suppressed_by_bound_consumer() {
         let mut host = named_noop_filter("headers", vec![]);

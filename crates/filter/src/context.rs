@@ -18,16 +18,18 @@ use praxis_core::{
 };
 use praxis_tls::TlsPeerIdentity;
 
+#[cfg(feature = "bound-upstream-request-body")]
+use crate::extensions::BoundRequestBodyRewrite;
 use crate::{
     FilterError, IterationState,
     body::BodyMode,
     condition::{ConditionError, HeaderSource},
-    extensions::{
-        BoundRequestBodyRewrite, BoundUpstream, BoundUpstreamFrozen, RequestExtensions, SelectedClusterApplication,
-    },
-    pipeline::{body::merge_body_mode, catalog::ClusterApplicationCatalog},
+    extensions::{BoundUpstream, RequestExtensions, SelectedClusterApplication},
+    pipeline::body::merge_body_mode,
     results::FilterResultSet,
 };
+#[cfg(feature = "upstream-binding")]
+use crate::{extensions::BoundUpstreamFrozen, pipeline::catalog::ClusterApplicationCatalog};
 
 // -----------------------------------------------------------------------------
 // Constants
@@ -97,6 +99,7 @@ impl PendingStreamChunks {
 /// runtime — pipeline validation rejects any control flow that could publish a
 /// second, different binding after the barrier — so the router treats it as a
 /// fail-closed backstop and returns a 500.
+#[cfg(feature = "upstream-binding")]
 #[derive(Debug)]
 pub(crate) struct BindingFrozen {
     /// The frozen logical cluster that remains in effect.
@@ -656,6 +659,7 @@ impl HttpFilterContext<'_> {
     /// can match on the router-published `application_protocol` /
     /// `application_provider`. Returns an empty view (matching nothing) when no
     /// upstream has been bound.
+    #[cfg(feature = "upstream-binding")]
     pub(crate) fn bound_upstream_view(&self) -> crate::condition::BoundUpstreamView<'_> {
         self.extensions
             .get::<BoundUpstream>()
@@ -665,6 +669,14 @@ impl HttpFilterContext<'_> {
                     provider: bound.application_provider(),
                 }
             })
+    }
+
+    /// Without the `upstream-binding` feature nothing publishes a binding, so
+    /// the view is always empty and costs no lookup.
+    #[cfg(not(feature = "upstream-binding"))]
+    #[expect(clippy::unused_self, reason = "keeps the signature of the feature-on version")]
+    pub(crate) fn bound_upstream_view(&self) -> crate::condition::BoundUpstreamView<'_> {
+        crate::condition::BoundUpstreamView::default()
     }
 
     /// Publish (or replace) the logical upstream binding for this request.
@@ -681,6 +693,7 @@ impl HttpFilterContext<'_> {
     /// whose body was already processed against the frozen binding.
     ///
     /// [`bound_upstream_frozen`]: Self::bound_upstream_frozen
+    #[cfg(feature = "upstream-binding")]
     pub(crate) fn publish_bound_upstream(
         &mut self,
         cluster: Arc<str>,
@@ -717,6 +730,7 @@ impl HttpFilterContext<'_> {
     ///
     /// Returns [`BindingFrozen`] if the binding is frozen and `cluster` differs
     /// from the frozen one.
+    #[cfg(feature = "upstream-binding")]
     pub(crate) fn bind_upstream(
         &mut self,
         cluster: Arc<str>,
@@ -733,6 +747,7 @@ impl HttpFilterContext<'_> {
     /// Freezing also serves as the once-per-request marker for the bound-body
     /// phase: a `ReEnter` loop or IRR continuation cannot replay the hooks or
     /// retarget the request after body processing.
+    #[cfg(feature = "upstream-binding")]
     pub(crate) fn bound_upstream_frozen(&self) -> bool {
         self.extensions.get::<BoundUpstreamFrozen>().is_some()
     }
@@ -744,10 +759,24 @@ impl HttpFilterContext<'_> {
     /// returned body, replaying it on retry, in place of the pre-read body.
     /// `None` means the pre-read body stands.
     #[doc(hidden)]
+    #[cfg(feature = "bound-upstream-request-body")]
     pub fn take_bound_request_body_rewrite(&mut self) -> Option<bytes::Bytes> {
         self.extensions
             .remove::<BoundRequestBodyRewrite>()
             .map(|rewrite| rewrite.0)
+    }
+
+    /// Without the `bound-upstream-request-body` feature no participant can
+    /// rewrite the body, so there is never anything to take.
+    #[doc(hidden)]
+    #[cfg(not(feature = "bound-upstream-request-body"))]
+    #[expect(
+        clippy::unused_self,
+        clippy::needless_pass_by_ref_mut,
+        reason = "keeps the signature of the feature-on version"
+    )]
+    pub fn take_bound_request_body_rewrite(&mut self) -> Option<bytes::Bytes> {
+        None
     }
 
     /// Freeze the request's logical upstream binding.
@@ -757,6 +786,7 @@ impl HttpFilterContext<'_> {
     /// branch chains run. It is set even when there are no body participants,
     /// keeping the logical binding request-stable for conditions, bound load
     /// balancers, and IRR continuations.
+    #[cfg(feature = "upstream-binding")]
     pub(crate) fn freeze_bound_upstream(&mut self) {
         self.extensions.insert(BoundUpstreamFrozen);
     }
@@ -2962,6 +2992,7 @@ content-length: 0
         );
     }
 
+    #[cfg(feature = "upstream-binding")]
     #[test]
     fn publish_bound_upstream_exposes_cluster_and_metadata() {
         let req = crate::test_utils::make_request(Method::GET, "/");
@@ -2989,6 +3020,7 @@ content-length: 0
         );
     }
 
+    #[cfg(feature = "upstream-binding")]
     #[test]
     fn publish_bound_upstream_untagged_cluster_still_binds() {
         let req = crate::test_utils::make_request(Method::GET, "/");
@@ -3010,6 +3042,7 @@ content-length: 0
         );
     }
 
+    #[cfg(feature = "upstream-binding")]
     #[test]
     fn publish_bound_upstream_replaces_previous_binding() {
         let req = crate::test_utils::make_request(Method::GET, "/");
@@ -3035,6 +3068,7 @@ content-length: 0
         );
     }
 
+    #[cfg(feature = "upstream-binding")]
     #[test]
     fn frozen_binding_rejects_a_different_cluster() {
         let req = crate::test_utils::make_request(Method::GET, "/");
@@ -3060,6 +3094,7 @@ content-length: 0
         );
     }
 
+    #[cfg(feature = "upstream-binding")]
     #[test]
     fn frozen_binding_allows_idempotent_republish_of_same_cluster() {
         let req = crate::test_utils::make_request(Method::GET, "/");

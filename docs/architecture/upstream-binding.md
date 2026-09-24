@@ -19,13 +19,16 @@ those consumers would need its own router, and nothing
 would guarantee they agreed.
 
 > **Feature gating.** Logical binding, the cluster
-> catalog, bound conditions, the freeze barrier, and a
+> catalog, bound conditions, the freeze, and a
 > `load_balancer` with `cluster_source: bound_upstream`
-> are available in **all** builds — a direct dispatch
-> branch can consume a binding on its own. Only the
+> need the off-by-default `upstream-binding` build
+> feature. A direct dispatch branch can consume a binding
+> on its own with just that feature. The
 > [`iterative_request_router`](../filters/http/traffic_management/iterative_request_router.md)
-> filter is gated behind the off-by-default
-> `iterative-request-router` build feature (see
+> filter (`iterative-request-router`) and the bound-body
+> hook (`bound-upstream-request-body`) each pull the
+> feature in. Without it, a config that uses either form
+> is rejected at load time (see
 > [Build Features](../operating/build-features.md)).
 >
 > Pipeline construction enables binding publication only when the resolved

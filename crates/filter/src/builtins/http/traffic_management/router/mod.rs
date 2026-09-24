@@ -36,7 +36,9 @@ use http::HeaderMap;
 #[cfg(feature = "router-json-aliases")]
 use http::header::HeaderName;
 use praxis_core::config::{PathMatch, Route};
-use tracing::{debug, info, trace, warn};
+#[cfg(feature = "upstream-binding")]
+use tracing::warn;
+use tracing::{debug, info, trace};
 
 #[cfg(feature = "router-json-aliases")]
 use self::config::{
@@ -46,11 +48,12 @@ use self::{
     config::{RouterConfig, RouterRouteConfig},
     matching::{route_matches_request, should_stop_early, update_best_match},
 };
+#[cfg(feature = "upstream-binding")]
+use crate::pipeline::catalog::ClusterApplicationCatalog;
 use crate::{
     FilterError,
     actions::{FilterAction, Rejection},
     filter::{HttpFilter, HttpFilterContext},
-    pipeline::catalog::ClusterApplicationCatalog,
 };
 
 // -----------------------------------------------------------------------------
@@ -102,6 +105,7 @@ pub struct RouterFilter {
     /// The pipeline's cluster catalog, present only when the pipeline has a
     /// bound-upstream observer or consumer. Its presence is what makes this
     /// router publish the logical binding.
+    #[cfg(feature = "upstream-binding")]
     binding_catalog: Option<Arc<ClusterApplicationCatalog>>,
 
     /// Enable multi-level subdomain matching for wildcard hosts.
@@ -197,6 +201,7 @@ impl RouterFilter {
         let resolved = resolve_routes(routes);
         debug!(routes = resolved.len(), "router initialized");
         Self {
+            #[cfg(feature = "upstream-binding")]
             binding_catalog: None,
             multi_level_subdomain_matching: false,
             routes: resolved,
@@ -287,7 +292,12 @@ impl RouterFilter {
     /// different cluster fails closed. Valid configurations never hit that case
     /// (validation allows one binding router and no `ReEnter` back over it), so
     /// treat it as an internal error.
+    #[cfg_attr(
+        not(feature = "upstream-binding"),
+        expect(clippy::unused_self, reason = "only the binding catalog needs self")
+    )]
     fn apply_matched_route(&self, ctx: &mut HttpFilterContext<'_>, resolved: &ResolvedRoute) -> FilterAction {
+        #[cfg(feature = "upstream-binding")]
         if let Some(catalog) = &self.binding_catalog
             && let Err(frozen) = ctx.bind_upstream(Arc::clone(&resolved.route.cluster), catalog)
         {
@@ -516,10 +526,12 @@ impl HttpFilter for RouterFilter {
             .collect()
     }
 
+    #[cfg(feature = "upstream-binding")]
     fn binds_upstream(&self) -> bool {
         self.binding_catalog.is_some()
     }
 
+    #[cfg(feature = "upstream-binding")]
     fn enable_upstream_binding(&mut self, catalog: Arc<ClusterApplicationCatalog>) {
         self.binding_catalog = Some(catalog);
     }

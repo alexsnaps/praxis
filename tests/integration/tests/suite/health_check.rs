@@ -579,6 +579,7 @@ filter_chains:
     );
 }
 
+#[cfg(feature = "upstream-binding")]
 #[test]
 fn bound_load_balancer_distributes_and_routes_away_from_unhealthy_backend() {
     let stable_port_guard = start_backend_with_shutdown("stable");

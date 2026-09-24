@@ -72,9 +72,10 @@ really is out of the build.
 | `policy-engine` | on | The `policy` filter (Praxis Policy Engine: OPA-style route policy, JWT identity, token exchange). | Off for a deployment that does no policy-based authorization: it is the heaviest optional dependency, so dropping it is the largest single saving in build time and binary size. |
 | `basic-auth-filter` | off (experimental) | The `basic_auth` filter. | Dev and testing only. Slated for removal in favor of the policy engine ([praxis-proxy/policy]); prefer that for authentication. |
 | `cloud-events-filter` | off (experimental) | The `cloud_events` filter (serialize requests into CloudEvents and ship them to an HTTP receiver). | On for event export; delivery is best-effort. Adds `chrono` and `url`. |
-| `iterative-request-router` | off (experimental) | The `iterative_request_router` filter: a bounded loop of sub-requests for provider failover and agentic/tool loops. | On for callout and failover pipelines (the AI gateway relies on it). No extra dependencies. |
+| `upstream-binding` | off (experimental) | Logical upstream binding: the `router` publishes the matched cluster as a request-wide binding that `bound_upstream` conditions and `cluster_source: bound_upstream` load balancers read. | On when a pipeline gates filters on the bound cluster's application metadata or dispatches from the binding. Implied by the two features below. Off, those config forms are rejected at load time and the router never touches request extensions. |
+| `iterative-request-router` | off (experimental) | The `iterative_request_router` filter: a bounded loop of sub-requests for provider failover and agentic/tool loops. | On for callout and failover pipelines (the AI gateway relies on it). No extra dependencies; pulls in `upstream-binding`, since its steps dispatch from the binding. |
 | `router-json-aliases` | off (experimental) | The `router` filter's JSON-alias body-routing groundwork. | Groundwork only: it is not wired into routing, and a route that sets `json_aliases` is rejected at build even with the feature on. Default builds do not accept the keys. |
-| `bound-upstream-request-body` | off (experimental) | The `HttpFilter::on_bound_upstream_request_body` hook, run once at the logical-binding barrier. | For out-of-tree filters that must inspect or rewrite the request body against the bound upstream; no in-tree filter uses it yet. |
+| `bound-upstream-request-body` | off (experimental) | The `HttpFilter::on_bound_upstream_request_body` hook, run once at the logical-binding barrier. | For out-of-tree filters that must inspect or rewrite the request body against the bound upstream; no in-tree filter uses it yet. Pulls in `upstream-binding`. |
 | `chain-binding` | off (experimental) | The `register_chain_binding` outbound-callout API (`ChainBindingContext::bind_chain`) and its authority-bound deferred credentials (`PendingCredentials`, `DeferredCredential`). | For out-of-tree callout filters; no in-tree consumer yet. |
 | `spiffe` | off (experimental) | SPIFFE X.509-SVID mTLS peer identity (the `require_named` listener mode) and the `peer_identity_trust` filter. | On for mTLS peer-identity authorization. Adds `spiffe` and `x509-parser`. |
 | `dev` | off | Developer convenience bundle (currently enables `basic-auth-filter`). | Local development builds. |
@@ -94,6 +95,13 @@ production` at startup. Do not run an experimental build in production.
   request into a CloudEvent and ships it to a configured HTTP receiver.
   Delivery is best-effort and never changes the client response; review its
   limitations before relying on it.
+- **`upstream-binding`**: logical upstream binding. With it, a `router` in a
+  pipeline that reads the binding publishes the matched cluster once per
+  request, `bound_upstream` conditions match on that cluster's application
+  metadata, and a `load_balancer` with `cluster_source: bound_upstream` picks
+  an endpoint from it. Without it those two config forms fail validation and
+  nothing in the request path changes. See
+  [Upstream Binding](../architecture/upstream-binding.md).
 - **`iterative-request-router`**: the `iterative_request_router` filter, a
   bounded loop of sequential sub-requests through named step pipelines. It
   powers provider failover and LLM agentic/tool loops and is the flagship
@@ -139,8 +147,9 @@ production` at startup. Do not run an experimental build in production.
   `admin-api`, and `otel` is what trims the dependency tree and binary size,
   `policy-engine` by the widest margin. Most filters are always compiled in and
   share dependencies with the core proxy, so gating them individually would not
-  remove a crate. The experimental filter gates (`iterative-request-router`,
-  `chain-binding`, `router-json-aliases`, `bound-upstream-request-body`) exist
+  remove a crate. The experimental filter gates (`upstream-binding`,
+  `iterative-request-router`, `chain-binding`, `router-json-aliases`,
+  `bound-upstream-request-body`) exist
   to keep unfinished or not-for-production surface out of default builds
   rather than to save a crate; `spiffe` and `cloud-events-filter` do
   additionally drop dependencies

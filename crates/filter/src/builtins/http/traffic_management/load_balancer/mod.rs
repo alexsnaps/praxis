@@ -31,11 +31,12 @@ use tracing::{debug, warn};
 
 use self::entry::{ClusterEntry, build_cluster_entry};
 pub use self::reselector::EndpointReselector;
+#[cfg(feature = "upstream-binding")]
+use crate::pipeline::catalog::{ClusterApplicationMetadata, ClusterMetadataDeclaration};
 use crate::{
     FilterError,
     actions::FilterAction,
     filter::{HttpFilter, HttpFilterContext},
-    pipeline::catalog::{ClusterApplicationMetadata, ClusterMetadataDeclaration},
 };
 
 // -----------------------------------------------------------------------------
@@ -181,6 +182,12 @@ impl LoadBalancerFilter {
         if cfg.clusters.is_empty() {
             return Err("load_balancer: 'clusters' is empty; every request would fail with 502".into());
         }
+        #[cfg(not(feature = "upstream-binding"))]
+        if cfg.cluster_source == ClusterSource::BoundUpstream {
+            return Err(
+                "load_balancer: cluster_source 'bound_upstream' needs the upstream-binding build feature".into(),
+            );
+        }
         Ok(Box::new(Self::try_new_with_source(&cfg.clusters, cfg.cluster_source)?))
     }
 
@@ -275,10 +282,12 @@ impl HttpFilter for LoadBalancerFilter {
         self.clusters.keys().map(ToString::to_string).collect()
     }
 
+    #[cfg(feature = "upstream-binding")]
     fn consumes_bound_upstream(&self) -> bool {
         self.cluster_source == ClusterSource::BoundUpstream
     }
 
+    #[cfg(feature = "upstream-binding")]
     fn bound_upstream_clusters(&self) -> Vec<String> {
         if self.cluster_source == ClusterSource::BoundUpstream {
             self.clusters.keys().map(ToString::to_string).collect()
@@ -287,6 +296,7 @@ impl HttpFilter for LoadBalancerFilter {
         }
     }
 
+    #[cfg(feature = "upstream-binding")]
     fn declared_cluster_metadata(&self) -> Vec<ClusterMetadataDeclaration> {
         let mut declarations: Vec<ClusterMetadataDeclaration> = self
             .clusters

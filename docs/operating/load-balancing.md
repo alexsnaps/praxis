@@ -441,15 +441,16 @@ filter_chains:
 By default a `load_balancer` reads the target
 cluster from `ctx.cluster`, which a preceding
 `router` set (`cluster_source: router`). It can
-instead read `cluster_source: bound_upstream`,
-resolving the frozen logical binding a binding
-router published and selecting an endpoint with no
-second router. This is how a direct dispatch branch
-picks an endpoint from a cluster that was bound once
-earlier in the pipeline; an
-`iterative_request_router` step — which needs the
-off-by-default `iterative-request-router` build
-feature — can do the same on every exchange. See
+instead read `cluster_source: bound_upstream`
+(with the off-by-default `upstream-binding` build
+feature), resolving the frozen logical binding a
+binding router published and selecting an endpoint
+with no second router. This is how a direct dispatch
+branch picks an endpoint from a cluster that was
+bound once earlier in the pipeline; an
+`iterative_request_router` step (the
+`iterative-request-router` feature) can do the same
+on every exchange. See
 [Upstream Binding](../architecture/upstream-binding.md) and the complete
 [`bound-upstream-dispatch.yaml`](../../examples/configs/traffic-management/bound-upstream-dispatch.yaml)
 example.

@@ -131,9 +131,10 @@ pub use filtered_subrequest::{
     SubrequestRuntime,
 };
 pub use grpc_response::GrpcErrorMapping;
+#[cfg(feature = "upstream-binding")]
+pub use pipeline::catalog::{ClusterApplicationCatalog, ClusterApplicationMetadata, ClusterMetadataDeclaration};
 pub use pipeline::{
     FilterPipeline, PipelineExtension,
-    catalog::{ClusterApplicationCatalog, ClusterApplicationMetadata, ClusterMetadataDeclaration},
     introspection::{BodyAccessInfo, BranchConditionInfo, BranchIntrospection, FilterIntrospection},
     subrequest::{IterationState, NextIterationBody},
 };

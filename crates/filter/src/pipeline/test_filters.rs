@@ -7,12 +7,13 @@ use async_trait::async_trait;
 use praxis_core::config::{Condition, FailureMode};
 
 use super::filter::PipelineFilter;
+#[cfg(feature = "upstream-binding")]
+use crate::pipeline::catalog::ClusterMetadataDeclaration;
 use crate::{
     FilterAction, FilterError,
     any_filter::AnyFilter,
     body::{BodyAccess, BodyMode},
     filter::{HttpFilter, HttpFilterContext},
-    pipeline::catalog::ClusterMetadataDeclaration,
 };
 
 pub(in crate::pipeline) fn selector_filter(name: &'static str, clusters: &[&str]) -> PipelineFilter {
@@ -39,6 +40,7 @@ pub(in crate::pipeline) fn noop_filter(name: &'static str) -> PipelineFilter {
     })
 }
 
+#[cfg(feature = "upstream-binding")]
 pub(in crate::pipeline) fn terminal_filter(name: &'static str) -> PipelineFilter {
     capability_filter(CapabilityFilter {
         name,
@@ -49,6 +51,7 @@ pub(in crate::pipeline) fn terminal_filter(name: &'static str) -> PipelineFilter
 
 /// A binding router stand-in: selects and *binds* one of `clusters` as the
 /// logical upstream.
+#[cfg(feature = "upstream-binding")]
 pub(in crate::pipeline) fn binding_router(clusters: &[&str]) -> PipelineFilter {
     capability_filter(CapabilityFilter {
         name: "router",
@@ -61,6 +64,7 @@ pub(in crate::pipeline) fn binding_router(clusters: &[&str]) -> PipelineFilter {
 
 /// A bound-consuming load balancer stand-in: resolves `clusters` from the
 /// frozen logical binding.
+#[cfg(feature = "upstream-binding")]
 pub(in crate::pipeline) fn bound_lb(clusters: &[&str]) -> PipelineFilter {
     capability_filter(CapabilityFilter {
         name: "load_balancer",
@@ -85,6 +89,7 @@ pub(in crate::pipeline) fn bound_body_filter(name: &'static str, access: BodyAcc
 
 /// A filter declaring application metadata for one cluster, standing in for a
 /// load balancer in catalog tests.
+#[cfg(feature = "upstream-binding")]
 pub(in crate::pipeline) fn metadata_filter(
     name: &'static str,
     cluster: &str,
@@ -132,22 +137,29 @@ fn capability_filter(filter: CapabilityFilter) -> PipelineFilter {
 }
 
 #[derive(Default)]
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "test-only capability record; each flag toggles one independent HttpFilter capability"
+#[cfg_attr(
+    feature = "upstream-binding",
+    expect(
+        clippy::struct_excessive_bools,
+        reason = "test-only capability record; each flag toggles one independent HttpFilter capability"
+    )
 )]
 struct CapabilityFilter {
     name: &'static str,
     selects_cluster: bool,
     selected_clusters: Vec<String>,
     load_balancer_clusters: Vec<String>,
+    #[cfg(feature = "upstream-binding")]
     binds_upstream: bool,
+    #[cfg(feature = "upstream-binding")]
     consumes_bound_upstream: bool,
+    #[cfg(feature = "upstream-binding")]
     bound_upstream_clusters: Vec<String>,
     #[cfg(feature = "bound-upstream-request-body")]
     bound_upstream_request_body_access: BodyAccess,
     request_body_access: BodyAccess,
     request_body_mode: Option<BodyMode>,
+    #[cfg(feature = "upstream-binding")]
     declared_metadata: Vec<ClusterMetadataDeclaration>,
     produces_terminal_response: bool,
 }
@@ -170,14 +182,17 @@ impl HttpFilter for CapabilityFilter {
         self.load_balancer_clusters.clone()
     }
 
+    #[cfg(feature = "upstream-binding")]
     fn binds_upstream(&self) -> bool {
         self.binds_upstream
     }
 
+    #[cfg(feature = "upstream-binding")]
     fn consumes_bound_upstream(&self) -> bool {
         self.consumes_bound_upstream
     }
 
+    #[cfg(feature = "upstream-binding")]
     fn bound_upstream_clusters(&self) -> Vec<String> {
         self.bound_upstream_clusters.clone()
     }
@@ -199,6 +214,7 @@ impl HttpFilter for CapabilityFilter {
         self.produces_terminal_response
     }
 
+    #[cfg(feature = "upstream-binding")]
     fn declared_cluster_metadata(&self) -> Vec<ClusterMetadataDeclaration> {
         self.declared_metadata.clone()
     }

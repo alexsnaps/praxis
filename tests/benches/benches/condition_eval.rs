@@ -12,19 +12,28 @@
 
 use std::{collections::HashMap, hint::black_box};
 
+#[cfg(feature = "upstream-binding")]
 mod common;
 
+#[cfg(feature = "upstream-binding")]
 use common::{bench_runtime, make_ctx, make_request as make_get_request};
-use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
+#[cfg(feature = "upstream-binding")]
+use criterion::BatchSize;
+use criterion::{Criterion, criterion_group, criterion_main};
 use http::{HeaderMap, HeaderValue, Method, Uri};
 use praxis_core::config::{Condition, ConditionMatch};
-use praxis_filter::{FilterEntry, FilterPipeline, FilterRegistry, Request, should_execute};
+#[cfg(feature = "upstream-binding")]
+use praxis_filter::{FilterEntry, FilterPipeline, FilterRegistry};
+use praxis_filter::{Request, should_execute};
 
 // -----------------------------------------------------------------------------
 // Benchmarks
 // -----------------------------------------------------------------------------
 
+#[cfg(feature = "upstream-binding")]
 criterion_group!(benches, bench_condition_eval, bench_bound_pipeline_eval);
+#[cfg(not(feature = "upstream-binding"))]
+criterion_group!(benches, bench_condition_eval);
 criterion_main!(benches);
 
 /// Benchmark condition evaluation across a range of scenarios.
@@ -118,6 +127,7 @@ fn bench_condition_eval(c: &mut Criterion) {
 }
 
 /// Benchmark the real router publication and a populated bound-upstream gate.
+#[cfg(feature = "upstream-binding")]
 fn bench_bound_pipeline_eval(c: &mut Criterion) {
     let runtime = bench_runtime();
     let registry = FilterRegistry::with_builtins();
