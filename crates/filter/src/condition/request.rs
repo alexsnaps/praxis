@@ -1236,13 +1236,84 @@ mod tests {
             application_provider: Some("azure"),
         };
 
-        assert!(should_execute_bound_selected(&conditions, &req, bound, selected));
-        assert!(!should_execute_bound_selected(
-            &conditions,
-            &req,
-            bound,
-            SelectedUpstream::none(),
-        ));
+        assert!(
+            should_execute_bound_selected(&conditions, &req, bound, selected),
+            "both axes matching should run the filter"
+        );
+        assert!(
+            !should_execute_bound_selected(&conditions, &req, bound, SelectedUpstream::none()),
+            "a missing selection must fail the selected axis even when the bound axis matches"
+        );
+    }
+
+    #[test]
+    fn when_bound_unless_selected_mix_across_axes() {
+        let req = make_request(Method::POST, "/v1/responses", HeaderMap::new());
+        let conditions = [
+            when(bound_upstream_match(None, Some("openai"))),
+            unless(selected_upstream_match(None, Some("azure"))),
+        ];
+        let bound = bound_view(None, Some("openai"));
+        let azure = SelectedUpstream {
+            application_protocol: None,
+            application_provider: Some("azure"),
+        };
+        let openai = SelectedUpstream {
+            application_protocol: None,
+            application_provider: Some("openai"),
+        };
+
+        assert!(
+            should_execute_bound_selected(&conditions, &req, bound, openai),
+            "a matching binding and a non-excluded selection should run the filter"
+        );
+        assert!(
+            !should_execute_bound_selected(&conditions, &req, bound, azure),
+            "the excluded selection must veto a matching binding"
+        );
+        assert!(
+            !should_execute_bound_selected(&conditions, &req, BoundUpstreamView::default(), openai),
+            "an unbound request must fail the when-bound half"
+        );
+        assert!(
+            should_execute_bound_selected(&conditions, &req, bound, SelectedUpstream::none()),
+            "with no selection the unless-selected half cannot match, so it does not veto"
+        );
+    }
+
+    #[test]
+    fn unless_bound_when_selected_mix_across_axes() {
+        let req = make_request(Method::POST, "/v1/responses", HeaderMap::new());
+        let conditions = [
+            unless(bound_upstream_match(None, Some("openai"))),
+            when(selected_upstream_match(None, Some("vllm"))),
+        ];
+        let vllm = SelectedUpstream {
+            application_protocol: None,
+            application_provider: Some("vllm"),
+        };
+
+        assert!(
+            should_execute_bound_selected(&conditions, &req, bound_view(None, Some("local")), vllm),
+            "a non-excluded binding and a matching selection should run the filter"
+        );
+        assert!(
+            !should_execute_bound_selected(&conditions, &req, bound_view(None, Some("openai")), vllm),
+            "the excluded binding must veto a matching selection"
+        );
+        assert!(
+            should_execute_bound_selected(&conditions, &req, BoundUpstreamView::default(), vllm),
+            "an unbound request cannot match the unless-bound half, so it does not veto"
+        );
+        assert!(
+            !should_execute_bound_selected(
+                &conditions,
+                &req,
+                bound_view(None, Some("local")),
+                SelectedUpstream::none()
+            ),
+            "a missing selection fails the when-selected half"
+        );
     }
 
     #[test]
