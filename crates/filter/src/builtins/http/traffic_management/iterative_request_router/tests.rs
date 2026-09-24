@@ -211,6 +211,40 @@ steps:
 }
 
 #[test]
+fn a_step_named_only_after_a_default_transition_is_unreachable() {
+    let yaml: serde_yaml::Value = serde_yaml::from_str(
+        "
+initial_step: answer
+steps:
+  - name: answer
+    filters:
+      - filter: static_response
+        status: 200
+    on_result:
+      - default: true
+        done: true
+      - status: [503]
+        next: fallback
+  - name: fallback
+    filters:
+      - filter: static_response
+        status: 503
+    on_result:
+      - default: true
+        done: true
+",
+    )
+    .unwrap();
+    let cfg: IterativeRequestRouterConfig = parse_filter_config("iterative_request_router", &yaml).unwrap();
+
+    assert_eq!(
+        config::unreachable_steps(&cfg, &["answer", "fallback"]),
+        vec!["fallback"],
+        "evaluation stops at the default, so a transition listed after it never fires"
+    );
+}
+
+#[test]
 fn rejects_branch_chains_in_step_filters() {
     let yaml: serde_yaml::Value = serde_yaml::from_str(
         "

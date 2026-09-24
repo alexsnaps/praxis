@@ -459,7 +459,7 @@ fn validate_reachability(cfg: &IterativeRequestRouterConfig, step_names: &[&str]
 /// Follows each step's transitions up to and including its first `default`,
 /// since evaluation stops there, so a step named only by a transition listed
 /// after a default is unreachable.
-fn unreachable_steps<'a>(cfg: &'a IterativeRequestRouterConfig, step_names: &[&'a str]) -> Vec<&'a str> {
+pub(super) fn unreachable_steps<'a>(cfg: &'a IterativeRequestRouterConfig, step_names: &[&'a str]) -> Vec<&'a str> {
     let mut reachable = std::collections::HashSet::new();
     reachable.insert(cfg.initial_step.as_str());
 
