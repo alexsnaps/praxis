@@ -2421,6 +2421,80 @@ mod tests {
         );
     }
 
+    #[test]
+    fn consumers_in_conditional_and_sibling_branches_follow_their_host() {
+        let gated = |name| noop_filter_with_conditions(name, vec![bound_condition(None, Some("openai"))]);
+        let mut early = named_noop_filter("early", vec![]);
+        early.branches = vec![
+            conditional_branch("conditional", vec![gated("early-conditional")], RejoinTarget::Next),
+            make_branch_with_filters("sibling", vec![gated("early-sibling")]),
+        ];
+        let mut late = named_noop_filter("late", vec![]);
+        late.branches = vec![
+            conditional_branch("conditional", vec![gated("late-conditional")], RejoinTarget::Next),
+            make_branch_with_filters("sibling", vec![gated("late-sibling")]),
+        ];
+        let filters = vec![early, binding_router(&["a"]), late];
+        let mut errors = Vec::new();
+
+        check_bound_upstream_requires_binding(&filters, false, &mut errors);
+
+        assert_eq!(
+            reported_filters(&errors),
+            ["early-conditional", "early-sibling"],
+            "both branches of the host before the router run unbound, both after it run bound: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn nested_always_run_branches_inherit_their_top_level_host() {
+        let nested = |name| {
+            let gated = noop_filter_with_conditions(name, vec![bound_condition(None, Some("openai"))]);
+            host_with_branch(vec![host_with_branch(vec![gated])])
+        };
+        let filters = vec![nested("before-router"), binding_router(&["a"]), nested("after-router")];
+        let mut errors = Vec::new();
+
+        check_bound_upstream_requires_binding(&filters, false, &mut errors);
+
+        assert_eq!(
+            reported_filters(&errors),
+            ["before-router"],
+            "only the nested consumer under the host before the router is unbound: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn irr_step_branch_consumers_inherit_the_parent_binding() {
+        let gated = noop_filter_with_conditions("gated", vec![bound_condition(None, Some("openai"))]);
+        let filters = vec![host_with_branch(vec![gated]), bound_lb(&["a"])];
+        let mut errors = Vec::new();
+
+        check_bound_upstream_requires_binding(&filters, true, &mut errors);
+
+        assert!(
+            errors.is_empty(),
+            "an IRR step starts bound, so even its first filter's branches see the binding: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn router_gated_on_its_own_binding_is_rejected() {
+        let mut router = binding_router(&["a"]);
+        router.conditions = vec![bound_condition(None, Some("openai"))];
+        let filters = vec![router, bound_lb(&["a"])];
+        let mut errors = Vec::new();
+
+        check_bound_upstream_requires_binding(&filters, false, &mut errors);
+
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("'router'") && error.contains("bound_upstream condition")),
+            "a router cannot read the binding it has not published yet: {errors:?}"
+        );
+    }
+
     // -------------------------------------------------------------------------
     // Test Utilities
     // -------------------------------------------------------------------------
@@ -2489,5 +2563,15 @@ mod tests {
             metadata: ClusterApplicationMetadata::new(protocol.map(Arc::from), provider.map(Arc::from)),
         };
         PipelineFilter::new(0, AnyFilter::Http(Box::new(MetadataFilter { decl })), vec![], vec![])
+    }
+
+    /// Names of the filters that missing-binding errors report, sorted.
+    fn reported_filters(errors: &[String]) -> Vec<&str> {
+        let mut names: Vec<&str> = errors
+            .iter()
+            .filter_map(|error| error.strip_prefix("filter '")?.split('\'').next())
+            .collect();
+        names.sort_unstable();
+        names
     }
 }
