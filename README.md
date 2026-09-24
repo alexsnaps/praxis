@@ -18,9 +18,9 @@ Praxis is a [Rust]-based framework for building **proxy servers**.
 
 ## Documentation
 
-Documentation is available here: [docs/README.md](docs/README.md)
+The full documentation is available [here](docs/README.md).
 
-If you're new to Praxis, you may want to check these out first:
+The following are some good places to start:
 
 - [Configuration](docs/operating/configuration.md)
 - [Features](docs/features.md)

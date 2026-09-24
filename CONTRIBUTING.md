@@ -1,8 +1,8 @@
 # Contributing
 
-Thank you for your interest in contributing! Start by
-reading the [development conventions] - submissions that
-do not follow them will be rejected.
+Thank you for your interest in contributing! Please start by
+reading the [development conventions]. Submissions that don't
+follow the conventions are more likely to be rejected.
 
 [development conventions]: docs/developing/conventions.md
 
