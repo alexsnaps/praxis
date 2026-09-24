@@ -125,9 +125,12 @@ The full direct/IRR dispatch shape is
 ## The Freeze Barrier
 
 Provider-dependent state must be processed against a
-stable target. Praxis guarantees this with a
-**once-per-request bound-body barrier**: the point at
-which bound-body hooks run against the fully buffered
+stable target. Praxis guarantees this with a **freeze
+barrier**: right after the first binding router
+publishes, the executor freezes the binding, before that
+router's branches run. In builds with the experimental
+`bound-upstream-request-body` feature, bound-body hooks
+also run at this point against the fully buffered
 request body. Two invariants follow:
 
 1. **The binding freezes.** The executor freezes immediately
@@ -143,18 +146,21 @@ request body. Two invariants follow:
    validation rejects any control flow that could rebind
    after the barrier — so it is a fail-closed backstop.
 
-2. **It runs at most once.** The barrier marker lives in
+2. **It runs at most once.** The freeze marker lives in
    the request extension map, which is threaded across
    IRR iterations and survives `ReEnter` loops, so the
-   bound-body pass fires at most once no matter how many
-   times the pipeline re-executes. It does not fire when routing stops before
+   barrier (and any bound-body pass) fires at most once
+   no matter how many times the pipeline re-executes. It does not fire when routing stops before
    publishing a binding.
 
 Source: `crates/filter/src/extensions.rs` (`BoundUpstreamFrozen`),
 `crates/filter/src/context.rs` (`publish_bound_upstream`),
 `crates/filter/src/pipeline/http.rs`.
 
-Bound-body participants declare a bounded `StreamBuffer` mode
+Bound-body participants are experimental: the hook exists only
+in builds with the `bound-upstream-request-body` feature (see
+[Build Features](../operating/build-features.md)). The freeze
+itself is not gated. Participants declare a bounded `StreamBuffer` mode
 and `bound_upstream_request_body_access`. They run in top-level
 pipeline order at this barrier, against the original request
 snapshot plus the frozen binding. Endpoint-local

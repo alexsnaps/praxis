@@ -121,16 +121,33 @@ pub(super) fn selected_upstream_request_body_indices(filters: &[PipelineFilter])
 /// Top-level only: branch filters never run body hooks, so a bound-upstream
 /// declaration inside a branch is rejected at build time rather than
 /// collected here.
+#[cfg(feature = "bound-upstream-request-body")]
 pub(super) fn bound_upstream_request_body_indices(filters: &[PipelineFilter]) -> Vec<usize> {
     let mut indices = Vec::new();
     for (idx, pf) in filters.iter().enumerate() {
         if let AnyFilter::Http(f) = &pf.filter
-            && f.bound_upstream_request_body_access() != BodyAccess::None
+            && participates_in_bound_upstream_body(f.as_ref())
         {
             indices.push(idx);
         }
     }
     indices
+}
+
+/// Whether the filter declares bound-upstream request-body access.
+///
+/// Always `false` unless the experimental `bound-upstream-request-body`
+/// feature compiles the hook in.
+pub(super) fn participates_in_bound_upstream_body(filter: &dyn crate::filter::HttpFilter) -> bool {
+    #[cfg(feature = "bound-upstream-request-body")]
+    {
+        filter.bound_upstream_request_body_access() != BodyAccess::None
+    }
+    #[cfg(not(feature = "bound-upstream-request-body"))]
+    {
+        let _ = filter;
+        false
+    }
 }
 
 /// Indices of filters declaring response-trailer access.
@@ -166,6 +183,7 @@ fn accumulate_caps_inner(caps: &mut BodyCapabilities, filters: &[PipelineFilter]
         if !in_branch {
             accumulate_request_body(caps, http_filter);
             accumulate_selected_upstream_request_body(caps, http_filter);
+            #[cfg(feature = "bound-upstream-request-body")]
             accumulate_bound_upstream_request_body(caps, http_filter);
             accumulate_response_body(caps, http_filter, &pf.response_conditions);
             if !caps.any_response_condition_uses_headers {
@@ -251,12 +269,12 @@ fn selected_upstream_body_mode(filter: &dyn crate::filter::HttpFilter) -> BodyMo
 /// phase, so the barrier never runs against an unbuffered or unbounded body.
 ///
 /// [`ABSOLUTE_MAX_BODY_BYTES`]: praxis_core::config::ABSOLUTE_MAX_BODY_BYTES
+#[cfg(feature = "bound-upstream-request-body")]
 fn accumulate_bound_upstream_request_body(caps: &mut BodyCapabilities, filter: &dyn crate::filter::HttpFilter) {
     let access = filter.bound_upstream_request_body_access();
     if access == BodyAccess::None {
         return;
     }
-    caps.needs_bound_upstream_request_body = true;
     caps.needs_request_body = true;
     if access == BodyAccess::ReadWrite {
         caps.any_request_body_writer = true;
@@ -824,6 +842,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "bound-upstream-request-body")]
     #[test]
     fn body_caps_bound_upstream_read_write_participation() {
         let filter = PipelineFilter::new(
@@ -837,10 +856,6 @@ mod tests {
         );
         let caps = compute_body_capabilities(&[filter]);
 
-        assert!(
-            caps.needs_bound_upstream_request_body,
-            "bound participant should set needs_bound_upstream_request_body"
-        );
         assert!(
             caps.needs_request_body,
             "bound participant must contribute to the global request-body need"
@@ -856,6 +871,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "bound-upstream-request-body")]
     #[test]
     fn body_caps_bound_upstream_read_only_is_not_writer() {
         let filter = PipelineFilter::new(
@@ -870,10 +886,6 @@ mod tests {
         let caps = compute_body_capabilities(&[filter]);
 
         assert!(
-            caps.needs_bound_upstream_request_body,
-            "read-only bound participant should still need the phase"
-        );
-        assert!(
             caps.needs_request_body,
             "read-only bound participant needs request body"
         );
@@ -883,6 +895,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "bound-upstream-request-body")]
     #[test]
     fn body_caps_bound_upstream_defensive_ceiling() {
         let filter = PipelineFilter::new(
@@ -905,6 +918,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "bound-upstream-request-body")]
     #[test]
     fn body_caps_ignore_branch_bound_upstream_filters() {
         use std::sync::Arc;
@@ -939,8 +953,8 @@ mod tests {
         let caps = compute_body_capabilities(&[parent]);
 
         assert!(
-            !caps.needs_bound_upstream_request_body,
-            "bound participant inside a branch must not enable the phase"
+            !caps.any_request_body_writer,
+            "a branch read-write participant must not mark the request body as written"
         );
         assert!(
             !caps.needs_request_body,
@@ -953,6 +967,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "bound-upstream-request-body")]
     #[test]
     fn bound_upstream_request_body_indices_top_level_only() {
         let participant = PipelineFilter::new(
@@ -1021,11 +1036,13 @@ mod tests {
 
     /// Bound-upstream request-body participant for capability tests, with a
     /// configurable declared access and body mode.
+    #[cfg(feature = "bound-upstream-request-body")]
     struct BoundUpstreamCapFilter {
         access: BodyAccess,
         mode: BodyMode,
     }
 
+    #[cfg(feature = "bound-upstream-request-body")]
     #[async_trait::async_trait]
     impl crate::filter::HttpFilter for BoundUpstreamCapFilter {
         fn name(&self) -> &'static str {

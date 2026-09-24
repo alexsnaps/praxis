@@ -23,20 +23,22 @@ use super::{
     branch::BranchOutcome,
     http_utils::{
         BodyFilterOutcome, HeaderFilterOutcome, accumulate_body_bytes, as_request_body_filter, as_response_body_filter,
-        released_or_continue, run_bound_upstream_request_body_filter, run_request_body_filter, run_request_filter,
-        run_response_body_filter, run_response_filter, run_selected_upstream_request_body_filter,
-        skip_by_response_conditions,
+        released_or_continue, run_request_body_filter, run_request_filter, run_response_body_filter,
+        run_response_filter, run_selected_upstream_request_body_filter, skip_by_response_conditions,
     },
 };
 use crate::{
     FilterError,
-    actions::{BoundUpstreamBodyOutcome, FilterAction, Rejection, SelectedUpstreamBodyOutcome},
+    actions::{FilterAction, Rejection, SelectedUpstreamBodyOutcome},
     any_filter::AnyFilter,
-    body::BodyAccess,
-    condition::{SelectedUpstream, should_execute_bound_selected},
+    condition::should_execute_bound_selected,
     context::{EffectiveHeaders, HttpFilterContext},
-    extensions::BoundRequestBodyRewrite,
     trace_context::{TraceContext, ensure_trace_context},
+};
+#[cfg(feature = "bound-upstream-request-body")]
+use crate::{
+    actions::BoundUpstreamBodyOutcome, body::BodyAccess, condition::SelectedUpstream,
+    extensions::BoundRequestBodyRewrite,
 };
 
 // -----------------------------------------------------------------------------
@@ -111,11 +113,14 @@ impl FilterPipeline {
                 HeaderFilterOutcome::Continue => {},
             }
             ctx.executed_filter_indices[idx] = true;
-            // Bound-upstream request-body barrier: if this filter just bound a
-            // logical upstream, drain the bound-upstream body participants once
-            // against the frozen binding before its branch chains evaluate.
-            if let FilterAction::Reject(r) = self.run_bound_upstream_request_body_barrier(http_filter, ctx).await? {
-                return Ok(FilterAction::Reject(r));
+            // Freeze before this filter's branches run so they, every later
+            // filter, and any ReEnter pass all see the one binding.
+            if published_first_binding(http_filter, ctx) {
+                ctx.freeze_bound_upstream();
+                #[cfg(feature = "bound-upstream-request-body")]
+                if let FilterAction::Reject(r) = self.run_bound_upstream_request_body(ctx).await? {
+                    return Ok(FilterAction::Reject(r));
+                }
             }
             match super::evaluate::evaluate_branches(&pf.branches, ctx).await? {
                 BranchOutcome::Continue => idx += 1,
@@ -354,14 +359,14 @@ impl FilterPipeline {
         Ok(FilterAction::Continue)
     }
 
-    /// Fire the once-per-request bound-upstream request-body barrier.
+    /// Run the bound-upstream request-body participants once, right after the
+    /// first binding froze.
     ///
-    /// Called from [`execute_http_request`] immediately after a filter's
-    /// `on_request` sets its executed index and before its branch chains
-    /// evaluate. The barrier drains the bound-upstream body participants at
-    /// most once per downstream request, and only once `binding_filter` has
-    /// actually bound a logical upstream. Pipelines with no bound-upstream
-    /// participants still freeze the binding, but skip body execution.
+    /// Called from [`execute_http_request`] after the binding filter's
+    /// `on_request` and before its branch chains evaluate. The freeze doubles
+    /// as the once-per-request marker, so a `ReEnter` pass or IRR continuation
+    /// never reaches here again. A writer's output is size-checked and recorded
+    /// as the body to forward.
     ///
     /// # Errors
     ///
@@ -369,15 +374,11 @@ impl FilterPipeline {
     /// `failure_mode`.
     ///
     /// [`execute_http_request`]: FilterPipeline::execute_http_request
-    async fn run_bound_upstream_request_body_barrier(
+    #[cfg(feature = "bound-upstream-request-body")]
+    async fn run_bound_upstream_request_body(
         &self,
-        binding_filter: &dyn crate::filter::HttpFilter,
         ctx: &mut HttpFilterContext<'_>,
     ) -> Result<FilterAction, FilterError> {
-        if !binding_filter.binds_upstream() || ctx.bound_upstream_frozen() || ctx.bound_cluster().is_none() {
-            return Ok(FilterAction::Continue);
-        }
-        ctx.freeze_bound_upstream();
         if self.bound_upstream_request_body_filter_indices.is_empty() {
             return Ok(FilterAction::Continue);
         }
@@ -417,6 +418,7 @@ impl FilterPipeline {
     /// [`buffered_request_body`]: HttpFilterContext::buffered_request_body
     /// [`executed_filter_indices`]: HttpFilterContext::executed_filter_indices
     /// [`execute_http_selected_upstream_request_body`]: FilterPipeline::execute_http_selected_upstream_request_body
+    #[cfg(feature = "bound-upstream-request-body")]
     #[expect(
         clippy::too_many_lines,
         reason = "body hook loop with take/commit and per-filter skip checks"
@@ -453,7 +455,7 @@ impl FilterPipeline {
             };
             ctx.current_filter_id = Some(pf.filter_id);
             body = body.filter(|bytes| !bytes.is_empty());
-            let outcome = run_bound_upstream_request_body_filter(
+            let outcome = super::http_utils::run_bound_upstream_request_body_filter(
                 http_filter.as_ref(),
                 ctx,
                 &mut body,
@@ -613,6 +615,15 @@ impl FilterPipeline {
         }
         Ok(None)
     }
+}
+
+// -----------------------------------------------------------------------------
+// Binding Utilities
+// -----------------------------------------------------------------------------
+
+/// Whether `filter` just published the request's first logical binding.
+fn published_first_binding(filter: &dyn crate::filter::HttpFilter, ctx: &HttpFilterContext<'_>) -> bool {
+    filter.binds_upstream() && !ctx.bound_upstream_frozen() && ctx.bound_cluster().is_some()
 }
 
 // -----------------------------------------------------------------------------

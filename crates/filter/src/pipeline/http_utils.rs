@@ -18,15 +18,16 @@ use tracing::{Instrument as _, debug, info_span, trace, warn};
 use super::{check_failure_mode, filter::PipelineFilter};
 use crate::{
     FilterError,
-    actions::{BoundUpstreamBodyOutcome, FilterAction, Rejection, SelectedUpstreamBodyOutcome},
+    actions::{FilterAction, Rejection, SelectedUpstreamBodyOutcome},
     any_filter::AnyFilter,
     condition::{SelectedUpstream, should_execute_from, should_execute_response_ref},
     context::{EffectiveHeaders, HttpFilterContext, Response},
     metrics::{
-        PHASE_BOUND_UPSTREAM, PHASE_REQUEST, PHASE_RESPONSE, PHASE_SELECTED_UPSTREAM, STREAM_BODY, STREAM_HEADERS,
-        record_filter_duration,
+        PHASE_REQUEST, PHASE_RESPONSE, PHASE_SELECTED_UPSTREAM, STREAM_BODY, STREAM_HEADERS, record_filter_duration,
     },
 };
+#[cfg(feature = "bound-upstream-request-body")]
+use crate::{actions::BoundUpstreamBodyOutcome, metrics::PHASE_BOUND_UPSTREAM};
 
 // -----------------------------------------------------------------------------
 // Body Filter Utilities
@@ -228,6 +229,7 @@ fn record_selected_upstream_result(span: &tracing::Span, result: &Result<Selecte
 /// When `failure_mode` is [`FailureMode::Open`], errors are logged as
 /// warnings and the filter is treated as if it returned
 /// [`BoundUpstreamBodyOutcome::Continue`].
+#[cfg(feature = "bound-upstream-request-body")]
 pub(super) fn dispatch_bound_upstream_body_result(
     result: Result<BoundUpstreamBodyOutcome, FilterError>,
     filter_name: &str,
@@ -251,6 +253,7 @@ pub(super) fn dispatch_bound_upstream_body_result(
 }
 
 /// Record a bound-upstream body result on the span's `filter.result` field.
+#[cfg(feature = "bound-upstream-request-body")]
 fn record_bound_upstream_result(span: &tracing::Span, result: &Result<BoundUpstreamBodyOutcome, FilterError>) {
     let label = match result {
         Ok(BoundUpstreamBodyOutcome::Continue) => "continue",
@@ -470,6 +473,7 @@ pub(super) async fn run_selected_upstream_request_body_filter(
 /// buffered request body and returns the reduced [`BoundUpstreamBodyOutcome`]
 /// (continue or reject). Metrics are recorded under [`PHASE_BOUND_UPSTREAM`]
 /// so the barrier pass stays separable from the normal request-body phase.
+#[cfg(feature = "bound-upstream-request-body")]
 pub(super) async fn run_bound_upstream_request_body_filter(
     http_filter: &dyn crate::filter::HttpFilter,
     ctx: &mut HttpFilterContext<'_>,

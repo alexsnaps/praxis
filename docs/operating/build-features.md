@@ -74,6 +74,7 @@ really is out of the build.
 | `cloud-events-filter` | off (experimental) | The `cloud_events` filter (serialize requests into CloudEvents and ship them to an HTTP receiver). | On for event export; delivery is best-effort. Adds `chrono` and `url`. |
 | `iterative-request-router` | off (experimental) | The `iterative_request_router` filter: a bounded loop of sub-requests for provider failover and agentic/tool loops. | On for callout and failover pipelines (the AI gateway relies on it). No extra dependencies. |
 | `router-json-aliases` | off (experimental) | The `router` filter's JSON-alias body-routing groundwork. | Groundwork only: it is not wired into routing, and a route that sets `json_aliases` is rejected at build even with the feature on. Default builds do not accept the keys. |
+| `bound-upstream-request-body` | off (experimental) | The `HttpFilter::on_bound_upstream_request_body` hook, run once at the logical-binding barrier. | For out-of-tree filters that must inspect or rewrite the request body against the bound upstream; no in-tree filter uses it yet. |
 | `chain-binding` | off (experimental) | The `register_chain_binding` outbound-callout API (`ChainBindingContext::bind_chain`) and its authority-bound deferred credentials (`PendingCredentials`, `DeferredCredential`). | For out-of-tree callout filters; no in-tree consumer yet. |
 | `spiffe` | off (experimental) | SPIFFE X.509-SVID mTLS peer identity (the `require_named` listener mode) and the `peer_identity_trust` filter. | On for mTLS peer-identity authorization. Adds `spiffe` and `x509-parser`. |
 | `dev` | off | Developer convenience bundle (currently enables `basic-auth-filter`). | Local development builds. |
@@ -103,6 +104,14 @@ production` at startup. Do not run an experimental build in production.
   wired into request routing, so a route that sets `json_aliases` is rejected
   at build even with the feature on. It is kept behind the flag for a future
   implementation; default builds do not carry the `json_aliases` keys at all.
+- **`bound-upstream-request-body`**: the once-per-request bound-upstream
+  request-body hook (`bound_upstream_request_body_access` and
+  `on_bound_upstream_request_body` on `HttpFilter`). It runs right after the
+  binding `router` freezes the request's
+  [logical upstream binding](../architecture/upstream-binding.md), over the
+  fully buffered body, and a read-write participant's output becomes the body
+  forwarded, retried, and handed to the IRR. Logical binding itself is not
+  gated; only this hook is. It has no in-tree consumer yet.
 - **`chain-binding`**: the `register_chain_binding` extension API and
   `ChainBindingContext::bind_chain`, together with the authority-bound
   deferred-credential channel (`PendingCredentials` / `DeferredCredential`)
@@ -131,9 +140,10 @@ production` at startup. Do not run an experimental build in production.
   `policy-engine` by the widest margin. Most filters are always compiled in and
   share dependencies with the core proxy, so gating them individually would not
   remove a crate. The experimental filter gates (`iterative-request-router`,
-  `chain-binding`, `router-json-aliases`) exist to keep unfinished or
-  not-for-production surface out of default builds rather than to save a crate;
-  `spiffe` and `cloud-events-filter` do additionally drop dependencies
+  `chain-binding`, `router-json-aliases`, `bound-upstream-request-body`) exist
+  to keep unfinished or not-for-production surface out of default builds
+  rather than to save a crate; `spiffe` and `cloud-events-filter` do
+  additionally drop dependencies
   (`spiffe` + `x509-parser`, and `chrono` + `url` respectively).
 
 ## See also

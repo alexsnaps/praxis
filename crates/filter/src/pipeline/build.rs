@@ -25,10 +25,7 @@ use tracing::{debug, warn};
 
 use super::{
     FilterPipeline,
-    body::{
-        body_filter_indices, bound_upstream_request_body_indices, compute_body_capabilities,
-        selected_upstream_request_body_indices,
-    },
+    body::{body_filter_indices, compute_body_capabilities, selected_upstream_request_body_indices},
     catalog::ClusterApplicationCatalog,
     filter::PipelineFilter,
 };
@@ -126,7 +123,8 @@ impl FilterPipeline {
             .collect();
         let (request_body_filter_indices, response_body_filter_indices) = body_filter_indices(&filters);
         let selected_upstream_request_body_filter_indices = selected_upstream_request_body_indices(&filters);
-        let bound_upstream_request_body_filter_indices = bound_upstream_request_body_indices(&filters);
+        #[cfg(feature = "bound-upstream-request-body")]
+        let bound_upstream_request_body_filter_indices = super::body::bound_upstream_request_body_indices(&filters);
         let response_trailer_filter_indices = super::body::response_trailer_filter_indices(&filters);
         let id_generator = Arc::new(IdGenerator::new());
         let time_source: Arc<dyn praxis_core::time::TimeSource> = Arc::new(SystemTimeSource);
@@ -137,6 +135,7 @@ impl FilterPipeline {
             request_body_filter_indices,
             response_body_filter_indices,
             selected_upstream_request_body_filter_indices,
+            #[cfg(feature = "bound-upstream-request-body")]
             bound_upstream_request_body_filter_indices,
             allow_private_upstreams: false,
             response_trailer_filter_indices,
@@ -280,11 +279,8 @@ impl FilterPipeline {
             self.body_capabilities.request_body_mode,
             &mut errors,
         );
-        super::checks::check_bound_upstream_body_mode(&self.filters, &mut errors);
-        super::checks::check_branch_bound_upstream_body_filters(&self.filters, &mut errors);
-        if entry_binding_guaranteed {
-            super::checks::check_step_bound_upstream_body_filters(&self.filters, &mut errors);
-        }
+        #[cfg(feature = "bound-upstream-request-body")]
+        super::checks::check_bound_upstream_body_participants(&self.filters, entry_binding_guaranteed, &mut errors);
         if uses_bound_upstream {
             super::checks::check_no_rebind_after_binding(&self.filters, entry_binding_guaranteed, &mut errors);
         }

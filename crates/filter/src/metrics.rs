@@ -55,6 +55,7 @@ pub(crate) const PHASE_SELECTED_UPSTREAM: &str = "selected_upstream";
 /// filter active in both the normal request-body phase and the
 /// bound-upstream phase would otherwise produce indistinguishable histogram
 /// entries.
+#[cfg(feature = "bound-upstream-request-body")]
 pub(crate) const PHASE_BOUND_UPSTREAM: &str = "bound_upstream";
 
 /// Header hook label value (`on_request`, `on_response`).
@@ -194,6 +195,7 @@ mod tests {
         assert_metric_labels(&rendered, "sel_phase_test", "selected_upstream", "body");
     }
 
+    #[cfg(feature = "bound-upstream-request-body")]
     #[test]
     fn record_distinguishes_request_and_bound_upstream_phases() {
         crate::test_utils::install_metrics_recorder();
@@ -214,6 +216,7 @@ mod tests {
             PHASE_SELECTED_UPSTREAM, "selected_upstream",
             "PHASE_SELECTED_UPSTREAM label value"
         );
+        #[cfg(feature = "bound-upstream-request-body")]
         assert_eq!(
             PHASE_BOUND_UPSTREAM, "bound_upstream",
             "PHASE_BOUND_UPSTREAM label value"

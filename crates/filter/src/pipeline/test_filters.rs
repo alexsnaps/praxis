@@ -73,6 +73,7 @@ pub(in crate::pipeline) fn bound_lb(clusters: &[&str]) -> PipelineFilter {
 
 /// A filter participating in the bound-upstream request-body phase with the
 /// given access and delivery mode.
+#[cfg(feature = "bound-upstream-request-body")]
 pub(in crate::pipeline) fn bound_body_filter(name: &'static str, access: BodyAccess, mode: BodyMode) -> PipelineFilter {
     capability_filter(CapabilityFilter {
         name,
@@ -143,6 +144,7 @@ struct CapabilityFilter {
     binds_upstream: bool,
     consumes_bound_upstream: bool,
     bound_upstream_clusters: Vec<String>,
+    #[cfg(feature = "bound-upstream-request-body")]
     bound_upstream_request_body_access: BodyAccess,
     request_body_access: BodyAccess,
     request_body_mode: Option<BodyMode>,
@@ -180,6 +182,7 @@ impl HttpFilter for CapabilityFilter {
         self.bound_upstream_clusters.clone()
     }
 
+    #[cfg(feature = "bound-upstream-request-body")]
     fn bound_upstream_request_body_access(&self) -> BodyAccess {
         self.bound_upstream_request_body_access
     }

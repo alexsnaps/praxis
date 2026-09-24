@@ -77,7 +77,7 @@ influence downstream processing:
 | `on_request` | Forward (pipeline order) | Request |
 | `on_response` | Reverse (pipeline order) | Response |
 | `on_request_body` | Forward | Request body chunks |
-| `on_bound_upstream_request_body` | Forward, at most once | Complete body after logical binding, before endpoint selection |
+| `on_bound_upstream_request_body` | Forward, at most once | Complete body after logical binding, before endpoint selection (experimental `bound-upstream-request-body` builds only) |
 | `on_selected_upstream_request_body` | Forward, per exchange | Complete body after endpoint selection |
 | `on_response_body` | Reverse | Response body chunks |
 
@@ -95,7 +95,8 @@ declaring request-body access runs.
 
 Filters that need the logical route must instead declare
 `bound_upstream_request_body_access` and implement
-`on_bound_upstream_request_body`. That hook runs at most once after
+`on_bound_upstream_request_body`, which requires the experimental
+`bound-upstream-request-body` build feature. That hook runs at most once after
 the binding router freezes `BoundUpstream`; a read-write
 participant replaces the canonical body used by direct
 dispatch, IRR, retries, and selected-upstream adaptation.

@@ -40,6 +40,11 @@ iterative-request-router = []
 # experimental and not yet wired into request routing.
 router-json-aliases = []
 
+# The once-per-request bound-upstream request-body hook
+# (`HttpFilter::on_bound_upstream_request_body`), run at the logical-binding
+# barrier. Off by default; experimental. No in-tree filter uses it yet.
+bound-upstream-request-body = []
+
 # The chain-binding registry extension API (register_chain_binding /
 # ChainBindingContext::bind_chain). Off by default; experimental. No in-tree
 # consumer yet; provided for out-of-tree callout filters.

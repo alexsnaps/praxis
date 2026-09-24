@@ -87,9 +87,11 @@ pub(crate) mod test_support {
     }
 }
 
+#[cfg(feature = "bound-upstream-request-body")]
+pub use actions::BoundUpstreamBodyOutcome;
 pub use actions::{
-    BoundUpstreamBodyOutcome, FilterAction, Rejection, SelectedUpstreamBodyOutcome, StreamingResponseBody,
-    StreamingTerminalResponse, TerminalResponse,
+    FilterAction, Rejection, SelectedUpstreamBodyOutcome, StreamingResponseBody, StreamingTerminalResponse,
+    TerminalResponse,
 };
 pub use any_filter::AnyFilter;
 pub use binding::ChainBindingContext;

@@ -249,6 +249,7 @@ pub enum SelectedUpstreamBodyOutcome {
 /// [`BodyDone`]: FilterAction::BodyDone
 /// [`Continue`]: BoundUpstreamBodyOutcome::Continue
 /// [`Reject`]: BoundUpstreamBodyOutcome::Reject
+#[cfg(feature = "bound-upstream-request-body")]
 #[derive(Debug)]
 #[must_use]
 pub enum BoundUpstreamBodyOutcome {

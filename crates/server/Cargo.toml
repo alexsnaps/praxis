@@ -63,6 +63,8 @@ cloud-events-filter = ["praxis-filter/cloud-events-filter", "experimental"]
 iterative-request-router = ["praxis-filter/iterative-request-router", "experimental"]
 # The `router` filter's JSON-alias body-routing groundwork. Off by default; experimental.
 router-json-aliases = ["praxis-filter/router-json-aliases", "experimental"]
+# The bound-upstream request-body hook. Off by default; experimental.
+bound-upstream-request-body = ["praxis-filter/bound-upstream-request-body", "experimental"]
 # The chain-binding registry extension API. Off by default; experimental.
 chain-binding = ["praxis-filter/chain-binding", "experimental"]
 # SPIFFE X.509-SVID mTLS peer identity. Off by default; experimental.

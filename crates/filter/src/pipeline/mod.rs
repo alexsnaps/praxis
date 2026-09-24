@@ -170,6 +170,7 @@ pub struct FilterPipeline {
     /// [`execute_http_request`].
     ///
     /// [`execute_http_request`]: FilterPipeline::execute_http_request
+    #[cfg(feature = "bound-upstream-request-body")]
     bound_upstream_request_body_filter_indices: Vec<usize>,
 
     /// Whether upstream hostnames may resolve to private or reserved IPs.

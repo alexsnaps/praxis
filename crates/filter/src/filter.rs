@@ -13,7 +13,7 @@ use praxis_core::config::InsecureOptions;
 
 pub(crate) use crate::context::HttpFilterContext;
 use crate::{
-    actions::{BoundUpstreamBodyOutcome, FilterAction, SelectedUpstreamBodyOutcome},
+    actions::{FilterAction, SelectedUpstreamBodyOutcome},
     body::{BodyAccess, BodyMode},
     builtins::http::payload_processing::compression_config::CompressionConfig,
     pipeline::{
@@ -318,6 +318,8 @@ pub trait HttpFilter: Send + Sync {
     /// Declares what access this filter needs to the request body during
     /// the bound-upstream phase.
     ///
+    /// Requires the experimental `bound-upstream-request-body` build feature.
+    ///
     /// The bound-upstream request-body phase runs at most once per downstream
     /// request, at the barrier immediately after the `router` binds a logical
     /// upstream (`BoundUpstream`) and before any gateway-owned request filters
@@ -341,6 +343,7 @@ pub trait HttpFilter: Send + Sync {
     /// [`on_bound_upstream_request_body`]: HttpFilter::on_bound_upstream_request_body
     /// [`request_body_mode`]: HttpFilter::request_body_mode
     /// [`BodyMode::StreamBuffer`]: crate::BodyMode::StreamBuffer
+    #[cfg(feature = "bound-upstream-request-body")]
     fn bound_upstream_request_body_access(&self) -> BodyAccess {
         BodyAccess::None
     }
@@ -514,6 +517,8 @@ pub trait HttpFilter: Send + Sync {
     /// upstream and before any gateway-owned request filters or IRR run. It is
     /// not called when routing stops before a binding is published.
     ///
+    /// Requires the experimental `bound-upstream-request-body` build feature.
+    ///
     /// Runs only for filters that declare
     /// [`bound_upstream_request_body_access`] other than
     /// [`BodyAccess::None`], in pipeline order, and only when the filter's
@@ -539,13 +544,14 @@ pub trait HttpFilter: Send + Sync {
     /// [`bound_upstream_request_body_access`]: HttpFilter::bound_upstream_request_body_access
     /// [`BoundUpstreamBodyOutcome::Reject`]: crate::BoundUpstreamBodyOutcome::Reject
     /// [`BoundUpstreamBodyOutcome::Continue`]: crate::BoundUpstreamBodyOutcome::Continue
+    #[cfg(feature = "bound-upstream-request-body")]
     async fn on_bound_upstream_request_body(
         &self,
         ctx: &mut HttpFilterContext<'_>,
         body: &mut Option<Bytes>,
-    ) -> Result<BoundUpstreamBodyOutcome, FilterError> {
+    ) -> Result<crate::BoundUpstreamBodyOutcome, FilterError> {
         let _ = (ctx, body);
-        Ok(BoundUpstreamBodyOutcome::Continue)
+        Ok(crate::BoundUpstreamBodyOutcome::Continue)
     }
 
     /// Whether this filter rewrites upstream response trailers.

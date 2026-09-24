@@ -943,6 +943,7 @@ struct StepErrorFilter;
 
 struct ReplaceChildBindingFilter;
 
+#[cfg(feature = "bound-upstream-request-body")]
 struct BoundBodyStepFilter;
 
 struct RemoveIterationStateFilter;
@@ -981,6 +982,7 @@ impl crate::HttpFilter for ReplaceChildBindingFilter {
     }
 }
 
+#[cfg(feature = "bound-upstream-request-body")]
 #[async_trait::async_trait]
 impl crate::HttpFilter for BoundBodyStepFilter {
     fn name(&self) -> &'static str {
@@ -2677,6 +2679,7 @@ fn test_registry() -> crate::FilterRegistry {
             crate::FilterFactory::Http(std::sync::Arc::new(|_| Ok(Box::new(ReplaceChildBindingFilter)))),
         )
         .unwrap();
+    #[cfg(feature = "bound-upstream-request-body")]
     registry
         .register(
             "test_bound_body_step",
@@ -3639,6 +3642,7 @@ steps:
     );
 }
 
+#[cfg(feature = "bound-upstream-request-body")]
 #[test]
 fn step_bound_body_hook_is_rejected() {
     let yaml = "

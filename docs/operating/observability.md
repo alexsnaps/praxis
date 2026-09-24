@@ -403,7 +403,7 @@ The six hook combinations are:
 | -------------------- | -------------------- |
 | `request` + `headers` | `on_request` |
 | `request` + `body` | `on_request_body` |
-| `bound_upstream` + `body` | `on_bound_upstream_request_body` |
+| `bound_upstream` + `body` | `on_bound_upstream_request_body` (experimental `bound-upstream-request-body` builds) |
 | `selected_upstream` + `body` | `on_selected_upstream_request_body` |
 | `response` + `headers` | `on_response` |
 | `response` + `body` | `on_response_body` |

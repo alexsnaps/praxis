@@ -1019,7 +1019,7 @@ pub(super) fn uses_bound_upstream(filters: &[PipelineFilter]) -> bool {
     filters.iter().any(|pf| {
         has_bound_upstream_condition(pf)
             || matches!(&pf.filter, AnyFilter::Http(filter)
-                if filter.bound_upstream_request_body_access() != BodyAccess::None
+                if super::body::participates_in_bound_upstream_body(filter.as_ref())
                     || filter.consumes_bound_upstream()
                     || filter.requires_bound_upstream_on_entry())
             || pf.branches.iter().any(|branch| uses_bound_upstream(&branch.filters))
@@ -1701,11 +1701,29 @@ pub(super) fn check_bound_condition_with_pre_read_body(
             errors.push(format!(
                 "filter '{name}' combines an ordinary pre-read request-body hook with a \
                  bound_upstream condition, but a pre-read body hook runs before any binding \
-                 exists; move body processing to the bound-upstream request-body phase \
-                 (bound_upstream_request_body_access)",
+                 exists; drop the condition, or move body processing to the experimental \
+                 bound-upstream request-body phase (bound_upstream_request_body_access)",
                 name = pf.filter.name(),
             ));
         }
+    }
+}
+
+/// Bound-upstream request-body participants must buffer a bounded body, sit
+/// on the top-level path, and stay out of IRR steps.
+///
+/// `in_irr_step` is `true` when validating an `iterative_request_router` step,
+/// which inherits an already-frozen binding and must not declare the phase.
+#[cfg(feature = "bound-upstream-request-body")]
+pub(super) fn check_bound_upstream_body_participants(
+    filters: &[PipelineFilter],
+    in_irr_step: bool,
+    errors: &mut Vec<String>,
+) {
+    check_bound_upstream_body_mode(filters, errors);
+    check_branch_bound_upstream_body_filters(filters, errors);
+    if in_irr_step {
+        check_step_bound_upstream_body_filters(filters, errors);
     }
 }
 
@@ -1721,7 +1739,8 @@ pub(super) fn check_bound_condition_with_pre_read_body(
 ///
 /// [`BodyMode::StreamBuffer`]: crate::BodyMode::StreamBuffer
 /// [`request_body_mode`]: crate::HttpFilter::request_body_mode
-pub(super) fn check_bound_upstream_body_mode(filters: &[PipelineFilter], errors: &mut Vec<String>) {
+#[cfg(feature = "bound-upstream-request-body")]
+fn check_bound_upstream_body_mode(filters: &[PipelineFilter], errors: &mut Vec<String>) {
     for pf in filters {
         let AnyFilter::Http(filter) = &pf.filter else {
             continue;
@@ -1759,7 +1778,8 @@ pub(super) fn check_bound_upstream_body_mode(filters: &[PipelineFilter], errors:
 /// pipeline path or gate it with filter conditions.
 ///
 /// [`bound_upstream_request_body_access`]: crate::HttpFilter::bound_upstream_request_body_access
-pub(super) fn check_branch_bound_upstream_body_filters(filters: &[PipelineFilter], errors: &mut Vec<String>) {
+#[cfg(feature = "bound-upstream-request-body")]
+fn check_branch_bound_upstream_body_filters(filters: &[PipelineFilter], errors: &mut Vec<String>) {
     for pf in filters {
         for branch in &pf.branches {
             collect_branch_bound_upstream_body_errors(&branch.name, &branch.filters, errors);
@@ -1769,7 +1789,8 @@ pub(super) fn check_branch_bound_upstream_body_filters(filters: &[PipelineFilter
 
 /// IRR step pipelines inherit an already-frozen downstream binding and must not
 /// declare the once-per-downstream-request bound-body phase again.
-pub(super) fn check_step_bound_upstream_body_filters(filters: &[PipelineFilter], errors: &mut Vec<String>) {
+#[cfg(feature = "bound-upstream-request-body")]
+fn check_step_bound_upstream_body_filters(filters: &[PipelineFilter], errors: &mut Vec<String>) {
     for pf in filters {
         if let AnyFilter::Http(filter) = &pf.filter
             && filter.bound_upstream_request_body_access() != BodyAccess::None
@@ -1787,6 +1808,7 @@ pub(super) fn check_step_bound_upstream_body_filters(filters: &[PipelineFilter],
 
 /// Recursively collect bound-upstream body-access violations inside one branch
 /// sub-chain.
+#[cfg(feature = "bound-upstream-request-body")]
 fn collect_branch_bound_upstream_body_errors(branch_name: &str, filters: &[PipelineFilter], errors: &mut Vec<String>) {
     for pf in filters {
         if let AnyFilter::Http(filter) = &pf.filter
@@ -2024,7 +2046,7 @@ fn binding_requirement_reason(pf: &PipelineFilter) -> Option<&'static str> {
     };
     if f.requires_bound_upstream_on_entry() && f.name() == "iterative_request_router" {
         Some("an iterative_request_router step that observes or consumes bound_upstream")
-    } else if f.bound_upstream_request_body_access() != BodyAccess::None {
+    } else if super::body::participates_in_bound_upstream_body(f.as_ref()) {
         Some("a bound-upstream request-body hook")
     } else if f.consumes_bound_upstream() {
         Some("a bound_upstream load balancer")
@@ -2066,9 +2088,10 @@ mod tests {
     use praxis_core::config::{ConditionMatch, SelectedUpstreamMatch};
 
     use super::*;
+    #[cfg(feature = "bound-upstream-request-body")]
+    use crate::pipeline::test_filters::bound_body_filter;
     use crate::pipeline::test_filters::{
-        binding_router, bound_body_filter, bound_lb, lb_filter, metadata_filter, noop_filter_with_conditions,
-        selector_filter,
+        binding_router, bound_lb, lb_filter, metadata_filter, noop_filter_with_conditions, selector_filter,
     };
 
     #[test]
@@ -4513,6 +4536,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "bound-upstream-request-body")]
     #[test]
     fn bound_upstream_body_mode_rejects_stream() {
         let filters = vec![bound_body_filter("bound_body", BodyAccess::ReadOnly, BodyMode::Stream)];
@@ -4526,6 +4550,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "bound-upstream-request-body")]
     #[test]
     fn bound_upstream_body_mode_rejects_unbounded_stream_buffer() {
         let filters = vec![bound_body_filter(
@@ -4538,6 +4563,7 @@ mod tests {
         assert_eq!(errors.len(), 1, "an unbounded StreamBuffer must be rejected");
     }
 
+    #[cfg(feature = "bound-upstream-request-body")]
     #[test]
     fn bound_upstream_body_mode_accepts_bounded_stream_buffer() {
         let filters = vec![bound_body_filter(
@@ -4553,6 +4579,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "bound-upstream-request-body")]
     #[test]
     fn bound_upstream_body_mode_rejects_selected_upstream_condition() {
         let mut filter = bound_body_filter(
@@ -4569,6 +4596,7 @@ mod tests {
         assert!(errors[0].contains("endpoint metadata does not exist"));
     }
 
+    #[cfg(feature = "bound-upstream-request-body")]
     #[test]
     fn bound_upstream_body_mode_ignores_non_participants() {
         let filters = vec![body_filter()];
@@ -4580,6 +4608,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "bound-upstream-request-body")]
     #[test]
     fn branch_bound_upstream_body_filter_errors() {
         let mut host = named_noop_filter("headers", vec![]);
@@ -4602,6 +4631,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "bound-upstream-request-body")]
     #[test]
     fn nested_branch_bound_upstream_body_filter_errors() {
         let mut inner = named_noop_filter("classifier", vec![]);
@@ -4626,6 +4656,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "bound-upstream-request-body")]
     #[test]
     fn top_level_bound_upstream_body_filter_no_branch_error() {
         let filters = vec![bound_body_filter(
@@ -4680,6 +4711,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "bound-upstream-request-body")]
     #[test]
     fn bound_body_hook_without_binding_errors() {
         let filters = vec![bound_body_filter(
