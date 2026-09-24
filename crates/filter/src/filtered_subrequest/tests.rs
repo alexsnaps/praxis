@@ -1328,6 +1328,59 @@ async fn expired_deadline_keeps_the_outer_scope_checkpoint() {
     );
 }
 
+#[tokio::test]
+#[expect(clippy::large_futures, reason = "drives the full executor future in a test")]
+async fn execute_restores_the_parent_binding_after_a_child_rebinds() {
+    for (inherits_binding, fails) in [(true, false), (true, true), (false, false), (false, true)] {
+        let (addr, backend) = spawn_raw_backend("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok").await;
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let pipeline = rebinding_pipeline(addr, &seen, fails);
+        let executor = test_callout_executor();
+        let request = crate::SubRequest {
+            method: http::Method::GET,
+            uri: http::Uri::from_static("/"),
+            headers: HeaderMap::new(),
+            body: bytes::Bytes::new(),
+        };
+        let mut input = super::FilteredSubrequestInput::callout(
+            &pipeline,
+            &request,
+            std::time::Instant::now() + std::time::Duration::from_secs(5),
+            frozen_parent_extensions(),
+        );
+        input.inherits_binding = inherits_binding;
+
+        let extensions = match executor.execute(input).await {
+            Ok(opened) => opened.continuation.into_completion().extensions,
+            Err(error) => error.into_parts().1,
+        };
+        backend.abort();
+
+        let expected_seen = inherits_binding.then(|| "parent".to_owned());
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![expected_seen],
+            "the child sees the parent binding only when it inherits it \
+             (inherits = {inherits_binding}, fails = {fails})"
+        );
+        assert_eq!(
+            extensions
+                .get::<crate::extensions::BoundUpstream>()
+                .map(crate::extensions::BoundUpstream::cluster),
+            Some("parent"),
+            "the parent binding must come back (inherits = {inherits_binding}, fails = {fails})"
+        );
+        assert!(
+            extensions.get::<crate::extensions::BoundUpstreamFrozen>().is_some(),
+            "the parent freeze must come back (inherits = {inherits_binding}, fails = {fails})"
+        );
+        assert!(
+            extensions.get::<super::ParentUpstreamStates>().is_none(),
+            "the scope checkpoint must be consumed (inherits = {inherits_binding}, fails = {fails})"
+        );
+    }
+}
+
 #[test]
 fn callout_scope_starts_unbound_and_restores_the_parent_binding() {
     use std::sync::Arc;
@@ -3562,4 +3615,94 @@ async fn selected_upstream_phase_enforces_retained_state_ceiling() {
          413. A non-empty capture means the executor dialed first and only rejected \
          post-transport"
     );
+}
+
+// -----------------------------------------------------------------------------
+// Test Utilities: binding restore
+// -----------------------------------------------------------------------------
+
+/// Records the binding it sees, then replaces it with a child binding and
+/// clears the freeze, optionally failing afterwards.
+struct RebindChildFilter {
+    seen: std::sync::Arc<std::sync::Mutex<Vec<Option<String>>>>,
+    fails: bool,
+}
+
+#[async_trait::async_trait]
+impl crate::HttpFilter for RebindChildFilter {
+    fn name(&self) -> &'static str {
+        "test_rebind_child"
+    }
+
+    async fn on_request(
+        &self,
+        ctx: &mut crate::HttpFilterContext<'_>,
+    ) -> Result<crate::FilterAction, crate::FilterError> {
+        self.seen.lock().unwrap().push(ctx.bound_cluster().map(str::to_owned));
+        ctx.extensions.insert(crate::extensions::BoundUpstream::new(
+            std::sync::Arc::from("child"),
+            None,
+            None,
+        ));
+        ctx.extensions.remove::<crate::extensions::BoundUpstreamFrozen>();
+        if self.fails {
+            return Err("child step failed".to_owned().into());
+        }
+        Ok(crate::FilterAction::Continue)
+    }
+}
+
+/// A pipeline whose first filter rebinds, then routes to `addr`.
+fn rebinding_pipeline(
+    addr: std::net::SocketAddr,
+    seen: &std::sync::Arc<std::sync::Mutex<Vec<Option<String>>>>,
+    fails: bool,
+) -> std::sync::Arc<crate::FilterPipeline> {
+    let mut registry = crate::FilterRegistry::with_builtins();
+    let recorder = std::sync::Arc::clone(seen);
+    registry
+        .register(
+            "test_rebind_child",
+            crate::FilterFactory::Http(std::sync::Arc::new(move |_| {
+                Ok(Box::new(RebindChildFilter {
+                    seen: std::sync::Arc::clone(&recorder),
+                    fails,
+                }))
+            })),
+        )
+        .unwrap();
+    let mut entries: Vec<crate::FilterEntry> = serde_yaml::from_str(&format!(
+        r#"
+- filter: test_rebind_child
+- filter: router
+  routes:
+    - path_prefix: "/"
+      cluster: backend
+- filter: load_balancer
+  clusters:
+    - name: backend
+      endpoints: ["{addr}"]
+"#
+    ))
+    .unwrap();
+    std::sync::Arc::new(crate::FilterPipeline::build(&mut entries, &registry).unwrap())
+}
+
+/// Request extensions carrying a frozen parent binding.
+fn frozen_parent_extensions() -> crate::RequestExtensions {
+    let mut extensions = crate::RequestExtensions::default();
+    extensions.insert(crate::extensions::BoundUpstream::new(
+        std::sync::Arc::from("parent"),
+        None,
+        None,
+    ));
+    extensions.insert(crate::extensions::BoundUpstreamFrozen);
+    extensions
+}
+
+/// A callout executor over a test connector.
+fn test_callout_executor() -> crate::FilteredSubrequestExecutor {
+    let client = praxis_core::subrequest::SubRequestClient::new(crate::test_support::connector(1, None));
+    let downstream = crate::SubrequestRuntime::new(None, false, None, std::time::Instant::now());
+    crate::FilteredSubrequestExecutor::for_callout(client, downstream, 0, 1_048_576, std::time::Duration::from_secs(5))
 }
