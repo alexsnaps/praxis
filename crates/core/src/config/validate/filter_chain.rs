@@ -1039,7 +1039,8 @@ clusters: [{name: backend, endpoints: ["10.0.0.1:80"]}]
                 .bound_upstream
                 .and_then(|bound| bound.application_provider)
                 .as_deref(),
-            Some("openai")
+            Some("openai"),
+            "the bound_upstream provider must survive the unless round trip"
         );
     }
 

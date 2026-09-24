@@ -3000,8 +3000,14 @@ content-length: 0
             Some("backend"),
             "an untagged cluster still binds (the cluster name is always present)"
         );
-        assert!(ctx.bound_application_protocol().is_none());
-        assert!(ctx.bound_application_provider().is_none());
+        assert!(
+            ctx.bound_application_protocol().is_none(),
+            "an untagged binding should carry no application protocol"
+        );
+        assert!(
+            ctx.bound_application_provider().is_none(),
+            "an untagged binding should carry no application provider"
+        );
     }
 
     #[test]
@@ -3017,8 +3023,16 @@ content-length: 0
             Some("second"),
             "the later binding replaces the previous one before the barrier freezes it"
         );
-        assert_eq!(ctx.bound_application_protocol(), Some("p2"));
-        assert_eq!(ctx.bound_application_provider(), Some("prov"));
+        assert_eq!(
+            ctx.bound_application_protocol(),
+            Some("p2"),
+            "the later binding's protocol replaces the previous one"
+        );
+        assert_eq!(
+            ctx.bound_application_provider(),
+            Some("prov"),
+            "the later binding's provider replaces the previous (absent) one"
+        );
     }
 
     #[test]

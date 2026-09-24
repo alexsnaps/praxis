@@ -1036,8 +1036,15 @@ async fn bound_upstream_source_preserves_retry_policy_when_conflict_is_rejected(
         ctx.route_retry_policy.is_some(),
         "rejected resolution must not mutate retry state"
     );
-    assert_eq!(ctx.cluster.as_deref(), Some("stale"));
-    assert!(error.to_string().contains("conflicts with bound cluster"));
+    assert_eq!(
+        ctx.cluster.as_deref(),
+        Some("stale"),
+        "rejected resolution must not overwrite the selected cluster"
+    );
+    assert!(
+        error.to_string().contains("conflicts with bound cluster"),
+        "error should report the conflict with the bound cluster: {error}"
+    );
 }
 
 #[tokio::test]
@@ -1060,11 +1067,19 @@ async fn bound_upstream_source_with_existing_upstream_preserves_context() {
 
     let action = lb.on_request(&mut ctx).await.unwrap();
 
-    assert!(matches!(action, FilterAction::Continue));
-    assert_eq!(ctx.cluster.as_deref(), Some("already-selected"));
+    assert!(
+        matches!(action, FilterAction::Continue),
+        "an existing upstream should let the pipeline continue: {action:?}"
+    );
+    assert_eq!(
+        ctx.cluster.as_deref(),
+        Some("already-selected"),
+        "an existing upstream should keep its selected cluster"
+    );
     assert_eq!(
         ctx.upstream.as_ref().map(|upstream| upstream.address.as_ref()),
-        Some("127.0.0.1:9090")
+        Some("127.0.0.1:9090"),
+        "an existing upstream should not be replaced by the bound cluster's endpoint"
     );
 }
 
@@ -1084,9 +1099,14 @@ async fn bound_upstream_source_honors_session_affinity() {
 
     assert_eq!(
         ctx.upstream.as_ref().map(|upstream| upstream.address.as_ref()),
-        Some("127.0.0.1:8081")
+        Some("127.0.0.1:8081"),
+        "the bound cluster should honor the pinned session-affinity endpoint"
     );
-    assert_eq!(ctx.cluster.as_deref(), Some("backend"));
+    assert_eq!(
+        ctx.cluster.as_deref(),
+        Some("backend"),
+        "the bound cluster should become the selected cluster"
+    );
 }
 
 #[tokio::test]

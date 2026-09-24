@@ -1229,15 +1229,12 @@ mod tests {
 
     #[test]
     fn bound_lb_without_router_no_error() {
-        // A cluster_source: bound_upstream load balancer self-selects from the
-        // frozen binding, so it needs no preceding router. A missing binding is
-        // reported separately by check_bound_upstream_requires_binding.
         let filters = vec![bound_lb(&["chat"])];
         let mut errors = Vec::new();
         check_lb_without_cluster_selector(&filters, &mut errors);
         assert!(
             errors.is_empty(),
-            "a bound-consuming load balancer needs no preceding router: {errors:?}"
+            "a bound-consuming LB self-selects from the frozen binding and needs no preceding router (a missing binding is check_bound_upstream_requires_binding's job): {errors:?}"
         );
     }
 
@@ -1877,8 +1874,6 @@ mod tests {
 
     #[test]
     fn router_without_lb_suppressed_by_bound_consumer() {
-        // A binding router with no *top-level* load balancer is fine when a
-        // bound-consuming load balancer inside a branch resolves the binding.
         let mut host = named_noop_filter("headers", vec![]);
         host.branches = vec![make_branch_with_filters("direct", vec![bound_lb(&["inference"])])];
         let filters = vec![binding_router(&["inference"]), host];
@@ -1887,7 +1882,7 @@ mod tests {
         check_router_without_lb(&filters, &names, &mut warnings);
         assert!(
             warnings.is_empty(),
-            "a bound consumer should suppress the router-without-LB warning: {warnings:?}"
+            "a bound-consuming LB inside a branch resolves the binding, so no top-level LB is needed: {warnings:?}"
         );
     }
 

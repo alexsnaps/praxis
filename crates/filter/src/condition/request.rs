@@ -1108,22 +1108,27 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("x-tenant", HeaderValue::from_static("acme"));
 
-        assert!(should_execute_bound(
-            std::slice::from_ref(&condition),
-            &make_request(Method::POST, "/", headers.clone()),
-            view,
-        ));
-        assert!(!should_execute_bound(
-            std::slice::from_ref(&condition),
-            &make_request(Method::GET, "/", headers.clone()),
-            view,
-        ));
+        assert!(
+            should_execute_bound(
+                std::slice::from_ref(&condition),
+                &make_request(Method::POST, "/", headers.clone()),
+                view,
+            ),
+            "matching bound provider, method, and header should run"
+        );
+        assert!(
+            !should_execute_bound(
+                std::slice::from_ref(&condition),
+                &make_request(Method::GET, "/", headers.clone()),
+                view,
+            ),
+            "a method mismatch should veto a matching bound provider"
+        );
         headers.insert("x-tenant", HeaderValue::from_static("other"));
-        assert!(!should_execute_bound(
-            &[condition],
-            &make_request(Method::POST, "/", headers),
-            view,
-        ));
+        assert!(
+            !should_execute_bound(&[condition], &make_request(Method::POST, "/", headers), view),
+            "a header mismatch should veto a matching bound provider"
+        );
     }
 
     #[test]
@@ -1211,16 +1216,14 @@ mod tests {
         let req = make_request(Method::POST, "/v1/responses", HeaderMap::new());
         let condition = unless(bound_upstream_match(None, Some("openai")));
 
-        assert!(should_execute_bound(
-            std::slice::from_ref(&condition),
-            &req,
-            BoundUpstreamView::default(),
-        ));
-        assert!(should_execute_bound(
-            &[condition],
-            &req,
-            bound_view(Some("openai_responses"), None),
-        ));
+        assert!(
+            should_execute_bound(std::slice::from_ref(&condition), &req, BoundUpstreamView::default()),
+            "unless bound_upstream should run an unbound request"
+        );
+        assert!(
+            should_execute_bound(&[condition], &req, bound_view(Some("openai_responses"), None)),
+            "unless bound_upstream should run a request whose binding lacks the provider field"
+        );
     }
 
     #[test]

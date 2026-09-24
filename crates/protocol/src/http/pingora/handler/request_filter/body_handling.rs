@@ -215,9 +215,19 @@ mod tests {
         store_canonical_request_body(&mut ctx, Some(Bytes::from_static(b"BOUND")));
 
         let expected = Some(VecDeque::from([Bytes::from_static(b"BOUND")]));
-        assert_eq!(ctx.pre_read_body, expected);
-        assert_eq!(ctx.retained_pre_read_body, expected);
-        assert_eq!(ctx.mutated_request_body_len, Some(5));
+        assert_eq!(
+            ctx.pre_read_body, expected,
+            "the direct body should hold the canonical bytes"
+        );
+        assert_eq!(
+            ctx.retained_pre_read_body, expected,
+            "the retry body should hold the canonical bytes"
+        );
+        assert_eq!(
+            ctx.mutated_request_body_len,
+            Some(5),
+            "the mutated length should match the canonical body"
+        );
     }
 
     #[test]
@@ -225,9 +235,21 @@ mod tests {
         let mut ctx = make_ctx();
         store_canonical_request_body(&mut ctx, None);
 
-        assert_eq!(ctx.pre_read_body, Some(VecDeque::new()));
-        assert_eq!(ctx.retained_pre_read_body, Some(VecDeque::new()));
-        assert_eq!(ctx.mutated_request_body_len, Some(0));
+        assert_eq!(
+            ctx.pre_read_body,
+            Some(VecDeque::new()),
+            "an absent canonical body still leaves an empty direct body"
+        );
+        assert_eq!(
+            ctx.retained_pre_read_body,
+            Some(VecDeque::new()),
+            "an absent canonical body keeps the empty replay marker"
+        );
+        assert_eq!(
+            ctx.mutated_request_body_len,
+            Some(0),
+            "an absent canonical body has length 0"
+        );
     }
 
     #[test]

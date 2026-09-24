@@ -3077,14 +3077,12 @@ steps:
         received.extend_from_slice(&chunk);
     }
     assert_eq!(received, b"hello", "the streamed body must pass through the IRR");
-    // The streaming session hands the request extensions back only here, long
-    // after the executor returned; this is the streaming path's restore point.
     terminal.body.swap_extensions(&mut ctx.extensions);
 
     assert_eq!(
         ctx.bound_cluster(),
         Some("backend"),
-        "the frozen binding cluster must survive a streaming completion"
+        "the frozen binding cluster must survive a streaming completion, restored at the late extension handoff"
     );
     assert_eq!(
         ctx.bound_application_protocol(),

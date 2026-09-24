@@ -32,9 +32,6 @@ fn dual_path_dispatches_both_modes_from_one_binding() {
     );
     let proxy = praxis_test_utils::start_full_proxy(&config);
 
-    // Provider path: bound to the openai cluster by the /openai/ route, taken by
-    // the direct branch. The branch rejoins `terminal`, so the gateway marker
-    // and the IRR never run.
     let raw = http_send(
         proxy.addr(),
         "GET /openai/v1/responses HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
@@ -43,27 +40,28 @@ fn dual_path_dispatches_both_modes_from_one_binding() {
     assert_eq!(
         parse_body(&raw),
         "openai",
-        "direct path should reach the openai backend"
+        "the /openai/ route binds openai, so the direct branch should reach the openai backend"
     );
     assert_eq!(
         parse_header(&raw, "X-Gateway-Processed"),
         None,
-        "direct path must skip gateway-owned processing (branch rejoins terminal)"
+        "direct path must skip gateway-owned processing and the IRR (branch rejoins terminal)"
     );
 
-    // Non-provider path: bound to the chat cluster by the catch-all route, gains
-    // the gateway marker, then dispatched by the IRR step's bound-consuming load
-    // balancer.
     let raw = http_send(
         proxy.addr(),
         "GET /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
     );
     assert_eq!(parse_status(&raw), 200, "gateway + IRR path should return 200");
-    assert_eq!(parse_body(&raw), "chat", "IRR step should reach the chat backend");
+    assert_eq!(
+        parse_body(&raw),
+        "chat",
+        "the catch-all route binds chat, so the IRR step's bound load balancer should reach the chat backend"
+    );
     assert_eq!(
         parse_header(&raw, "X-Gateway-Processed").as_deref(),
         Some("true"),
-        "non-provider path should run gateway-owned processing"
+        "non-provider path should run gateway-owned processing before the IRR"
     );
 
     let query = http_send(
@@ -105,7 +103,11 @@ fn direct_path_preserves_body_and_applies_pipeline_wide_limit() {
         body.len()
     );
     let response = http_send(proxy.addr(), &request);
-    assert_eq!(parse_status(&response), 200);
+    assert_eq!(
+        parse_status(&response),
+        200,
+        "a direct-path POST within the limit should return 200"
+    );
     assert_eq!(parse_body(&response), body, "buffering must preserve direct-path bytes");
 
     let oversized = "x".repeat(65_537);

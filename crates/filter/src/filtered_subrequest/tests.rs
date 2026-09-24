@@ -1109,10 +1109,25 @@ fn assert_parent_upstream_scope(extensions: &crate::RequestExtensions) {
     let binding = extensions
         .get::<crate::extensions::BoundUpstream>()
         .expect("the parent binding must be restored");
-    assert_eq!(binding.cluster(), "parent");
-    assert_eq!(binding.application_protocol(), Some("parent_protocol"));
-    assert_eq!(binding.application_provider(), Some("parent_provider"));
-    assert!(extensions.get::<crate::extensions::BoundUpstreamFrozen>().is_some());
+    assert_eq!(
+        binding.cluster(),
+        "parent",
+        "the parent binding cluster must be restored"
+    );
+    assert_eq!(
+        binding.application_protocol(),
+        Some("parent_protocol"),
+        "the parent binding protocol must be restored"
+    );
+    assert_eq!(
+        binding.application_provider(),
+        Some("parent_provider"),
+        "the parent binding provider must be restored"
+    );
+    assert!(
+        extensions.get::<crate::extensions::BoundUpstreamFrozen>().is_some(),
+        "the parent's binding freeze must be restored"
+    );
     assert!(
         extensions
             .get::<crate::extensions::SelectedClusterApplication>()
@@ -1173,14 +1188,30 @@ fn nested_upstream_scope_restores_parent_binding_and_freeze() {
     super::restore_parent_upstream_scope(&mut extensions);
 
     let binding = extensions.get::<crate::extensions::BoundUpstream>().unwrap();
-    assert_eq!(binding.cluster(), "parent");
-    assert_eq!(binding.application_protocol(), Some("parent_protocol"));
-    assert_eq!(binding.application_provider(), Some("parent_provider"));
-    assert!(extensions.get::<crate::extensions::BoundUpstreamFrozen>().is_some());
+    assert_eq!(
+        binding.cluster(),
+        "parent",
+        "the parent binding cluster must be restored"
+    );
+    assert_eq!(
+        binding.application_protocol(),
+        Some("parent_protocol"),
+        "the parent binding protocol must be restored"
+    );
+    assert_eq!(
+        binding.application_provider(),
+        Some("parent_provider"),
+        "the parent binding provider must be restored"
+    );
+    assert!(
+        extensions.get::<crate::extensions::BoundUpstreamFrozen>().is_some(),
+        "the parent's binding freeze must be restored"
+    );
     assert!(
         extensions
             .get::<crate::extensions::SelectedClusterApplication>()
-            .is_none()
+            .is_none(),
+        "child selected metadata must be scrubbed"
     );
 }
 

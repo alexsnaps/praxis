@@ -1197,9 +1197,6 @@ mod tests {
 
     #[test]
     fn bound_condition_after_conditional_router_errors() {
-        // A conditional router may be skipped when its request conditions do not
-        // match, so it does not *guarantee* a binding for a later bound
-        // condition on a path where it did not run.
         let mut conditional_router = binding_filter();
         conditional_router.conditions = vec![make_condition()];
         let filters = vec![
@@ -1211,7 +1208,7 @@ mod tests {
         assert_eq!(
             errors.len(),
             1,
-            "a conditional router does not guarantee a binding for a later bound condition: {errors:?}"
+            "a conditional router may be skipped, so it cannot guarantee a binding for a later condition: {errors:?}"
         );
         assert!(
             errors[0].contains("guardrails") && errors[0].contains("guaranteed"),
@@ -1222,8 +1219,6 @@ mod tests {
 
     #[test]
     fn bound_condition_after_skip_to_bypassing_router_errors() {
-        // A SkipTo branch on the first filter jumps directly to the guardrails at
-        // index 2, bypassing the binding router at index 1 on that path.
         let mut gate = named_noop_filter("gate", vec![]);
         gate.branches = vec![make_skip_branch("skip", 2)];
         let filters = vec![
@@ -1236,7 +1231,7 @@ mod tests {
         assert_eq!(
             errors.len(),
             1,
-            "a SkipTo that jumps over the binding router must error: {errors:?}"
+            "a SkipTo straight to the guardrails bypasses the binding router and must error: {errors:?}"
         );
         assert!(
             errors[0].contains("guardrails"),
@@ -1247,8 +1242,6 @@ mod tests {
 
     #[test]
     fn bound_condition_with_skip_to_after_binding_no_error() {
-        // The binding router runs before the SkipTo host, so every path into the
-        // guardrails — including the skip — has already bound an upstream.
         let mut gate = named_noop_filter("gate", vec![]);
         gate.branches = vec![make_skip_branch("skip", 3)];
         let filters = vec![
@@ -1261,7 +1254,7 @@ mod tests {
         check_bound_upstream_requires_binding(&filters, false, &mut errors);
         assert!(
             errors.is_empty(),
-            "a binding before the SkipTo host covers every path into the bound condition: {errors:?}"
+            "a binding before the SkipTo host covers every path into the bound condition, skip included: {errors:?}"
         );
     }
 
@@ -1300,8 +1293,6 @@ mod tests {
 
     #[test]
     fn bound_condition_after_conditional_branch_router_errors() {
-        // The binding router sits in a *conditional* branch that may not fire, so
-        // it does not guarantee a binding for a later top-level bound consumer.
         let mut branch_host = named_noop_filter("headers", vec![]);
         branch_host.branches = vec![conditional_branch("br", vec![binding_filter()], RejoinTarget::Next)];
         let filters = vec![
@@ -1313,14 +1304,12 @@ mod tests {
         assert_eq!(
             errors.len(),
             1,
-            "a binding in a conditional branch does not guarantee one for a later consumer: {errors:?}"
+            "a conditional branch may not fire, so its binding is not guaranteed for a later consumer: {errors:?}"
         );
     }
 
     #[test]
     fn bound_condition_after_conditional_host_branch_router_errors() {
-        // The branch is unconditional, but its host carries request conditions
-        // and may be skipped, so the binding inside is not guaranteed.
         let host = conditional_host_with_branch(vec![make_condition()], vec![binding_filter()]);
         let filters = vec![
             host,
@@ -1331,16 +1320,12 @@ mod tests {
         assert_eq!(
             errors.len(),
             1,
-            "a binding under a conditional host is not guaranteed for a later consumer: {errors:?}"
+            "a conditional host may be skipped, so even its unconditional branch binding is not guaranteed: {errors:?}"
         );
     }
 
     #[test]
     fn bound_condition_via_skip_past_unconditional_branch_router_errors() {
-        // The gate's unconditional SkipTo(2) jumps straight to the guardrails,
-        // bypassing the binding router in the branch host's unconditional branch.
-        // The branch binding is credited only to the fall-through, never to the
-        // jump target, so the skip path reaches the bound condition unbound.
         let mut gate = named_noop_filter("gate", vec![]);
         gate.branches = vec![make_skip_branch("skip", 2)];
         let branch_host = host_with_branch(vec![binding_filter()]);
@@ -1354,13 +1339,12 @@ mod tests {
         assert_eq!(
             errors.len(),
             1,
-            "a SkipTo bypassing a branch binding must still error: {errors:?}"
+            "a branch binding is credited only to the fall-through, so a SkipTo past it must error: {errors:?}"
         );
     }
 
     #[test]
     fn irr_with_router_and_no_bound_consumer_errors() {
-        // A binding router with no reachable consumer is the old conflict.
         let filters = vec![
             named_noop_filter("iterative_request_router", vec![]),
             selector_filter("router", &["web"]),
@@ -1371,7 +1355,7 @@ mod tests {
         assert_eq!(
             errors.len(),
             1,
-            "IRR + router without a bound consumer should error once"
+            "IRR + router with no reachable bound consumer conflicts and should error once: {errors:?}"
         );
         assert!(
             errors[0].contains("router") && errors[0].contains("logical binding"),
@@ -1679,8 +1663,16 @@ mod tests {
 
         check_bound_upstream_body_mode(&[filter], &mut errors);
 
-        assert_eq!(errors.len(), 1);
-        assert!(errors[0].contains("endpoint metadata does not exist"));
+        assert_eq!(
+            errors.len(),
+            1,
+            "a selected-upstream condition on a bound body filter should error once: {errors:?}"
+        );
+        assert!(
+            errors[0].contains("endpoint metadata does not exist"),
+            "error should explain that endpoint metadata does not exist yet: {}",
+            errors[0]
+        );
     }
 
     #[cfg(feature = "bound-upstream-request-body")]
@@ -1785,16 +1777,12 @@ mod tests {
 
     #[test]
     fn bound_lb_in_step_with_entry_binding_no_error() {
-        // An IRR step runs as a continuation of a parent that already guarantees
-        // a binding before the IRR (the parent's own reachability check enforces
-        // this). With that entry binding assumed present, a step's bound LB needs
-        // no step-local binding router.
         let filters = vec![bound_lb(&["inference"])];
         let mut errors = Vec::new();
         check_bound_upstream_requires_binding(&filters, true, &mut errors);
         assert!(
             errors.is_empty(),
-            "a step's bound LB inherits the parent's guaranteed binding: {errors:?}"
+            "a step's bound LB inherits the parent's entry binding and needs no step-local router: {errors:?}"
         );
     }
 
@@ -1967,7 +1955,11 @@ mod tests {
             1,
             "the first unconditional bound LB rejects chat-backend before its later consumer: {errors:?}"
         );
-        assert!(errors[0].contains("chat-backend"));
+        assert!(
+            errors[0].contains("chat-backend"),
+            "error should name the uncovered chat-backend cluster: {}",
+            errors[0]
+        );
     }
 
     #[test]
@@ -2082,14 +2074,12 @@ mod tests {
 
     #[test]
     fn single_binding_no_rebind_error() {
-        // A binding followed by a consumer is the valid shape: exactly one
-        // binding before the barrier.
         let filters = vec![binding_router(&["inference"]), bound_lb(&["inference"])];
         let mut errors = Vec::new();
         check_no_rebind_after_binding(&filters, false, &mut errors);
         assert!(
             errors.is_empty(),
-            "the establishing binding runs with nothing bound on entry: {errors:?}"
+            "exactly one binding before its consumer is valid (nothing is bound on entry): {errors:?}"
         );
     }
 
@@ -2300,7 +2290,11 @@ mod tests {
     fn binding_control_flow_next_adds_only_sequential_edge() {
         let filters = vec![named_noop_filter("a", vec![]), named_noop_filter("b", vec![])];
 
-        assert_eq!(binding_control_flow_edges(&filters), vec![(0, 1)]);
+        assert_eq!(
+            binding_control_flow_edges(&filters),
+            vec![(0, 1)],
+            "a filter without branches only falls through to the next filter"
+        );
     }
 
     #[test]
@@ -2313,7 +2307,11 @@ mod tests {
             named_noop_filter("target", vec![]),
         ];
 
-        assert_eq!(binding_control_flow_edges(&filters), vec![(0, 2), (1, 2)]);
+        assert_eq!(
+            binding_control_flow_edges(&filters),
+            vec![(0, 2), (1, 2)],
+            "an unconditional SkipTo replaces the host's fall-through edge"
+        );
     }
 
     #[test]
@@ -2326,7 +2324,11 @@ mod tests {
             named_noop_filter("target", vec![]),
         ];
 
-        assert_eq!(binding_control_flow_edges(&filters), vec![(0, 1), (0, 2), (1, 2)]);
+        assert_eq!(
+            binding_control_flow_edges(&filters),
+            vec![(0, 1), (0, 2), (1, 2)],
+            "a conditional SkipTo keeps the fall-through edge alongside the jump"
+        );
     }
 
     #[test]
@@ -2339,7 +2341,11 @@ mod tests {
             named_noop_filter("target", vec![]),
         ];
 
-        assert_eq!(binding_control_flow_edges(&filters), vec![(0, 1), (0, 2), (1, 2)]);
+        assert_eq!(
+            binding_control_flow_edges(&filters),
+            vec![(0, 1), (0, 2), (1, 2)],
+            "a SkipTo on a conditional host keeps the fall-through, since the host may not run"
+        );
     }
 
     #[test]
@@ -2358,7 +2364,10 @@ mod tests {
         host.branches = vec![make_skip_branch("invalid", 99)];
         let filters = vec![host, named_noop_filter("later", vec![])];
 
-        assert!(binding_control_flow_edges(&filters).is_empty());
+        assert!(
+            binding_control_flow_edges(&filters).is_empty(),
+            "an out-of-range SkipTo adds no edge and still replaces the fall-through"
+        );
     }
 
     #[test]
@@ -2374,7 +2383,11 @@ mod tests {
             1,
             "an untagged bindable cluster under a when-provider gate must error: {errors:?}"
         );
-        assert!(errors[0].contains("matches no bindable cluster"));
+        assert!(
+            errors[0].contains("matches no bindable cluster"),
+            "error should say the gate matches no bindable cluster: {}",
+            errors[0]
+        );
     }
 
     #[test]

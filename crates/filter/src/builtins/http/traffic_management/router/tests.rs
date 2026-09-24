@@ -291,8 +291,15 @@ async fn router_without_pipeline_binding_opt_in_skips_logical_publication() {
 
     let action = router.on_request(&mut ctx).await.unwrap();
 
-    assert!(matches!(action, FilterAction::Continue));
-    assert_eq!(ctx.cluster.as_deref(), Some("default"));
+    assert!(
+        matches!(action, FilterAction::Continue),
+        "a matching route should continue the pipeline: {action:?}"
+    );
+    assert_eq!(
+        ctx.cluster.as_deref(),
+        Some("default"),
+        "the router should still select the physical cluster without the binding opt-in"
+    );
     assert!(
         ctx.bound_cluster().is_none(),
         "an ordinary router pipeline must not pay for or expose logical binding"

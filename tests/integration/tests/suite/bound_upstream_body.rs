@@ -412,9 +412,16 @@ fn rewrite_reaches_direct_bound_dispatch_exactly_once() {
 
     let (status, body) = http_post(proxy.addr(), "/echo", "original");
 
-    assert_eq!(status, 200);
-    assert_eq!(body, "original|bound");
-    assert_eq!(body.matches("|bound").count(), 1);
+    assert_eq!(status, 200, "the rewritten request should be forwarded");
+    assert_eq!(
+        body, "original|bound",
+        "the bound rewrite should reach the direct dispatch"
+    );
+    assert_eq!(
+        body.matches("|bound").count(),
+        1,
+        "the bound rewrite should be applied exactly once: {body}"
+    );
 }
 
 #[test]
@@ -454,7 +461,11 @@ fn rewrite_repairs_chunked_request_framing() {
         "POST /echo HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n5\r\nhello\r\n0\r\n\r\n",
     );
 
-    assert_eq!(parse_status(&raw), 200);
+    assert_eq!(
+        parse_status(&raw),
+        200,
+        "the rewritten chunked request should be forwarded"
+    );
     let echoed = parse_body(&raw).to_ascii_lowercase();
     assert!(
         echoed.lines().any(|line| line.trim() == "content-length: 11"),
@@ -478,8 +489,14 @@ fn rewrite_reaches_terminal_bound_branch() {
 
     let (status, body) = http_post(proxy.addr(), "/echo", "branch");
 
-    assert_eq!(status, 200);
-    assert_eq!(body, "branch|bound");
+    assert_eq!(
+        status, 200,
+        "the rewritten request should be forwarded by the terminal branch"
+    );
+    assert_eq!(
+        body, "branch|bound",
+        "the bound rewrite should reach the terminal bound branch"
+    );
 }
 
 #[test]
@@ -499,8 +516,11 @@ fn selected_phase_receives_bound_rewrite() {
 
     let (status, body) = http_post(proxy.addr(), "/echo", "original");
 
-    assert_eq!(status, 200);
-    assert_eq!(body, "original|bound|selected");
+    assert_eq!(status, 200, "the rewritten request should be forwarded");
+    assert_eq!(
+        body, "original|bound|selected",
+        "the selected-upstream phase should see the bound rewrite before adding its own marker"
+    );
 }
 
 #[test]
@@ -544,9 +564,13 @@ fn retry_replays_bound_rewrite_without_rerunning_phase() {
 
     let (status, body) = http_post(proxy.addr(), "/api/echo", "retry");
 
-    assert_eq!(status, 200);
-    assert_eq!(body, "retry|bound");
-    assert_eq!(body.matches("|bound").count(), 1);
+    assert_eq!(status, 200, "the retry should reach the live backend");
+    assert_eq!(body, "retry|bound", "the retry should replay the bound rewrite");
+    assert_eq!(
+        body.matches("|bound").count(),
+        1,
+        "the bound phase must not rerun on retry: {body}"
+    );
 }
 
 #[test]
@@ -558,7 +582,10 @@ fn oversized_rewrite_rejects_before_upstream_transport() {
 
     let (status, _body) = http_post(proxy.addr(), "/echo", "small");
 
-    assert_eq!(status, 413);
+    assert_eq!(
+        status, 413,
+        "an oversized bound rewrite should be rejected before upstream transport"
+    );
 }
 
 #[test]
@@ -570,7 +597,10 @@ fn rejection_stops_before_upstream_transport() {
 
     let (status, _body) = http_post(proxy.addr(), "/echo", "blocked");
 
-    assert_eq!(status, 403);
+    assert_eq!(
+        status, 403,
+        "a bound-body rejection should stop the request before upstream transport"
+    );
 }
 
 #[test]
@@ -583,7 +613,10 @@ fn oversized_inbound_body_rejects_before_binding_barrier() {
     let body = "x".repeat(4097);
     let (status, _body) = http_post(proxy.addr(), "/echo", &body);
 
-    assert_eq!(status, 413);
+    assert_eq!(
+        status, 413,
+        "an inbound body over the limit should be rejected before the binding barrier"
+    );
 }
 
 #[test]
@@ -595,7 +628,10 @@ fn closed_bound_body_failure_stops_before_transport() {
 
     let (status, _body) = http_post(proxy.addr(), "/echo", "payload");
 
-    assert_eq!(status, 500);
+    assert_eq!(
+        status, 500,
+        "a closed bound-body failure should stop the request before transport"
+    );
 }
 
 #[test]
@@ -612,8 +648,11 @@ fn open_bound_body_failure_continues_to_transport() {
 
     let (status, body) = http_post(proxy.addr(), "/echo", "payload");
 
-    assert_eq!(status, 200);
-    assert_eq!(body, "payload");
+    assert_eq!(status, 200, "an open bound-body failure should continue to transport");
+    assert_eq!(
+        body, "payload",
+        "an open failure should forward the original body unchanged"
+    );
 }
 
 #[cfg(feature = "iterative-request-router")]
@@ -627,7 +666,14 @@ fn irr_transport_receives_bound_rewrite() {
 
     let (status, body) = http_post(proxy.addr(), "/echo", "iteration");
 
-    assert_eq!(status, 200);
-    assert_eq!(body, "iteration|bound");
-    assert_eq!(body.matches("|bound").count(), 1);
+    assert_eq!(status, 200, "the IRR step should forward the rewritten request");
+    assert_eq!(
+        body, "iteration|bound",
+        "the IRR transport should receive the bound rewrite"
+    );
+    assert_eq!(
+        body.matches("|bound").count(),
+        1,
+        "the bound rewrite should be applied exactly once across the IRR: {body}"
+    );
 }

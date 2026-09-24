@@ -332,17 +332,37 @@ mod tests {
 
         let clusters = bindable_clusters(&filters);
 
-        assert_eq!(clusters.len(), 2);
-        assert!(clusters.contains("bound-a"));
-        assert!(clusters.contains("bound-b"));
-        assert!(!clusters.contains("ordinary"));
-        assert!(!clusters.contains("endpoint-only"));
+        assert_eq!(
+            clusters.len(),
+            2,
+            "only the binding router's clusters are bindable: {clusters:?}"
+        );
+        assert!(
+            clusters.contains("bound-a"),
+            "the binding router's first cluster is bindable: {clusters:?}"
+        );
+        assert!(
+            clusters.contains("bound-b"),
+            "the binding router's second cluster is bindable: {clusters:?}"
+        );
+        assert!(
+            !clusters.contains("ordinary"),
+            "an ordinary router's cluster is not bindable: {clusters:?}"
+        );
+        assert!(
+            !clusters.contains("endpoint-only"),
+            "a load balancer's cluster is not bindable: {clusters:?}"
+        );
     }
 
     #[test]
     fn bindable_clusters_recurses_into_branches() {
         let filters = vec![host_with(None, vec![binding_router(&["nested"])])];
 
-        assert_eq!(bindable_clusters(&filters), HashSet::from(["nested".to_owned()]));
+        assert_eq!(
+            bindable_clusters(&filters),
+            HashSet::from(["nested".to_owned()]),
+            "a binding router inside a branch should contribute its bindable cluster"
+        );
     }
 }

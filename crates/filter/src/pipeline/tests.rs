@@ -6441,7 +6441,11 @@ async fn bound_upstream_condition_runs_inside_branch_subchain() {
 
     drop(pipeline.execute_http_request(&mut ctx).await.unwrap());
 
-    assert_eq!(counter.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        counter.load(Ordering::SeqCst),
+        1,
+        "a bound_upstream-gated filter inside a branch sub-chain must run when the binding matches"
+    );
 }
 
 #[tokio::test]
@@ -6473,7 +6477,11 @@ async fn bound_upstream_request_gate_controls_response_hook() {
         drop(pipeline.execute_http_request(&mut ctx).await.unwrap());
         drop(pipeline.execute_http_response(&mut ctx).await.unwrap());
 
-        assert_eq!(*log.lock().unwrap(), expected);
+        assert_eq!(
+            *log.lock().unwrap(),
+            expected,
+            "the bound_upstream request gate should decide whether the response hook runs for protocol {protocol}"
+        );
     }
 }
 
@@ -6536,11 +6544,15 @@ async fn binding_freezes_without_bound_body_participants() {
 
     let action = pipeline.execute_http_request(&mut ctx).await.unwrap();
 
-    assert!(matches!(
-        action,
-        FilterAction::Reject(rejection) if rejection.status == 500
-    ));
-    assert_eq!(ctx.bound_cluster(), Some("first"));
+    assert!(
+        matches!(action, FilterAction::Reject(rejection) if rejection.status == 500),
+        "a rebind after the first binding freezes must be rejected with 500"
+    );
+    assert_eq!(
+        ctx.bound_cluster(),
+        Some("first"),
+        "the first binding must stay frozen after the rejected rebind"
+    );
 }
 
 // -----------------------------------------------------------------------------
@@ -6784,7 +6796,6 @@ mod bound_upstream_body_barrier {
     #[tokio::test]
     async fn bound_upstream_barrier_closed_failure_aborts_request() {
         let (failing, ran, _) = BoundBodyRecordingFilter::new("failing_body", BoundBodyBehavior::Error);
-        // Default failure_mode is Closed, so the participant's error aborts.
         let pipeline = make_pipeline(vec![binding_router("inference"), Box::new(failing)]);
 
         let req = crate::test_utils::make_request(Method::POST, "/v1/responses");
@@ -6792,7 +6803,10 @@ mod bound_upstream_body_barrier {
         ctx.buffered_request_body = Some(Bytes::from_static(b"payload"));
 
         let result = pipeline.execute_http_request(&mut ctx).await;
-        assert!(result.is_err(), "a closed participant's error must abort the request");
+        assert!(
+            result.is_err(),
+            "the default failure_mode is Closed, so the participant's error must abort the request"
+        );
         assert_eq!(ran.load(Ordering::SeqCst), 1, "the failing participant must have run");
     }
 
@@ -6801,7 +6815,6 @@ mod bound_upstream_body_barrier {
         let (failing, first_ran, _) = BoundBodyRecordingFilter::new("failing_body", BoundBodyBehavior::Error);
         let (trailing, second_ran, _) = BoundBodyRecordingFilter::new("trailing_body", BoundBodyBehavior::Continue);
         let mut pipeline = make_pipeline(vec![binding_router("inference"), Box::new(failing), Box::new(trailing)]);
-        // Open failure mode on the failing participant swallows its error.
         pipeline.filters[1].failure_mode = FailureMode::Open;
 
         let req = crate::test_utils::make_request(Method::POST, "/v1/responses");
@@ -6809,7 +6822,10 @@ mod bound_upstream_body_barrier {
         ctx.buffered_request_body = Some(Bytes::from_static(b"payload"));
 
         let action = pipeline.execute_http_request(&mut ctx).await.unwrap();
-        assert!(matches!(action, FilterAction::Continue), "open failure must not abort");
+        assert!(
+            matches!(action, FilterAction::Continue),
+            "open failure mode on the failing participant must swallow its error, not abort"
+        );
         assert_eq!(
             first_ran.load(Ordering::SeqCst),
             1,
@@ -6849,7 +6865,6 @@ mod bound_upstream_body_barrier {
             "a participant whose bound_upstream condition does not match must be skipped"
         );
 
-        // The matching-condition counterpart runs.
         let matches: Vec<praxis_core::config::Condition> =
             serde_yaml::from_str("- when:\n    bound_upstream:\n      application_protocol: p1\n").unwrap();
         let (matched, matched_ran, _) = BoundBodyRecordingFilter::new("matched_body", BoundBodyBehavior::Continue);
@@ -6864,15 +6879,13 @@ mod bound_upstream_body_barrier {
         assert_eq!(
             matched_ran.load(Ordering::SeqCst),
             1,
-            "a participant whose bound_upstream condition matches must run"
+            "the matching counterpart: a participant whose bound_upstream condition matches must run"
         );
     }
 
     #[tokio::test]
     async fn bound_upstream_barrier_runs_once_per_request() {
         let (participant, ran, _) = BoundBodyRecordingFilter::new("bound_body", BoundBodyBehavior::Continue);
-        // Two binding filters bind the same cluster; the barrier must drain
-        // participants only on the first binding and be a no-op on the second.
         let pipeline = make_pipeline(vec![
             binding_router("inference"),
             binding_router("inference"),
@@ -6888,15 +6901,13 @@ mod bound_upstream_body_barrier {
         assert_eq!(
             ran.load(Ordering::SeqCst),
             1,
-            "the barrier must run participants exactly once even with two binding filters"
+            "the barrier drains only on the first binding, so participants run once with two binding filters"
         );
     }
 
     #[tokio::test]
     async fn bound_upstream_barrier_noop_without_bound_cluster() {
         let (participant, ran, _) = BoundBodyRecordingFilter::new("bound_body", BoundBodyBehavior::Continue);
-        // The binding filter declares `binds_upstream()` but never publishes, so no
-        // cluster is bound and the barrier must not drain participants.
         let pipeline = make_pipeline(vec![Box::new(NonPublishingBindingFilter), Box::new(participant)]);
         assert_eq!(
             pipeline.bound_upstream_request_body_filter_indices,
@@ -6913,7 +6924,7 @@ mod bound_upstream_body_barrier {
         assert_eq!(
             ran.load(Ordering::SeqCst),
             0,
-            "the barrier must be a no-op when no cluster is bound"
+            "a binder that never publishes binds no cluster, so the barrier must not drain participants"
         );
     }
 
@@ -7086,52 +7097,41 @@ fn access_log_scoped_to_provider(provider: &str) -> FilterPipeline {
 
 #[test]
 fn conditions_match_selected_honors_published_selection() {
-    // The fallback path restores the selection onto the context, so a
-    // selected_upstream-scoped filter must match when the published provider
-    // satisfies its predicate.
     let pipeline = access_log_scoped_to_provider("vllm");
     let req = crate::test_utils::make_request(Method::GET, "/");
     let mut ctx = crate::test_utils::make_filter_context(&req);
     ctx.publish_selected_application(None, Some(Arc::from("vllm")));
     assert!(
         pipeline.filter_request_conditions_match("access_log", &ctx),
-        "a selected_upstream-scoped filter must match its published provider"
+        "a selected_upstream-scoped filter must match when the published selection (as the fallback path restores it) satisfies its predicate"
     );
 }
 
 #[test]
 fn conditions_match_selected_fails_closed_without_selection() {
-    // No selection published: the predicate has nothing to match and must fail
-    // closed, exactly as the selection-unaware helper does.
     let pipeline = access_log_scoped_to_provider("vllm");
     let req = crate::test_utils::make_request(Method::GET, "/");
     let ctx = crate::test_utils::make_filter_context(&req);
     assert!(
         !pipeline.filter_request_conditions_match("access_log", &ctx),
-        "absent selection must fail closed"
+        "with no published selection the predicate must fail closed, like the selection-unaware helper"
     );
 }
 
 #[test]
 fn conditions_match_selected_rejects_mismatched_selection() {
-    // A published provider that does not satisfy the predicate must not match,
-    // so the fallback record is correctly withheld.
     let pipeline = access_log_scoped_to_provider("vllm");
     let req = crate::test_utils::make_request(Method::GET, "/");
     let mut ctx = crate::test_utils::make_filter_context(&req);
     ctx.publish_selected_application(None, Some(Arc::from("openai")));
     assert!(
         !pipeline.filter_request_conditions_match("access_log", &ctx),
-        "a mismatched published provider must not match the predicate"
+        "a mismatched published provider must not match, so the fallback record is withheld"
     );
 }
 
 #[test]
 fn filter_request_conditions_match_honors_bound_upstream_view() {
-    // The protocol-level fallback (fallback access-log emission) gates on the
-    // request's real bound view, not an empty one: a `bound_upstream`-gated
-    // access_log filter must be evaluated against the binding published before
-    // the request failed, exactly as it would be on the normal request path.
     let cond: Vec<praxis_core::config::Condition> =
         serde_yaml::from_str("- when:\n    bound_upstream:\n      application_protocol: p1\n").unwrap();
     let pipeline = make_pipeline_with_conditions(vec![(
@@ -7144,22 +7144,19 @@ fn filter_request_conditions_match_honors_bound_upstream_view() {
 
     let req = crate::test_utils::make_request(Method::POST, "/v1/responses");
 
-    // Unbound request: the predicate does not match, so no fallback record.
     let ctx_unbound = crate::test_utils::make_filter_context(&req);
     assert!(
         !pipeline.filter_request_conditions_match("access_log", &ctx_unbound),
-        "an unbound request must not match a bound_upstream-gated access_log filter"
+        "an unbound request must not match a bound_upstream-gated access_log filter (no fallback record)"
     );
 
-    // Bound request whose protocol matches: the predicate matches. Evaluating
-    // against an empty view (the pre-fix behavior) would wrongly return false.
     let mut ctx_bound = crate::test_utils::make_filter_context(&req);
     ctx_bound
         .publish_bound_upstream(Arc::from("inference"), Some(Arc::from("p1")), None)
         .expect("publish before freeze succeeds");
     assert!(
         pipeline.filter_request_conditions_match("access_log", &ctx_bound),
-        "a request bound to the matching protocol must match the access_log filter's condition"
+        "the fallback must evaluate the real bound view (not an empty one), so a matching protocol must match"
     );
 }
 
@@ -7186,8 +7183,6 @@ fn filter_request_conditions_match_fails_closed_for_untagged_binding() {
 
 #[test]
 fn conditions_match_selected_unconditional_filter_always_matches() {
-    // An unconditional access_log matches regardless of selection, matching the
-    // selection-unaware helper's behavior.
     let registry = FilterRegistry::with_builtins();
     let mut entries = vec![FilterEntry {
         branch_chains: None,
@@ -7203,6 +7198,6 @@ fn conditions_match_selected_unconditional_filter_always_matches() {
     let ctx = crate::test_utils::make_filter_context(&req);
     assert!(
         pipeline.filter_request_conditions_match("access_log", &ctx),
-        "an unconditional filter matches even with no selection"
+        "an unconditional filter matches even with no selection, like the selection-unaware helper"
     );
 }

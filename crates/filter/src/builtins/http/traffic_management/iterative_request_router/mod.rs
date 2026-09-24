@@ -842,12 +842,12 @@ impl IterativeRequestRouterFilter {
                         },
                         TransitionResult::Done | TransitionResult::NoMatch => {
                             if handled_abnormal_stream_completion {
-                                let combined_bytes = pending_chunks
+                                let Some(combined_bytes) = pending_chunks
                                     .iter()
                                     .chain(completed_pending_chunks.iter())
                                     .chain(std::iter::once(&outcome.response.body))
-                                    .try_fold(0_usize, |total, chunk| total.checked_add(chunk.len()));
-                                let Some(combined_bytes) = combined_bytes else {
+                                    .try_fold(0_usize, |total, chunk| total.checked_add(chunk.len()))
+                                else {
                                     ctx.extensions = extensions;
                                     return Err("iterative_request_router: completion body byte count overflow"
                                         .to_owned()

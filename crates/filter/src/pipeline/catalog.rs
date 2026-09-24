@@ -294,10 +294,15 @@ mod tests {
         ]);
 
         assert!(conflicts.is_empty(), "different names never conflict");
-        assert_eq!(catalog.lookup("web").unwrap().protocol(), None);
+        assert_eq!(
+            catalog.lookup("web").unwrap().protocol(),
+            None,
+            "the untagged web cluster should keep no protocol"
+        );
         assert_eq!(
             catalog.lookup("inference").unwrap().protocol(),
-            Some("openai_responses")
+            Some("openai_responses"),
+            "the tagged inference cluster should keep its own protocol"
         );
     }
 }
