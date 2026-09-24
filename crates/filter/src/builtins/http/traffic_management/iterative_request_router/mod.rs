@@ -506,12 +506,13 @@ impl HttpFilter for IterativeRequestRouterFilter {
     }
 
     fn declared_cluster_metadata(&self) -> Vec<ClusterMetadataDeclaration> {
-        // Fold every step pipeline's cluster declarations into the parent
+        // Fold the reachable steps' cluster declarations into the parent
         // catalog so a step cluster's application metadata resolves at runtime
-        // and participates in the parent's conflict and untagged-field checks.
+        // and participates in the parent's conflict and matcher checks. A step
+        // no request reaches declares nothing, like the other step hooks.
         // Steps go in name order so the catalog, and which side of a conflict
         // is reported first, do not depend on hash order.
-        let mut steps: Vec<_> = self.step_pipelines.iter().collect();
+        let mut steps: Vec<_> = self.reachable_steps().collect();
         steps.sort_by_key(|&(name, _)| name);
         steps
             .into_iter()

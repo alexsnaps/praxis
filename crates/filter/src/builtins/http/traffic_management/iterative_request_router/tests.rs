@@ -4386,6 +4386,10 @@ steps:
         filter.nested_bound_upstream_readers().is_empty(),
         "a step no request reaches is never named as needing a binding"
     );
+    assert!(
+        filter.declared_cluster_metadata().is_empty(),
+        "a step no request reaches declares no clusters to the parent catalog either"
+    );
 }
 
 #[test]
