@@ -4263,6 +4263,102 @@ steps:
 }
 
 #[test]
+fn router_and_irr_binding_matrix() {
+    let router = r#"
+- filter: router
+  routes:
+    - path_prefix: "/b"
+      cluster: b
+    - path_prefix: "/"
+      cluster: a
+"#;
+    let irr = |step_filters: &str| {
+        format!(
+            "
+- filter: iterative_request_router
+  initial_step: dispatch
+  steps:
+    - name: dispatch
+      filters:
+{step_filters}
+      on_result: [{{default: true, done: true}}]
+"
+        )
+    };
+    let bound_lb = |clusters: &str| {
+        format!(
+            "
+        - filter: load_balancer
+          cluster_source: bound_upstream
+          clusters: [{clusters}]
+"
+        )
+    };
+    let both = r#"{name: a, endpoints: ["127.0.0.1:9"]}, {name: b, endpoints: ["127.0.0.1:10"]}"#;
+    let only_a = r#"{name: a, endpoints: ["127.0.0.1:9"]}"#;
+    let cases: [(&str, String, &[&str]); 4] = [
+        (
+            "router binding a step bound LB serving both",
+            format!("{router}{}", irr(&bound_lb(both))),
+            &[],
+        ),
+        (
+            "step bound LB with no router",
+            irr(&bound_lb(both)),
+            &["requires a bound logical upstream"],
+        ),
+        (
+            "step bound LB missing a routed cluster",
+            format!("{router}{}", irr(&bound_lb(only_a))),
+            &["cluster 'b' can be bound as the logical upstream"],
+        ),
+        (
+            "untagged binding skipping a later step's openai-gated LB",
+            format!(
+                r#"{router}
+- filter: iterative_request_router
+  initial_step: dispatch
+  steps:
+    - name: dispatch
+      filters:
+        - filter: load_balancer
+          cluster_source: bound_upstream
+          clusters: [{tagged_a}, {{name: b, endpoints: ["127.0.0.1:10"]}}]
+      on_result: [{{default: true, next: answer}}]
+    - name: answer
+      filters:
+        - filter: load_balancer
+          cluster_source: bound_upstream
+          conditions: [{{when: {{bound_upstream: {{application_provider: openai}}}}}}]
+          clusters: [{tagged_a}]
+        - filter: static_response
+          status: 200
+      on_result: [{{default: true, done: true}}]
+"#,
+                tagged_a = r#"{name: a, http: {application_provider: openai}, endpoints: ["127.0.0.1:9"]}"#,
+            ),
+            &[],
+        ),
+    ];
+    let registry = crate::FilterRegistry::with_builtins();
+    for (case, yaml, expected) in cases {
+        let mut entries: Vec<crate::FilterEntry> = serde_yaml::from_str(&yaml).expect(case);
+        let pipeline = crate::FilterPipeline::build(&mut entries, &registry).expect(case);
+
+        let errors = pipeline.ordering_errors(&entries, false, &praxis_core::config::SkipPipelineChecks::default());
+
+        assert_eq!(
+            errors.len(),
+            expected.len(),
+            "{case}: expected exactly {expected:?}, got {errors:?}"
+        );
+        for (error, fragment) in errors.iter().zip(expected) {
+            assert!(error.contains(fragment), "{case}: {error} should mention {fragment}");
+        }
+    }
+}
+
+#[test]
 fn bound_cluster_missing_from_a_later_step_is_rejected() {
     let registry = crate::FilterRegistry::with_builtins();
     let mut entries: Vec<crate::FilterEntry> = serde_yaml::from_str(
