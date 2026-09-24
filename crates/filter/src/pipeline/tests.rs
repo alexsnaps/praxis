@@ -7666,6 +7666,151 @@ mod bound_upstream_body_barrier {
             "the binding barrier runs before branches can skip the participant's request position"
         );
     }
+
+    #[tokio::test]
+    async fn a_rewrite_exactly_at_the_limit_is_forwarded() {
+        let (limit, action, rewrite) = rewrite_with_output_near_the_limit(false).await;
+
+        assert!(
+            matches!(action, FilterAction::Continue),
+            "a rewrite of exactly {limit} bytes is not over the limit: {action:?}"
+        );
+        assert_eq!(
+            rewrite.map(|bytes| bytes.len()),
+            Some(limit),
+            "a rewrite of exactly {limit} bytes is recorded for the transport"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_rewrite_one_byte_over_the_limit_is_rejected() {
+        let (limit, action, rewrite) = rewrite_with_output_near_the_limit(true).await;
+
+        assert!(
+            matches!(&action, FilterAction::Reject(rejection) if rejection.status == 413),
+            "a rewrite one byte over the {limit}-byte limit is rejected: {action:?}"
+        );
+        assert!(
+            rewrite.is_none(),
+            "an oversized rewrite is never recorded for the transport"
+        );
+    }
+
+    #[tokio::test]
+    async fn barrier_records_no_metric_when_recording_is_off() {
+        crate::test_utils::install_metrics_recorder();
+        let (participant, ..) = MarkingParticipant::new("bound_silent_participant", None);
+        let mut pipeline = make_pipeline(vec![binding_router("inference"), Box::new(participant)]);
+        pipeline.set_record_filter_duration_metrics(false);
+        let req = crate::test_utils::make_request(Method::POST, "/");
+        let mut ctx = crate::test_utils::make_filter_context(&req);
+        ctx.buffered_request_body = Some(Bytes::from_static(b"payload"));
+
+        drop(pipeline.execute_http_request(&mut ctx).await.unwrap());
+
+        let rendered = crate::test_utils::render_metrics();
+        assert_eq!(
+            ctx.take_bound_request_body_rewrite().as_deref(),
+            Some(&b"payload|bound_silent_participant"[..]),
+            "the participant ran, so a missing metric means recording was off rather than the hook being skipped"
+        );
+        assert!(
+            !rendered.lines().any(|line| {
+                line.contains("filter=\"bound_silent_participant\"") && line.contains("phase=\"bound_upstream\"")
+            }),
+            "with recording off (the default) the barrier times nothing: {rendered}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_writer_can_add_a_body_where_the_pre_read_had_none() {
+        let (participant, ..) = MarkingParticipant::new("after", None);
+        let pipeline = make_pipeline(vec![binding_router("inference"), Box::new(participant)]);
+        let req = crate::test_utils::make_request(Method::POST, "/");
+        let mut ctx = crate::test_utils::make_filter_context(&req);
+        ctx.buffered_request_body = None;
+
+        let action = pipeline.execute_http_request(&mut ctx).await.unwrap();
+
+        assert!(
+            matches!(action, FilterAction::Continue),
+            "pipeline should continue: {action:?}"
+        );
+        assert_eq!(
+            ctx.buffered_request_body.as_deref(),
+            Some(&b"|after"[..]),
+            "a body the writer added is committed for later request filters even without a pre-read buffer"
+        );
+        assert_eq!(
+            ctx.take_bound_request_body_rewrite().as_deref(),
+            Some(&b"|after"[..]),
+            "the added body is recorded as the rewrite the transport forwards"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_barrier_rejection_returns_before_the_routers_branches_run() {
+        let branch_runs = Arc::new(AtomicUsize::new(0));
+        let (rejecting, ..) = MarkingParticipant::new("rejecting", Some(403));
+        let mut pipeline = make_pipeline(vec![binding_router("inference"), Box::new(rejecting)]);
+        pipeline.filters[0].branches = vec![counting_branch(&branch_runs)];
+        let req = crate::test_utils::make_request(Method::POST, "/");
+        let mut ctx = crate::test_utils::make_filter_context(&req);
+        ctx.buffered_request_body = Some(Bytes::from_static(b"payload"));
+
+        let action = pipeline.execute_http_request(&mut ctx).await.unwrap();
+
+        assert!(
+            matches!(&action, FilterAction::Reject(rejection) if rejection.status == 403),
+            "the barrier's rejection is returned unchanged: {action:?}"
+        );
+        assert_eq!(
+            branch_runs.load(Ordering::SeqCst),
+            0,
+            "the binding router's branches never run once the barrier rejects"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Test Utilities
+    // -------------------------------------------------------------------------
+
+    /// Run a `|limit` writer over a pre-read sized so its output lands exactly
+    /// at the pipeline's rewrite limit, or one byte past it. Returns the limit,
+    /// the pipeline's action, and the recorded rewrite.
+    async fn rewrite_with_output_near_the_limit(over_by_one: bool) -> (usize, FilterAction, Option<Bytes>) {
+        let (participant, ..) = MarkingParticipant::new("limit", None);
+        let pipeline = make_pipeline(vec![binding_router("inference"), Box::new(participant)]);
+        let limit = pipeline.selected_upstream_request_body_limit();
+        let at_limit = limit.checked_sub("|limit".len()).expect("the limit covers the marker");
+        let mut pre_read = vec![b'x'; at_limit];
+        if over_by_one {
+            pre_read.push(b'x');
+        }
+        let req = crate::test_utils::make_request(Method::POST, "/");
+        let mut ctx = crate::test_utils::make_filter_context(&req);
+        ctx.buffered_request_body = Some(Bytes::from(pre_read));
+        let action = pipeline.execute_http_request(&mut ctx).await.unwrap();
+        (limit, action, ctx.take_bound_request_body_rewrite())
+    }
+
+    /// An unconditional branch holding one [`CountingFilter`] over `counter`.
+    fn counting_branch(counter: &Arc<AtomicUsize>) -> ResolvedBranch {
+        ResolvedBranch {
+            condition: None,
+            filters: vec![PipelineFilter::new(
+                10,
+                AnyFilter::Http(Box::new(CountingFilter {
+                    counter: Arc::clone(counter),
+                })),
+                vec![],
+                vec![],
+            )],
+            max_iterations: None,
+            name: Arc::from("after_binding"),
+            rejoin: RejoinTarget::Next,
+        }
+    }
 }
 
 // -----------------------------------------------------------------------------

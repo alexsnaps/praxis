@@ -1917,12 +1917,19 @@ async fn streaming_completion_error_restores_parent_request_extensions() {
             crate::FilterFactory::Http(std::sync::Arc::new(|_| Ok(Box::new(RemoveIterationStateFilter)))),
         )
         .unwrap();
+    registry
+        .register(
+            "test_replace_child_binding",
+            crate::FilterFactory::Http(std::sync::Arc::new(|_| Ok(Box::new(ReplaceChildBindingFilter)))),
+        )
+        .unwrap();
     let yaml: serde_yaml::Value = serde_yaml::from_str(&format!(
         r#"
 initial_step: completion_error
 steps:
   - name: completion_error
     filters:
+      - filter: test_replace_child_binding
       - filter: test_streaming_selector
       - filter: test_remove_iteration_state
       - filter: router
@@ -1946,6 +1953,7 @@ steps:
     ctx.buffered_request_body = Some(bytes::Bytes::from_static(b"request"));
     ctx.subrequest_client = Some(&client);
     ctx.extensions.insert(ParentExtension("preserved"));
+    bind_frozen_parent(&mut ctx);
 
     let action = filter.on_request(&mut ctx).await.unwrap();
     let action_debug = format!("{action:?}");
@@ -1984,6 +1992,7 @@ steps:
         ctx.extensions.get::<crate::IterationState>().is_none(),
         "IRR-private iteration state must not escape into the parent context"
     );
+    assert_parent_binding(&ctx, "a streaming completion error");
 }
 
 #[tokio::test]
@@ -1999,12 +2008,19 @@ async fn streaming_runtime_guard_restores_parent_request_extensions() {
             crate::FilterFactory::Http(std::sync::Arc::new(|_| Ok(Box::new(UndeclaredStreamingSelectorFilter)))),
         )
         .unwrap();
+    registry
+        .register(
+            "test_replace_child_binding",
+            crate::FilterFactory::Http(std::sync::Arc::new(|_| Ok(Box::new(ReplaceChildBindingFilter)))),
+        )
+        .unwrap();
     let yaml: serde_yaml::Value = serde_yaml::from_str(&format!(
         r#"
 initial_step: stream
 steps:
   - name: stream
     filters:
+      - filter: test_replace_child_binding
       - filter: test_undeclared_streaming_selector
       - filter: router
         routes:
@@ -2029,6 +2045,7 @@ steps:
     ctx.buffered_request_body = Some(bytes::Bytes::from_static(b"request"));
     ctx.subrequest_client = Some(&client);
     ctx.extensions.insert(ParentExtension("preserved"));
+    bind_frozen_parent(&mut ctx);
 
     let result = filter.on_request(&mut ctx).await;
 
@@ -2047,6 +2064,7 @@ steps:
         ctx.extensions.get::<crate::IterationState>().is_none(),
         "IRR-private iteration state must not escape into the parent context"
     );
+    assert_parent_binding(&ctx, "the runtime guard exit");
 }
 
 fn start_unit_stream_backend() -> u16 {
@@ -3668,6 +3686,7 @@ steps:
   - name: first
     filters:
       - filter: test_streaming_selector
+      - filter: test_replace_child_binding
 {}
     on_result:
       - status: [500]
@@ -3676,6 +3695,7 @@ steps:
         done: true
   - name: second
     filters:
+      - filter: test_replace_child_binding
 {}
     on_result:
       - default: true
@@ -3688,6 +3708,7 @@ steps:
     let client = make_client();
     let req = crate::test_utils::make_request(http::Method::GET, "/failover");
     let mut ctx = make_iteration_context(&req, &client, b"");
+    bind_frozen_parent(&mut ctx);
 
     let action = filter.on_request(&mut ctx).await.unwrap();
     bad_backend.abort();
@@ -3704,6 +3725,7 @@ steps:
         },
         other => panic!("expected TerminalResponse, got {other:?}"),
     }
+    assert_parent_binding(&ctx, "a streaming failover");
 }
 
 #[tokio::test]

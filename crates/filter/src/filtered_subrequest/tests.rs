@@ -1422,6 +1422,91 @@ async fn execute_restores_the_parent_binding_after_a_child_rebinds() {
 }
 
 #[cfg(feature = "upstream-binding")]
+#[tokio::test]
+#[expect(clippy::large_futures, reason = "drives the full executor future in a test")]
+async fn execute_leaves_an_unbound_parent_unbound_after_a_callout_binds() {
+    use crate::extensions::{BoundUpstream, BoundUpstreamFrozen};
+
+    let (addr, backend) = spawn_raw_backend("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok").await;
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let pipeline = rebinding_pipeline(addr, &seen, false);
+    let executor = test_callout_executor();
+    let request = crate::SubRequest {
+        method: http::Method::GET,
+        uri: http::Uri::from_static("/"),
+        headers: HeaderMap::new(),
+        body: bytes::Bytes::new(),
+    };
+    let input = super::FilteredSubrequestInput::callout(
+        &pipeline,
+        &request,
+        std::time::Instant::now() + std::time::Duration::from_secs(5),
+        crate::RequestExtensions::default(),
+    );
+
+    let extensions = executor
+        .execute(input)
+        .await
+        .map(|opened| opened.continuation.into_completion().extensions)
+        .map_err(|error| error.into_parts().0)
+        .expect("the callout reaches its own backend");
+    backend.abort();
+
+    assert_eq!(
+        *seen.lock().unwrap(),
+        vec![None],
+        "the callout starts unbound, then binds its own cluster"
+    );
+    assert!(
+        extensions.get::<BoundUpstream>().is_none(),
+        "an unbound parent must not inherit the callout's binding"
+    );
+    assert!(
+        extensions.get::<BoundUpstreamFrozen>().is_none(),
+        "an unbound parent must not inherit the callout's freeze"
+    );
+    assert!(
+        extensions.get::<super::ParentUpstreamStates>().is_none(),
+        "the scope checkpoint must be consumed"
+    );
+}
+
+#[cfg(feature = "upstream-binding")]
+#[test]
+fn restore_clears_a_child_binding_the_parent_never_had() {
+    use crate::extensions::{BoundUpstream, BoundUpstreamFrozen};
+
+    let mut extensions = crate::RequestExtensions::default();
+    super::enter_nested_upstream_scope(&mut extensions, false);
+    extensions.insert(BoundUpstream::new(std::sync::Arc::from("callout"), None, None));
+    extensions.insert(BoundUpstreamFrozen);
+    #[cfg(feature = "bound-upstream-request-body")]
+    extensions.insert(crate::extensions::BoundRequestBodyRewrite(bytes::Bytes::from_static(
+        b"callout",
+    )));
+
+    super::restore_parent_upstream_scope(&mut extensions);
+
+    assert!(
+        extensions.get::<BoundUpstream>().is_none(),
+        "an unbound parent must not inherit the callout's binding"
+    );
+    assert!(
+        extensions.get::<BoundUpstreamFrozen>().is_none(),
+        "an unbound parent must not inherit the callout's freeze"
+    );
+    #[cfg(feature = "bound-upstream-request-body")]
+    assert!(
+        extensions.get::<crate::extensions::BoundRequestBodyRewrite>().is_none(),
+        "an unbound parent must not inherit the callout's body rewrite"
+    );
+    assert!(
+        extensions.get::<super::ParentUpstreamStates>().is_none(),
+        "the scope checkpoint must be consumed"
+    );
+}
+
+#[cfg(feature = "upstream-binding")]
 #[test]
 fn callout_scope_starts_unbound_and_restores_the_parent_binding() {
     use std::sync::Arc;
