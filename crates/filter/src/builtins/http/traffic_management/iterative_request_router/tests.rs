@@ -4280,6 +4280,114 @@ steps:
 }
 
 #[test]
+fn unreachable_step_neither_consumes_nor_reads_the_binding() {
+    let config: serde_yaml::Value = serde_yaml::from_str(
+        r#"
+initial_step: answer
+steps:
+  - name: answer
+    filters:
+      - filter: static_response
+        status: 200
+    on_result: [{default: true, done: true}]
+  - name: orphan
+    filters:
+      - filter: load_balancer
+        cluster_source: bound_upstream
+        clusters: [{name: a, endpoints: ["127.0.0.1:9"]}]
+    on_result: [{default: true, done: true}]
+"#,
+    )
+    .unwrap();
+    let filter = super::IterativeRequestRouterFilter::from_config(&config).unwrap();
+
+    assert!(
+        !filter.consumes_bound_upstream(),
+        "no request reaches the orphan step, so its bound LB consumes nothing"
+    );
+    assert!(
+        filter.nested_bound_upstream_readers().is_empty(),
+        "a step no request reaches is never named as needing a binding"
+    );
+}
+
+#[test]
+fn step_reachability_follows_conditional_transitions_up_to_the_default() {
+    let irr = |on_result: &str| {
+        let config: serde_yaml::Value = serde_yaml::from_str(&format!(
+            r#"
+initial_step: answer
+steps:
+  - name: answer
+    filters:
+      - filter: static_response
+        status: 200
+    on_result: {on_result}
+  - name: fallback
+    filters:
+      - filter: load_balancer
+        cluster_source: bound_upstream
+        clusters: [{{name: a, endpoints: ["127.0.0.1:9"]}}]
+    on_result: [{{default: true, done: true}}]
+"#
+        ))
+        .unwrap();
+        super::IterativeRequestRouterFilter::from_config(&config).unwrap()
+    };
+    let failover = irr("[{status: [503], next: fallback}, {default: true, done: true}]");
+    let dead = irr("[{default: true, done: true}, {status: [503], next: fallback}]");
+
+    assert!(
+        failover.consumes_bound_upstream(),
+        "a step reached only on a 503 still load balances from the binding"
+    );
+    assert_eq!(
+        failover.nested_bound_upstream_readers(),
+        vec!["fallback".to_owned()],
+        "the failover step needs a binding on entry"
+    );
+    assert!(
+        !dead.consumes_bound_upstream(),
+        "a transition listed after the default never fires, so its step never runs"
+    );
+}
+
+#[test]
+fn router_in_front_of_an_irr_whose_only_consumer_is_unreachable_is_rejected() {
+    let mut entries: Vec<crate::FilterEntry> = serde_yaml::from_str(
+        r#"
+- filter: router
+  routes: [{path_prefix: "/", cluster: a}]
+- filter: iterative_request_router
+  initial_step: answer
+  steps:
+    - name: answer
+      filters:
+        - filter: static_response
+          status: 200
+      on_result: [{default: true, done: true}]
+    - name: orphan
+      filters:
+        - filter: load_balancer
+          cluster_source: bound_upstream
+          clusters: [{name: a, endpoints: ["127.0.0.1:9"]}]
+      on_result: [{default: true, done: true}]
+"#,
+    )
+    .unwrap();
+    let pipeline = crate::FilterPipeline::build(&mut entries, &crate::FilterRegistry::with_builtins()).unwrap();
+
+    let errors = pipeline.ordering_errors(&entries, false, &praxis_core::config::SkipPipelineChecks::default());
+
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("no reachable consumer uses the logical binding")),
+        "an orphan step's bound LB cannot justify the router: {errors:?}"
+    );
+}
+
+#[test]
 fn unreachable_step_does_not_narrow_bound_coverage() {
     let config: serde_yaml::Value = serde_yaml::from_str(
         r#"

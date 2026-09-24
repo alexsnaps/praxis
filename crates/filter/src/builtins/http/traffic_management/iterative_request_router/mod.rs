@@ -400,16 +400,23 @@ impl IterativeRequestRouterFilter {
         }))
     }
 
-    /// Step pipelines a request can reach from the initial step.
-    fn reachable_step_pipelines(&self) -> impl Iterator<Item = &FilterPipeline> {
+    /// Steps a request can reach from the initial step, by name.
+    ///
+    /// Follows every transition up to and including a step's first `default`,
+    /// since evaluation stops there. Transition conditions are not evaluated,
+    /// so this over-approximates the steps a real request visits.
+    fn reachable_steps(&self) -> impl Iterator<Item = (&str, &FilterPipeline)> {
         let mut reachable = std::collections::HashSet::from([self.initial_step.as_ref()]);
         let mut pending = vec![self.initial_step.as_ref()];
         while let Some(step) = pending.pop() {
-            let next_steps = self
-                .step_transitions
-                .get(step)
-                .into_iter()
-                .flatten()
+            let transitions = self.step_transitions.get(step).map_or(&[][..], Vec::as_slice);
+            let live = transitions
+                .iter()
+                .position(|transition| transition.default)
+                .map_or(transitions.len(), |first_default| first_default + 1);
+            let next_steps = transitions
+                .iter()
+                .take(live)
                 .filter_map(|transition| transition.next.as_deref());
             for next in next_steps {
                 if reachable.insert(next) {
@@ -420,7 +427,7 @@ impl IterativeRequestRouterFilter {
         self.step_pipelines
             .iter()
             .filter(move |(name, _)| reachable.contains(name.as_ref()))
-            .map(|(_, pipeline)| pipeline.as_ref())
+            .map(|(name, pipeline)| (name.as_ref(), pipeline.as_ref()))
     }
 }
 
@@ -440,21 +447,19 @@ impl HttpFilter for IterativeRequestRouterFilter {
 
     fn consumes_bound_upstream(&self) -> bool {
         // The IRR owns no cluster selection itself; it consumes the binding
-        // when any of its step pipelines carries a bound-consuming load
+        // when a step a request can reach carries a bound-consuming load
         // balancer. Surfacing this lets pipeline validation reason about
         // router/IRR coexistence and binding requirements without parsing the
         // step configuration again.
-        self.step_pipelines
-            .values()
-            .any(|pipeline| pipeline.consumes_bound_upstream())
+        self.reachable_steps()
+            .any(|(_, pipeline)| pipeline.consumes_bound_upstream())
     }
 
     fn nested_bound_upstream_readers(&self) -> Vec<String> {
         let mut readers: Vec<String> = self
-            .step_pipelines
-            .iter()
+            .reachable_steps()
             .filter(|(_, pipeline)| pipeline.uses_bound_upstream())
-            .map(|(name, _)| name.to_string())
+            .map(|(name, _)| name.to_owned())
             .collect();
         readers.sort();
         readers
@@ -465,7 +470,8 @@ impl HttpFilter for IterativeRequestRouterFilter {
         // the bound cluster, so the IRR only serves the clusters every such
         // step serves, whether by load balancing or by answering itself.
         let consuming: Vec<&FilterPipeline> = self
-            .reachable_step_pipelines()
+            .reachable_steps()
+            .map(|(_, pipeline)| pipeline)
             .filter(|pipeline| pipeline.consumes_bound_upstream())
             .collect();
         let (catalog, _) = crate::pipeline::catalog::build_catalog(self.declared_cluster_metadata());

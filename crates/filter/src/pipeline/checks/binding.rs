@@ -15,7 +15,7 @@
 //! - cluster metadata declarations agree, and every top-level or branch `when: bound_upstream` matcher can match some
 //!   bindable cluster;
 //! - no filter pairs a `bound_upstream` condition with a pre-read body hook, which runs before any binding exists;
-//! - an IRR shares its chain with a router only when something consumes the binding;
+//! - an IRR shares its chain with a router only when a bound consumer the router reaches uses the binding;
 //! - bound-upstream body participants run at the top level in a bounded body mode.
 //!
 //! None of these checks honor `SkipPipelineChecks`. Called from
@@ -24,7 +24,7 @@
 //!
 //! [`FilterPipeline::ordering_errors`]: crate::pipeline::FilterPipeline::ordering_errors
 
-use praxis_core::config::Condition;
+use praxis_core::config::{Condition, FailureMode};
 
 use crate::{
     any_filter::AnyFilter,
@@ -239,14 +239,14 @@ fn binding_control_flow_edges(filters: &[PipelineFilter]) -> Vec<(usize, usize)>
 ///
 /// - A top-level `load_balancer` still conflicts: it selects a physical endpoint before the IRR owns the exchange
 ///   lifecycle.
-/// - A top-level `router` may coexist with the IRR *only* when some reachable consumer uses the binding — a
-///   bound-consuming load balancer in a direct branch or inside an IRR step. A binding router with no bound consumer
-///   anywhere is the old conflict: the router publishes a logical cluster nothing resolves.
+/// - A top-level `router` may coexist with the IRR only when a bound consumer can run after it: a bound-consuming load
+///   balancer reachable from the router, in a direct branch or inside a reachable IRR step (see
+///   [`any_consumes_bound_upstream`]). Otherwise the router publishes a logical cluster nothing resolves.
 ///
-/// The companion requirement — a binding must be *guaranteed* before the IRR
-/// and every other bound consumer — is enforced by
+/// The companion requirement, that a binding is guaranteed before the IRR and
+/// every other bound consumer, is enforced by
 /// [`check_bound_upstream_requires_binding`], because the IRR reports
-/// [`consumes_bound_upstream`] once any step consumes the binding.
+/// [`consumes_bound_upstream`] once a reachable step consumes the binding.
 ///
 /// [`consumes_bound_upstream`]: crate::HttpFilter::consumes_bound_upstream
 pub(in crate::pipeline) fn check_irr_coexistence(filters: &[PipelineFilter], names: &[&str], errors: &mut Vec<String>) {
@@ -516,9 +516,7 @@ impl<'a> ClusterScan<'a> {
             self.ordinary_lb_serves
                 .then(|| served(declares(pf.filter.load_balancer_clusters())))
                 .flatten()
-        } else if ANSWERING_FILTERS.contains(&pf.filter.name())
-            || matches!(&pf.filter, AnyFilter::Http(filter) if filter.produces_terminal_response())
-        {
+        } else if always_answers(pf) {
             Some(Ending::Answered)
         } else {
             None
@@ -928,16 +926,37 @@ fn check_bound_matchers(
     }
 }
 
-/// Whether any filter in `filters` (including branch sub-chains and, through
-/// the IRR, its steps) selects its cluster from the logical binding.
+/// Whether a filter that selects its cluster from the logical binding can run
+/// after the binding router.
+///
+/// Only filters reachable from the router count, together with the branch
+/// sub-chains they host and, through the IRR, its reachable steps. A consumer
+/// before the router, past an unconditional terminal, or jumped over on every
+/// path never sees this binding. A pipeline without a binding router has no
+/// such consumer.
 pub(super) fn any_consumes_bound_upstream(filters: &[PipelineFilter]) -> bool {
-    filters.iter().any(|pf| {
-        pf.filter.consumes_bound_upstream()
-            || pf
+    binding_router_index(filters).is_some_and(|router| {
+        filters
+            .iter()
+            .zip(reachable_from(filters, router, None))
+            .any(|(pf, reached)| reached && hosts_bound_consumer(pf))
+    })
+}
+
+/// Whether `pf` or any filter in its branch sub-chains selects its cluster
+/// from the logical binding.
+///
+/// A filter that always answers the request never continues to its branches,
+/// so they only count when it fails open and an error falls through to them.
+fn hosts_bound_consumer(pf: &PipelineFilter) -> bool {
+    let runs_branches = !always_answers(pf) || pf.failure_mode == FailureMode::Open;
+    pf.filter.consumes_bound_upstream()
+        || (runs_branches
+            && pf
                 .branches
                 .iter()
-                .any(|branch| any_consumes_bound_upstream(&branch.filters))
-    })
+                .flat_map(|branch| &branch.filters)
+                .any(hosts_bound_consumer))
 }
 
 // -----------------------------------------------------------------------------
@@ -953,6 +972,13 @@ fn has_bound_upstream_condition(pf: &PipelineFilter) -> bool {
         let (Condition::When(m) | Condition::Unless(m)) = condition;
         m.bound_upstream.is_some()
     })
+}
+
+/// Whether the filter always answers the request itself instead of passing it
+/// on.
+fn always_answers(pf: &PipelineFilter) -> bool {
+    ANSWERING_FILTERS.contains(&pf.filter.name())
+        || matches!(&pf.filter, AnyFilter::Http(filter) if filter.produces_terminal_response())
 }
 
 /// Whether the filter publishes a logical upstream binding.
@@ -1355,16 +1381,107 @@ mod tests {
     }
 
     #[test]
-    fn irr_with_router_and_branch_bound_consumer_ok() {
-        let mut irr = named_noop_filter("iterative_request_router", vec![]);
-        irr.branches = vec![make_branch_with_filters("inference", vec![bound_lb(&["inference"])])];
-        let filters = vec![binding_router(&["inference"]), irr];
-        let names = vec!["router", "iterative_request_router"];
-        let mut errors = Vec::new();
-        check_irr_coexistence(&filters, &names, &mut errors);
+    fn irr_with_router_and_direct_branch_bound_consumer_ok() {
+        let mut direct = named_noop_filter("headers", vec![bound_condition(None, Some("openai"))]);
+        let mut branch = make_branch_with_filters("direct", vec![bound_lb(&["inference"])]);
+        branch.rejoin = RejoinTarget::Terminal;
+        direct.branches = vec![branch];
+        let filters = vec![
+            binding_router(&["inference"]),
+            direct,
+            terminal_filter("iterative_request_router"),
+        ];
+
+        let errors = coexistence_errors(&filters);
+
         assert!(
             errors.is_empty(),
-            "router + IRR with a bound consumer in the IRR's branch is allowed: {errors:?}"
+            "router + IRR with a direct branch that load balances from the binding is allowed: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn irr_own_branches_count_as_consumers_only_when_it_fails_open() {
+        for (failure_mode, allowed) in [(FailureMode::Closed, false), (FailureMode::Open, true)] {
+            let mut irr = terminal_filter("iterative_request_router");
+            irr.branches = vec![make_branch_with_filters("fallback", vec![bound_lb(&["a"])])];
+            irr.failure_mode = failure_mode;
+
+            let errors = coexistence_errors(&[binding_router(&["a"]), irr]);
+
+            assert_eq!(
+                errors.is_empty(),
+                allowed,
+                "an IRR's branches run only after it fails open ({failure_mode:?}): {errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn irr_coexistence_ignores_consumers_the_router_never_reaches() {
+        let consumer = || host_with_branch(vec![bound_lb(&["a"])]);
+        let irr = || named_noop_filter("iterative_request_router", vec![]);
+        let mut jump = named_noop_filter("jump", vec![]);
+        jump.branches = vec![make_skip_branch("past", 3)];
+        let answer = terminal_filter("static_response");
+        let cases = [
+            ("before the router", vec![consumer(), binding_router(&["a"]), irr()]),
+            (
+                "past a terminal",
+                vec![binding_router(&["a"]), answer, consumer(), irr()],
+            ),
+            ("jumped over", vec![binding_router(&["a"]), jump, consumer(), irr()]),
+            (
+                "with no binding router",
+                vec![selector_filter("router", &["a"]), consumer(), irr()],
+            ),
+        ];
+        for (case, filters) in cases {
+            let errors = coexistence_errors(&filters);
+
+            assert_eq!(
+                errors.len(),
+                1,
+                "a consumer {case} cannot justify the router: {errors:?}"
+            );
+            assert!(
+                errors[0].contains("no reachable consumer uses the logical binding"),
+                "a consumer {case} leaves the router unconsumed: {errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn irr_coexistence_counts_a_consumer_nested_two_branches_deep() {
+        let filters = vec![
+            binding_router(&["a"]),
+            host_with_branch(vec![host_with_branch(vec![bound_lb(&["a"])])]),
+            named_noop_filter("iterative_request_router", vec![]),
+        ];
+
+        let errors = coexistence_errors(&filters);
+
+        assert!(
+            errors.is_empty(),
+            "a bound LB in a branch of a branch still runs after the router: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn irr_coexistence_counts_a_conditional_branch_consumer_after_the_router() {
+        let mut optional = named_noop_filter("optional", vec![]);
+        optional.branches = vec![conditional_branch("maybe", vec![bound_lb(&["a"])], RejoinTarget::Next)];
+        let filters = vec![
+            binding_router(&["a"]),
+            optional,
+            named_noop_filter("iterative_request_router", vec![]),
+        ];
+
+        let errors = coexistence_errors(&filters);
+
+        assert!(
+            errors.is_empty(),
+            "a consumer some bound request reaches justifies the router: {errors:?}"
         );
     }
 
@@ -2699,6 +2816,14 @@ mod tests {
             metadata: ClusterApplicationMetadata::new(protocol.map(Arc::from), provider.map(Arc::from)),
         };
         PipelineFilter::new(0, AnyFilter::Http(Box::new(MetadataFilter { decl })), vec![], vec![])
+    }
+
+    /// Run the IRR coexistence check over `filters` with their own names.
+    fn coexistence_errors(filters: &[PipelineFilter]) -> Vec<String> {
+        let names: Vec<&str> = filters.iter().map(|pf| pf.filter.name()).collect();
+        let mut errors = Vec::new();
+        check_irr_coexistence(filters, &names, &mut errors);
+        errors
     }
 
     /// Names of the filters that missing-binding errors report, sorted.

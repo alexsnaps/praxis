@@ -687,10 +687,11 @@ impl FilterPipeline {
     /// nested framework pipelines) selects its cluster from the frozen logical
     /// binding.
     ///
-    /// A framework filter that owns nested pipelines (the IRR) folds its steps'
-    /// consumption up through [`consumes_bound_upstream`], so this walk sees an
-    /// IRR-step bound consumer even though [`for_each_pipeline_filter`] does not
-    /// descend into step pipelines directly.
+    /// A framework filter that owns nested pipelines (the IRR) folds its
+    /// reachable steps' consumption up through [`consumes_bound_upstream`], so
+    /// this walk sees an IRR-step bound consumer even though
+    /// [`for_each_pipeline_filter`] does not descend into step pipelines
+    /// directly.
     ///
     /// [`consumes_bound_upstream`]: crate::HttpFilter::consumes_bound_upstream
     #[cfg(feature = "iterative-request-router")]

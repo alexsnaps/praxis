@@ -341,8 +341,8 @@ pub(super) fn check_misaligned_clusters(filters: &[PipelineFilter], errors: &mut
     // load balancer anywhere may route by other means (static upstream), but
     // one whose only LBs live inside branches cannot serve a top-level
     // selection, so the top-level check must still run against top_lb. A
-    // bound-consuming load balancer counts too, even when it lives in an IRR
-    // step that `extract_lb_clusters` does not descend into.
+    // bound-consuming load balancer the binding router reaches counts too,
+    // even when it lives in an IRR step.
     let any_lb = !super::clusters::extract_lb_clusters(filters).is_empty() || any_consumes_bound_upstream(filters);
     if !top_selected.is_empty() && any_lb {
         for cluster in &top_selected {
@@ -946,9 +946,9 @@ pub(super) fn check_selected_upstream_condition_pre_read(
 
 /// Router without any following LB (requests will 502).
 ///
-/// Suppressed when some reachable consumer selects an endpoint from the logical
-/// binding — a bound-consuming load balancer in a direct branch or inside an
-/// IRR step. Such a router binds a logical cluster that a
+/// Suppressed when a consumer the binding router reaches selects an endpoint
+/// from the logical binding: a bound-consuming load balancer in a direct branch
+/// or inside a reachable IRR step. Such a router binds a logical cluster that a
 /// bound-consuming load balancer resolves later, so the missing top-level
 /// `load_balancer` is expected, not a 502 hazard.
 pub(super) fn check_router_without_lb(filters: &[PipelineFilter], names: &[&str], warnings: &mut Vec<String>) {
