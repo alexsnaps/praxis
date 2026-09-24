@@ -4055,63 +4055,70 @@ steps:
 }
 
 #[test]
-fn step_cluster_metadata_conflicts_fold_to_parent_validation() {
-    let registry = crate::FilterRegistry::with_builtins();
-    let config: serde_yaml::Value = serde_yaml::from_str(
-        r#"
-initial_step: first
-steps:
-  - name: first
-    filters:
-      - filter: load_balancer
-        cluster_source: bound_upstream
-        clusters:
-          - name: shared
-            http: {application_provider: openai}
-            endpoints: ["127.0.0.1:9"]
-    on_result: [{default: true, next: second}]
-  - name: second
-    filters:
-      - filter: load_balancer
-        cluster_source: bound_upstream
-        clusters:
-          - name: shared
-            http: {application_provider: azure}
-            endpoints: ["127.0.0.1:10"]
-    on_result: [{default: true, done: true}]
-"#,
-    )
-    .unwrap();
-    let mut entries = vec![
-        crate::FilterEntry {
-            branch_chains: None,
-            conditions: Vec::new(),
-            filter_type: "router".to_owned(),
-            config: serde_yaml::from_str("routes: [{path_prefix: /, cluster: shared}]").unwrap(),
-            name: None,
-            response_conditions: Vec::new(),
-            failure_mode: praxis_core::config::FailureMode::default(),
-        },
-        crate::FilterEntry {
-            branch_chains: None,
-            conditions: Vec::new(),
-            filter_type: "iterative_request_router".to_owned(),
-            config,
-            name: None,
-            response_conditions: Vec::new(),
-            failure_mode: praxis_core::config::FailureMode::default(),
-        },
+fn step_cluster_metadata_conflict_matrix() {
+    let router = r#"{filter: router, routes: [{path_prefix: "/", cluster: shared}]}"#;
+    let decl = |provider: &str| {
+        format!(r#"{{name: shared, http: {{application_provider: {provider}}}, endpoints: ["127.0.0.1:9"]}}"#)
+    };
+    let bound_lb = |provider: &str| {
+        format!(
+            "{{filter: load_balancer, cluster_source: bound_upstream, clusters: [{}]}}",
+            decl(provider)
+        )
+    };
+    let branch = |filter: &str| {
+        format!("{{filter: headers, branch_chains: [{{name: br, chains: [{{name: br-chain, filters: [{filter}]}}]}}]}}")
+    };
+    let irr = |first: &str, second: Option<&str>| {
+        let next = if second.is_some() { "next: second" } else { "done: true" };
+        let second = second
+            .map(|filter| {
+                format!(", {{name: second, filters: [{filter}], on_result: [{{default: true, done: true}}]}}")
+            })
+            .unwrap_or_default();
+        format!(
+            "{{filter: iterative_request_router, initial_step: first, steps: [{{name: first, filters: [{first}], on_result: [{{default: true, {next}}}]}}{second}]}}"
+        )
+    };
+    let conflict = "cluster 'shared' is declared with conflicting application metadata (protocol None / provider \
+                    Some(\"openai\") vs protocol None / provider Some(\"azure\"))";
+    let cases: [(&str, String, &[&str]); 4] = [
+        (
+            "two steps",
+            format!("[{router}, {}]", irr(&bound_lb("openai"), Some(&bound_lb("azure")))),
+            &[conflict],
+        ),
+        (
+            "a step and a branch load balancer",
+            format!(
+                "[{router}, {}, {}]",
+                branch(&bound_lb("openai")),
+                irr(&bound_lb("azure"), None)
+            ),
+            &[conflict],
+        ),
+        (
+            "a step and a top-level load balancer",
+            format!(
+                "[{router}, {{filter: load_balancer, clusters: [{}]}}, {}]",
+                decl("openai"),
+                irr(&bound_lb("azure"), None)
+            ),
+            &[conflict, "iterative_request_router and a top-level load_balancer"],
+        ),
+        (
+            "a step agreeing with a branch load balancer",
+            format!(
+                "[{router}, {}, {}]",
+                branch(&bound_lb("openai")),
+                irr(&bound_lb("openai"), None)
+            ),
+            &[],
+        ),
     ];
-    let pipeline = crate::FilterPipeline::build(&mut entries, &registry).unwrap();
-
-    let errors = pipeline.ordering_errors(&entries, false, &praxis_core::config::SkipPipelineChecks::default());
-
-    assert!(
-        errors
-            .iter()
-            .any(|error| error.contains("conflicting application metadata")),
-        "step declarations must participate in the parent catalog conflict check: {errors:?}"
-    );
+    for (case, yaml, expected) in cases {
+        assert_parent_ordering_errors(case, &yaml, expected);
+    }
 }
 
 #[test]
