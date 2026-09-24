@@ -4503,21 +4503,85 @@ fn router_and_irr_binding_matrix() {
             &[],
         ),
     ];
-    let registry = crate::FilterRegistry::with_builtins();
     for (case, yaml, expected) in cases {
-        let mut entries: Vec<crate::FilterEntry> = serde_yaml::from_str(&yaml).expect(case);
-        let pipeline = crate::FilterPipeline::build(&mut entries, &registry).expect(case);
+        assert_parent_ordering_errors(case, &yaml, expected);
+    }
+}
 
-        let errors = pipeline.ordering_errors(&entries, false, &praxis_core::config::SkipPipelineChecks::default());
-
-        assert_eq!(
-            errors.len(),
-            expected.len(),
-            "{case}: expected exactly {expected:?}, got {errors:?}"
-        );
-        for (error, fragment) in errors.iter().zip(expected) {
-            assert!(error.contains(fragment), "{case}: {error} should mention {fragment}");
-        }
+#[test]
+fn router_and_irr_coexistence_matrix() {
+    let router = r#"{filter: router, routes: [{path_prefix: "/", cluster: a}]}"#;
+    let bound_lb =
+        r#"{filter: load_balancer, cluster_source: bound_upstream, clusters: [{name: a, endpoints: ["127.0.0.1:9"]}]}"#;
+    let branch = |filter: &str| {
+        format!("{{filter: headers, branch_chains: [{{name: br, chains: [{{name: br-chain, filters: [{filter}]}}]}}]}}")
+    };
+    let step = |name: &str, filters: &str, next: &str| {
+        format!("{{name: {name}, filters: [{filters}], on_result: [{{default: true, {next}}}]}}")
+    };
+    let irr = |entry: &str, steps: &str| {
+        format!("{{filter: iterative_request_router, {entry}initial_step: s, steps: [{steps}]}}")
+    };
+    let consuming_irr = irr("", &step("s", bound_lb, "done: true"));
+    let answering_irr_with_fallback = |failure_mode: &str| {
+        irr(
+            &format!(
+                "failure_mode: {failure_mode}, branch_chains: [{{name: fallback, chains: [{{name: fallback-chain, filters: [{bound_lb}]}}]}}], "
+            ),
+            &step("s", "{filter: static_response, status: 200}", "done: true"),
+        )
+    };
+    let plain_router_step = step(
+        "s",
+        r#"{filter: router, routes: [{path_prefix: "/", cluster: b}]}, {filter: load_balancer, clusters: [{name: b, endpoints: ["127.0.0.1:10"]}]}"#,
+        "next: t",
+    );
+    let cases: [(&str, String, &[&str]); 6] = [
+        (
+            "IRR in a branch, which never sees the request body",
+            format!("[{router}, {}]", branch(&consuming_irr)),
+            &["filter 'iterative_request_router' in branch 'br' declares body access"],
+        ),
+        (
+            "router in a branch before a consuming IRR",
+            format!("[{}, {consuming_irr}]", branch(router)),
+            &[
+                "requires a bound logical upstream (nested step 's' reads the logical binding)",
+                "filter 'router' publishes a logical upstream binding inside a branch",
+            ],
+        ),
+        (
+            "consumer on the branch of an IRR that fails closed, which never runs",
+            format!("[{router}, {}]", answering_irr_with_fallback("closed")),
+            &["no reachable consumer uses the logical binding"],
+        ),
+        (
+            "consumer on the branch of an IRR that fails open, as its fallback",
+            format!("[{router}, {}]", answering_irr_with_fallback("open")),
+            &[],
+        ),
+        (
+            "plain-router step with no consumer anywhere",
+            format!(
+                "[{router}, {}]",
+                irr("", &plain_router_step.replace("next: t", "done: true"))
+            ),
+            &["no reachable consumer uses the logical binding"],
+        ),
+        (
+            "plain-router step before an unrelated bound-LB step",
+            format!(
+                "[{router}, {}]",
+                irr(
+                    "",
+                    &format!("{plain_router_step}, {}", step("t", bound_lb, "done: true"))
+                )
+            ),
+            &[],
+        ),
+    ];
+    for (case, yaml, expected) in cases {
+        assert_parent_ordering_errors(case, &yaml, expected);
     }
 }
 
@@ -4572,6 +4636,35 @@ fn bound_cluster_missing_from_a_later_step_is_rejected() {
         errors.iter().all(|error| !error.contains("cluster 'a'")),
         "every step serves a: {errors:?}"
     );
+}
+
+// -----------------------------------------------------------------------------
+// Test Utilities: binding validation
+// -----------------------------------------------------------------------------
+
+/// Build `yaml` as a top-level pipeline, resolving inline branch chains, and
+/// assert its ordering errors are exactly `expected`, each matched by fragment
+/// in order.
+fn assert_parent_ordering_errors(case: &str, yaml: &str, expected: &[&str]) {
+    let mut entries: Vec<crate::FilterEntry> = serde_yaml::from_str(yaml).expect(case);
+    let pipeline = crate::FilterPipeline::build_with_chains(
+        &mut entries,
+        &crate::FilterRegistry::with_builtins(),
+        &std::collections::HashMap::new(),
+        &praxis_core::config::InsecureOptions::default(),
+    )
+    .expect(case);
+
+    let errors = pipeline.ordering_errors(&entries, false, &praxis_core::config::SkipPipelineChecks::default());
+
+    assert_eq!(
+        errors.len(),
+        expected.len(),
+        "{case}: expected exactly {expected:?}, got {errors:?}"
+    );
+    for (error, fragment) in errors.iter().zip(expected) {
+        assert!(error.contains(fragment), "{case}: {error} should mention {fragment}");
+    }
 }
 
 // -----------------------------------------------------------------------------
