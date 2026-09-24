@@ -2258,8 +2258,6 @@ mod tests {
 
     #[test]
     fn untagged_bound_cluster_unless_condition_no_error() {
-        // `unless bound_upstream` on a missing field runs rather than silently
-        // skips, so it is not a dead gate and rule 12 excludes it.
         let unless = Condition::Unless(ConditionMatch {
             grpc: None,
             path: None,
@@ -2280,7 +2278,8 @@ mod tests {
         check_untagged_bound_cluster_fields(&filters, &mut errors);
         assert!(
             errors.is_empty(),
-            "an unless condition on a missing field is not a dead gate: {errors:?}"
+            "an unless that no bindable cluster matches leaves its filter running, which is the safe side; \
+             config validation catches values that name no cluster at all: {errors:?}"
         );
     }
 

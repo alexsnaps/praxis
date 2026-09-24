@@ -391,9 +391,7 @@ fn validate_entry_application_conditions(
                 declared,
             )?;
         }
-        if matches!(condition, Condition::When(_))
-            && let Some(bound) = &matcher.bound_upstream
-        {
+        if let Some(bound) = &matcher.bound_upstream {
             check_application_match_values(
                 &ApplicationMatcherLocation::new(chain_name, entry, idx, "bound_upstream", bound),
                 declared,
@@ -483,8 +481,7 @@ fn check_application_match_values(
             return Err(ProxyError::Config(format!(
                 "filter '{filter}' in chain '{chain_name}': condition {index} \
                  {axis}.{field} '{value}' matches no cluster's \
-                 {field}; no load balancer can select an upstream that satisfies \
-                 it, so the condition fails closed on every request. Declare a \
+                 {field}, so the condition can never match. Declare a \
                  cluster with this {field} or correct the value",
                 filter = location.filter,
                 chain_name = location.chain_name,
@@ -510,10 +507,8 @@ fn check_application_match_pair(
             "filter '{filter}' in chain '{chain_name}': condition {index} \
              {axis} requires application_protocol '{protocol}' and \
              application_provider '{provider}' together, but no single cluster \
-             declares both; a load balancer selects one upstream, so a matcher \
-             whose values come from different clusters can never match and the \
-             condition fails closed on every request. Declare a cluster with \
-             both, or split the matcher",
+             declares both, so the condition can never match. Declare a cluster \
+             with both, or split the matcher",
             filter = location.filter,
             chain_name = location.chain_name,
             index = location.index,
@@ -1014,6 +1009,51 @@ filter_chains:
                 "a bound matcher typo in an {location} must be rejected: {err}"
             );
         }
+    }
+
+    #[test]
+    fn reject_bound_upstream_typo_under_unless() {
+        let yaml = r#"
+listeners: [{name: web, address: "127.0.0.1:8080", filter_chains: [main]}]
+filter_chains:
+  - name: main
+    filters:
+      - filter: request_id
+        conditions: [{unless: {bound_upstream: {application_provider: olama}}}]
+clusters:
+  - {name: backend, http: {application_provider: ollama}, endpoints: ["10.0.0.1:80"]}
+"#;
+        let err = Config::from_yaml(yaml).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("bound_upstream.application_provider 'olama' matches no cluster"),
+            "a typo under unless can never match, so it silently keeps the filter running: {err}"
+        );
+    }
+
+    #[test]
+    fn accept_unless_bound_upstream_naming_a_nested_cluster() {
+        let yaml = r#"
+listeners: [{name: web, address: "127.0.0.1:8080", filter_chains: [main]}]
+filter_chains:
+  - name: main
+    filters:
+      - filter: request_id
+        conditions: [{unless: {bound_upstream: {application_provider: ollama}}}]
+      - filter: headers
+        branch_chains:
+          - name: branch
+            chains:
+              - name: inline
+                filters:
+                  - filter: load_balancer
+                    clusters:
+                      - {name: local, http: {application_provider: ollama}, endpoints: ["10.0.0.1:80"]}
+insecure_options:
+  allow_private_endpoints: true
+"#;
+        let config = Config::from_yaml(yaml).expect("an unless value declared only on a branch load balancer is valid");
+        assert_eq!(config.filter_chains.len(), 1, "the chain must survive validation");
     }
 
     #[test]
