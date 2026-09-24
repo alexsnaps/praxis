@@ -631,10 +631,7 @@ async fn run_falls_back_to_next_staged_address_on_connection_refusal() {
 
     use praxis_core::subrequest::SubRequestClient;
 
-    let dead = {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        listener.local_addr().unwrap()
-    };
+    let (_reserved, dead) = crate::test_support::refusing_addr();
     let (live_addr, backend) = spawn_raw_backend("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok").await;
 
     let registry = crate::FilterRegistry::with_builtins();
@@ -2503,10 +2500,7 @@ async fn run_streaming_falls_back_to_next_staged_address_on_connection_refusal()
         time::{Duration, Instant},
     };
 
-    let dead = {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        listener.local_addr().unwrap()
-    };
+    let (_reserved, dead) = crate::test_support::refusing_addr();
     let (live_addr, backend) =
         spawn_raw_backend("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n").await;
 
@@ -3363,10 +3357,7 @@ async fn selected_upstream_reject_short_circuits_before_dialing() {
 
     use praxis_core::subrequest::{SubRequestClient, SubRequestConnector};
 
-    let dead = {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        listener.local_addr().unwrap()
-    };
+    let (_reserved, dead) = crate::test_support::refusing_addr();
 
     let mut registry = crate::FilterRegistry::with_builtins();
     registry
@@ -3419,10 +3410,7 @@ async fn selected_upstream_oversized_output_is_rejected_with_413() {
 
     use praxis_core::subrequest::{SubRequestClient, SubRequestConnector};
 
-    let dead = {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        listener.local_addr().unwrap()
-    };
+    let (_reserved, dead) = crate::test_support::refusing_addr();
 
     let mut registry = crate::FilterRegistry::with_builtins();
     registry

@@ -85,6 +85,21 @@ pub(crate) mod test_support {
         praxis_tls::provider::install();
         SubRequestConnector::new(keepalive_pool_size, max_connections)
     }
+
+    /// A loopback address that refuses every connection for as long as the
+    /// returned socket lives.
+    ///
+    /// The socket is bound but never listens, so a connect attempt is refused
+    /// while the port stays taken. Binding a listener and dropping it would
+    /// hand the port back to the kernel, and a backend spawned by another test
+    /// in this binary could pick it up before the refusal is observed.
+    #[expect(clippy::unwrap_used, reason = "test helper")]
+    pub(crate) fn refusing_addr() -> (tokio::net::TcpSocket, std::net::SocketAddr) {
+        let socket = tokio::net::TcpSocket::new_v4().unwrap();
+        socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let addr = socket.local_addr().unwrap();
+        (socket, addr)
+    }
 }
 
 #[cfg(feature = "bound-upstream-request-body")]
