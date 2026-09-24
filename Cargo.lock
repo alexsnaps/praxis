@@ -5960,7 +5960,7 @@ dependencies = [
  "clap",
  "flate2",
  "nix",
- "object 0.37.3",
+ "object 0.39.1",
  "openssl",
  "plotters",
  "praxis-proxy",
