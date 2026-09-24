@@ -432,12 +432,6 @@ impl HttpFilter for IterativeRequestRouterFilter {
             .any(|pipeline| pipeline.uses_bound_upstream())
     }
 
-    fn conflicts_with_inherited_bound_upstream(&self) -> bool {
-        self.step_pipelines
-            .values()
-            .any(|pipeline| pipeline.publishes_bound_upstream())
-    }
-
     fn bound_upstream_clusters(&self) -> Vec<String> {
         self.step_pipelines
             .get(&self.initial_step)

@@ -3752,7 +3752,7 @@ steps:
         panic!("a binding-aware step router must be rejected");
     };
     assert!(
-        error.to_string().contains("binding is already possible"),
+        error.to_string().contains("inherits its parent's binding"),
         "a step cannot replace its parent's frozen logical binding: {error}"
     );
 }

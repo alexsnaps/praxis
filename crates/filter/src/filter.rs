@@ -193,12 +193,6 @@ pub trait HttpFilter: Send + Sync {
         false
     }
 
-    /// Whether a nested pipeline owned by this filter may publish its own
-    /// logical binding and therefore cannot run after a parent binding freezes.
-    fn conflicts_with_inherited_bound_upstream(&self) -> bool {
-        false
-    }
-
     /// Cluster names this filter can select from the frozen logical binding.
     ///
     /// A load balancer with `cluster_source: bound_upstream` reports the

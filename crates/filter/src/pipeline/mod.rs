@@ -710,19 +710,6 @@ impl FilterPipeline {
         checks::uses_bound_upstream(&self.filters)
     }
 
-    /// Whether this pipeline contains a binding publisher at any branch depth.
-    #[cfg(feature = "iterative-request-router")]
-    pub(crate) fn publishes_bound_upstream(&self) -> bool {
-        fn contains(filters: &[PipelineFilter]) -> bool {
-            filters.iter().any(|pf| {
-                matches!(&pf.filter, AnyFilter::Http(filter) if filter.binds_upstream())
-                    || pf.branches.iter().any(|branch| contains(&branch.filters))
-            })
-        }
-
-        contains(&self.filters)
-    }
-
     /// Bound-source clusters guaranteed to be consumed when this pipeline runs.
     #[cfg(feature = "iterative-request-router")]
     pub(crate) fn guaranteed_bound_upstream_clusters(&self) -> Vec<String> {

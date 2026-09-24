@@ -220,8 +220,8 @@ impl FilterPipeline {
     /// Shared body of [`Self::ordering_errors`] and the feature-gated
     /// `step_ordering_errors` (the IRR-step variant).
     ///
-    /// `entry_binding_guaranteed` seeds the bound-upstream reachability passes:
-    /// `false` for a top-level pipeline, `true` for an IRR step continuation.
+    /// `in_irr_step` is `true` for an IRR step continuation, which inherits its
+    /// parent's binding and may not publish its own.
     #[expect(
         clippy::too_many_lines,
         reason = "one sequential invocation per ordering check, including the bound-upstream passes"
@@ -231,7 +231,7 @@ impl FilterPipeline {
         entries: &[FilterEntry],
         allow_open_security: bool,
         skip: &SkipPipelineChecks,
-        entry_binding_guaranteed: bool,
+        in_irr_step: bool,
     ) -> Vec<String> {
         let names: Vec<&str> = self.filters.iter().map(|pf| pf.filter.name()).collect();
         let uses_bound_upstream = super::checks::uses_bound_upstream(&self.filters);
@@ -273,16 +273,16 @@ impl FilterPipeline {
         if uses_bound_upstream {
             super::checks::check_cluster_metadata_conflicts(&self.filters, &mut errors);
         }
-        super::checks::check_bound_upstream_requires_binding(&self.filters, entry_binding_guaranteed, &mut errors);
+        super::checks::check_bound_upstream_requires_binding(&self.filters, in_irr_step, &mut errors);
         super::checks::check_bound_condition_with_pre_read_body(
             &self.filters,
             self.body_capabilities.request_body_mode,
             &mut errors,
         );
         #[cfg(feature = "bound-upstream-request-body")]
-        super::checks::check_bound_upstream_body_participants(&self.filters, entry_binding_guaranteed, &mut errors);
+        super::checks::check_bound_upstream_body_participants(&self.filters, in_irr_step, &mut errors);
         if uses_bound_upstream {
-            super::checks::check_no_rebind_after_binding(&self.filters, entry_binding_guaranteed, &mut errors);
+            super::checks::check_no_rebind_after_binding(&self.filters, in_irr_step, &mut errors);
         }
         super::checks::check_bound_cluster_coverage(&self.filters, &mut errors);
         super::checks::check_untagged_bound_cluster_fields(&self.filters, &mut errors);
