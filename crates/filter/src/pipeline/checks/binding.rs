@@ -71,8 +71,9 @@ pub(in crate::pipeline) fn check_cluster_metadata_conflicts(filters: &[PipelineF
 /// [`check_no_rebind_after_binding`]), so a top-level consumer is safe exactly
 /// when it is reachable and no path from the pipeline entry reaches it without
 /// passing that router. A consumer inside a branch inherits its host's
-/// position, except that an unconditional router's own branches run after it
-/// published.
+/// position, except that the router's own branches always see its binding:
+/// they run only when it matched a route and published, even if its request
+/// conditions let other requests skip it.
 ///
 /// `in_irr_step` is `true` when validating an `iterative_request_router` step,
 /// which inherits a binding its parent already guarantees.
@@ -93,7 +94,7 @@ pub(in crate::pipeline) fn check_bound_upstream_requires_binding(
         if !bound_on_entry && let Some(reason) = binding_requirement_reason(pf) {
             errors.push(missing_binding_error(pf.filter.name(), reason));
         }
-        let bound_in_branches = bound_on_entry || (Some(idx) == router && pf.conditions.is_empty());
+        let bound_in_branches = bound_on_entry || Some(idx) == router;
         if !bound_in_branches {
             collect_branch_binding_consumers(&pf.branches, errors);
         }
@@ -1930,6 +1931,38 @@ mod tests {
             errors.len(),
             1,
             "a binding filter in a branch reached after the barrier must error: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn conditional_router_branch_consumer_sees_the_binding() {
+        let mut router = binding_router(&["direct"]);
+        router.conditions = vec![make_condition()];
+        router.branches = vec![make_terminal_branch("direct", vec![bound_lb(&["direct"])])];
+        let filters = vec![router, named_noop_filter("fallback", vec![])];
+        let mut errors = Vec::new();
+
+        check_bound_upstream_requires_binding(&filters, false, &mut errors);
+
+        assert!(
+            errors.is_empty(),
+            "a router's own branches run only after it published, even when it is conditional: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn consumer_after_conditional_router_still_needs_a_binding() {
+        let mut router = binding_router(&["direct"]);
+        router.conditions = vec![make_condition()];
+        let filters = vec![router, bound_lb(&["direct"])];
+        let mut errors = Vec::new();
+
+        check_bound_upstream_requires_binding(&filters, false, &mut errors);
+
+        assert_eq!(
+            errors.len(),
+            1,
+            "a request that skips the conditional router reaches the consumer unbound: {errors:?}"
         );
     }
 
