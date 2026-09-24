@@ -897,6 +897,85 @@ insecure_options:
     }
 
     #[test]
+    fn reject_malformed_bound_upstream_provider() {
+        for (provider, expected) in [
+            ("OpenAI", "lowercase ASCII"),
+            ("open ai", "lowercase ASCII"),
+            ("openai/v1", "lowercase ASCII"),
+            ("-openai", "must start and end"),
+        ] {
+            let yaml = format!(
+                r#"
+listeners: [{{name: web, address: "127.0.0.1:8080", filter_chains: [main]}}]
+filter_chains:
+  - name: main
+    filters:
+      - filter: request_id
+        conditions: [{{when: {{bound_upstream: {{application_provider: "{provider}"}}}}}}]
+clusters:
+  - {{name: backend, http: {{application_provider: openai}}, endpoints: ["10.0.0.1:80"]}}
+"#
+            );
+            let err = Config::from_yaml(&yaml).unwrap_err();
+            assert!(
+                err.to_string().contains("application_provider") && err.to_string().contains(expected),
+                "a malformed provider {provider:?} must fail the canonical-identifier check ({expected}): {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn reject_malformed_or_empty_bound_upstream_identifier_when_nested() {
+        for (location, value, expected) in [
+            ("inline branch", "Open AI", "lowercase ASCII"),
+            ("inline branch", "", "must not be empty"),
+            ("IRR step", "Open AI", "lowercase ASCII"),
+            ("IRR step", "", "must not be empty"),
+        ] {
+            let nested = if location == "inline branch" {
+                format!(
+                    r#"
+      - filter: headers
+        branch_chains:
+          - name: branch
+            chains:
+              - name: inline
+                filters:
+                  - filter: request_id
+                    conditions: [{{when: {{bound_upstream: {{application_provider: "{value}"}}}}}}]
+"#
+                )
+            } else {
+                format!(
+                    r#"
+      - filter: iterative_request_router
+        steps:
+          - name: call
+            url: "http://backend"
+            filters:
+              - filter: request_id
+                conditions: [{{when: {{bound_upstream: {{application_provider: "{value}"}}}}}}]
+"#
+                )
+            };
+            let yaml = format!(
+                r#"listeners: [{{name: web, address: "127.0.0.1:8080", filter_chains: [main]}}]
+filter_chains:
+  - name: main
+    filters:
+{nested}clusters:
+  - {{name: backend, http: {{application_provider: openai}}, endpoints: ["10.0.0.1:80"]}}
+"#
+            );
+            let err = Config::from_yaml(&yaml).unwrap_err();
+            assert!(
+                err.to_string().contains(expected),
+                "a {value:?} identifier in an {location} must be rejected with {expected:?}: {err}"
+            );
+        }
+    }
+
+    #[test]
     fn reject_malformed_bound_upstream_identifier() {
         let yaml = r#"
 listeners: [{name: web, address: "127.0.0.1:8080", filter_chains: [main]}]
