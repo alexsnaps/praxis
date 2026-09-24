@@ -61,7 +61,7 @@ impl SelectedUpstream<'_> {
 ///
 /// Empty (both fields `None`) before the `router` binds an upstream, or
 /// when the bound cluster declares no application metadata. Cheap to copy
-/// — two borrowed string slices.
+/// (two borrowed string slices).
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct BoundUpstreamView<'a> {
     /// The bound cluster's declared `application_protocol`, if any.

@@ -144,7 +144,7 @@ pub(crate) struct CatalogConflict {
 /// The first declaration of each name wins in the returned map, and every
 /// later declaration that disagrees is reported as a [`CatalogConflict`], so
 /// callers must pass declarations in a stable order.
-/// Identical re-declarations are accepted silently — the same cluster is
+/// Identical re-declarations are accepted silently: the same cluster is
 /// commonly declared by several load balancers (for example one per IRR
 /// round) and agreement is the normal case.
 ///

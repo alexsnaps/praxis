@@ -458,17 +458,37 @@ example.
 ```yaml
 - filter: router
   routes:
+    - path_prefix: "/openai/"
+      cluster: openai
     - path_prefix: "/"
-      cluster: inference
+      cluster: chat
+- filter: headers
+  conditions:
+    - when:
+        bound_upstream:
+          application_provider: openai
+  branch_chains:
+    - name: direct
+      rejoin: terminal
+      chains:
+        - name: direct-dispatch
+          filters:
+            - filter: load_balancer
+              cluster_source: bound_upstream
+              clusters:
+                - name: openai
+                  http:
+                    application_provider: openai
+                  endpoints: ["10.0.0.1:8080"]
 - filter: load_balancer
-  cluster_source: bound_upstream
   clusters:
-    - name: inference
-      endpoints: ["10.0.0.1:8080"]
+    - name: chat
+      endpoints: ["10.0.0.2:8080"]
 ```
 
-The bound cluster must be declared by that load balancer;
-otherwise the request fails before endpoint selection. Bound
+Startup validation makes sure every cluster the router can
+bind reaches a load balancer that declares it; the runtime
+error below is only a backstop. Bound
 mode seeds `ctx.cluster` so retry, passive health, endpoint reselection, and
 response cleanup use the bound cluster. A different existing `ctx.cluster`
 fails closed before endpoint selection, preventing retry or health state from

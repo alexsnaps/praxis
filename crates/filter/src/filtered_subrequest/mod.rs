@@ -11,14 +11,18 @@
 //! either buffered or streaming mode, and captures a
 //! [`FilteredSubrequestContinuation`] the caller drives to completion.
 //!
-//! The executor owns three transient extension mechanisms end-to-end —
-//! [`RetainedFilterResults`], [`PendingStreamChunks`], and
-//! [`StreamTermination`] — and recognizes two framework-defined caller-staged
+//! The executor owns three transient extension mechanisms end-to-end
+//! ([`RetainedFilterResults`], [`PendingStreamChunks`], and
+//! [`StreamTermination`]) and recognizes two framework-defined caller-staged
 //! channels: [`PendingCredentials`], which it drains to materialize each
 //! authority-bound secret only after resolving the destination (see
 //! [`DeferredCredential`](crate::DeferredCredential)), and [`StagedUpstream`],
 //! which it drains to seed the sub-request's upstream before the request phase so
 //! a callout can dial a known destination without an upstream-selecting filter.
+//! It also scopes the parent's upstream state: on entry it clears the
+//! exchange-local upstream selection and, with the `upstream-binding` feature,
+//! sets the parent's logical binding aside (an IRR step keeps seeing it, a
+//! callout starts unbound), and it restores that checkpoint on every exit.
 //! It otherwise never
 //! inspects caller-injected extension types. Callers that stash their own state
 //! in the request extensions recover it from
@@ -258,6 +262,9 @@ impl FilteredSubrequestError {
     }
 
     /// Split the error from the extensions its caller must restore.
+    ///
+    /// The parent's upstream scope (its selection and, with binding, its
+    /// logical binding) has already been restored into these extensions.
     ///
     /// The typed overflow detail is intentionally dropped here: string-based
     /// callers (the iterative request router's `IrrStepRunner`) keep their

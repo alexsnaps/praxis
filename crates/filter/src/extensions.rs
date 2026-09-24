@@ -116,7 +116,7 @@ impl AuthenticatedIdentity {
 /// life of the exchange. Absent when no cluster was selected or the
 /// selected cluster tagged neither field.
 ///
-/// The identifiers are opaque to Praxis core — consuming filters interpret
+/// The identifiers are opaque to Praxis core: consuming filters interpret
 /// them; Praxis defines no enum of known protocols or providers. The type
 /// is deliberately crate-private with read-only getters: only the load
 /// balancer constructs it (via
@@ -163,28 +163,28 @@ impl SelectedClusterApplication {
 /// Logical upstream cluster bound once for the whole downstream request.
 ///
 /// Published by the trusted built-in `router` after it matches a route in a
-/// pipeline that has a bound observer or consumer, then read-only thereafter.
-/// Ordinary router pipelines do not create this extension. Unlike
-/// [`SelectedClusterApplication`] — which is exchange-local and cleared
-/// between IRR rounds — `BoundUpstream` is stable for the entire downstream
-/// request and survives every IRR iteration, so request, bound-body,
-/// response, and logging filters all observe the same logical binding.
+/// pipeline that reads the binding somewhere. Ordinary router pipelines never
+/// create this extension. Unlike [`SelectedClusterApplication`], which is
+/// exchange-local and cleared between IRR rounds, `BoundUpstream` stays put
+/// for the entire downstream request and survives every IRR iteration, so
+/// request, bound-body, response, and logging filters all see the same
+/// binding.
 ///
-/// The identifiers are opaque to Praxis core — consuming filters interpret
-/// them; Praxis defines no enum of known protocols or providers. The type is
-/// deliberately crate-private with read-only getters: only the router
-/// constructs it (via [`HttpFilterContext::publish_bound_upstream`]), and
-/// external filters read it through [`HttpFilterContext::bound_cluster`],
+/// The identifiers are opaque to Praxis core: consuming filters interpret
+/// them, and Praxis defines no list of known protocols or providers. The type
+/// is crate-private with read-only getters. Only the router constructs it
+/// (through [`HttpFilterContext::publish_bound_upstream`]); filters read it
+/// through [`HttpFilterContext::bound_cluster`],
 /// [`HttpFilterContext::bound_application_protocol`], and
-/// [`HttpFilterContext::bound_application_provider`] rather than naming the
-/// type. The metadata comes from the pipeline's cluster catalog, keyed by the
-/// selected cluster name.
+/// [`HttpFilterContext::bound_application_provider`]. The metadata comes from
+/// the pipeline's cluster catalog, keyed by the cluster name.
 ///
-/// The executor freezes the first successfully published binding before branch
-/// evaluation. Republishing the same cluster is idempotent; attempting to bind
-/// a different cluster after that point fails closed. Validation rejects
-/// branch publishers, IRR-step publishers, and `ReEnter` paths that could run
-/// a binding router again.
+/// The executor freezes the binding right after the first router publishes
+/// it, before that router's branches run. Until then a later binding router
+/// would replace it; after it, republishing the same cluster is a no-op and a
+/// different cluster fails closed. Validation rejects branch publishers,
+/// IRR-step publishers, and `ReEnter` paths that could run a binding router
+/// again, so only the no-op case happens in a valid config.
 ///
 /// [`HttpFilterContext::publish_bound_upstream`]: crate::HttpFilterContext::publish_bound_upstream
 /// [`HttpFilterContext::bound_cluster`]: crate::HttpFilterContext::bound_cluster

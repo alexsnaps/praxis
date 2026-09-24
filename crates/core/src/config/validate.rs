@@ -61,8 +61,8 @@ pub(crate) const MAX_APPLICATION_IDENTIFIER_LEN: usize = 64;
 ///
 /// The value must be 1..=[`MAX_APPLICATION_IDENTIFIER_LEN`] bytes of
 /// lowercase ASCII letters, digits, `.`, `_`, or `-`, and must start and
-/// end with a letter or digit. The value itself stays opaque — no
-/// protocol or provider name is recognized here — so the same canonical
+/// end with a letter or digit. The value itself stays opaque (no
+/// protocol or provider name is recognized here), so the same canonical
 /// form is enforced wherever these identifiers are declared or matched.
 ///
 /// `context` names the offending location for the error message

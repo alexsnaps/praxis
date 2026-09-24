@@ -83,10 +83,12 @@ influence downstream processing:
 
 Request `conditions` gate the request and ordinary body hooks. Response
 `response_conditions` gate only the response hooks. A filter skipped on
-request is also skipped on response and on selected-upstream body hooks. The
-bound-upstream body hook is the deliberate exception: its conditions are
-evaluated at the binding barrier, so a later top-level participant can receive
-the body before its own `on_request` position is reached.
+request is also skipped on response and on every body hook, ordinary and
+selected-upstream. The bound-upstream body hook is the deliberate exception:
+its conditions are evaluated at the freeze, right after the binding router, so
+a later top-level participant receives the body before its own `on_request`
+position is reached, and its conditions may not depend on headers or results
+that later filters produce.
 
 The one exception is a `stream_buffer` pre-read, which
 runs the request-body hooks *before* the request phase.

@@ -60,6 +60,7 @@ use crate::{
 ///
 /// ```yaml
 /// filter: load_balancer
+/// # cluster_source: router      # the default; or bound_upstream (see below)
 /// clusters:
 ///   - name: backend
 ///     endpoints: ["10.0.0.1:80"]
@@ -114,14 +115,13 @@ struct LoadBalancerConfig {
     #[serde(default)]
     clusters: Vec<Cluster>,
 
-    /// Where the target cluster name is read from: `router` (the default) uses
-    /// the cluster a preceding `router` selected into the request context;
-    /// `bound_upstream` resolves the frozen logical binding a binding router
-    /// published, letting a direct branch or an `iterative_request_router` step
-    /// select an endpoint with no second router. The bound cluster must be
-    /// declared here and must not conflict with an existing exchange-local
-    /// cluster. If `ctx.upstream` is already set, selection is skipped and
-    /// `ctx.cluster` is left unchanged. Omit for `router`.
+    /// Where the target cluster name comes from. `router` (the default) uses
+    /// the cluster a preceding `router` selected. `bound_upstream` (needs the
+    /// `upstream-binding` build feature) uses the request's logical binding,
+    /// which lets a direct dispatch branch or an `iterative_request_router`
+    /// step pick an endpoint with no router of its own; the bound cluster must
+    /// be one of the clusters declared here, which startup validation checks.
+    /// When an upstream was already selected, the filter does nothing.
     #[serde(default)]
     cluster_source: ClusterSource,
 }

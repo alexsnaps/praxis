@@ -78,10 +78,12 @@ filter_chains:
 
       # 4. The iterative_request_router owns the non-provider exchange
       #    lifecycle. Its step selects an endpoint from the same frozen
-      #    binding through a bound-consuming load balancer -- no second
+      #    binding through a bound-consuming load balancer: no second
       #    router, no top-level load balancer. Provider-owned requests
-      #    already terminated at the direct branch, so no condition is
-      #    needed here.
+      #    already terminated at the direct branch, which is also why the
+      #    IRR carries no bound_upstream condition of its own. It could
+      #    not: the IRR pre-reads the request body, and validation rejects
+      #    a bound condition on a pre-read body hook.
       - filter: iterative_request_router
         initial_step: inference
         max_state_bytes: 65536

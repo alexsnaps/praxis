@@ -167,11 +167,12 @@ impl ApplicationMatch {
 /// Backward-compatible name for the shared application-metadata predicate used
 /// by `selected_upstream` and `bound_upstream` conditions.
 ///
-/// Both fields are optional; an unset field imposes no constraint. Matching
-/// reads the typed selection the load balancer published for the exchange,
-/// which is stable for the life of the exchange and opaque to Praxis core.
-/// Missing metadata (no load balancer ran, or the selected cluster declared
-/// neither field) never satisfies a configured field.
+/// Both fields are optional; an unset field imposes no constraint. A
+/// `selected_upstream` condition reads the selection the load balancer
+/// published for the exchange; a `bound_upstream` condition reads the
+/// request's logical binding. Either way the values are opaque to Praxis
+/// core, and a cluster that declared neither field never satisfies a
+/// configured one.
 ///
 /// ```
 /// use praxis_core::config::SelectedUpstreamMatch;

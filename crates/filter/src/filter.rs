@@ -129,9 +129,10 @@ pub trait HttpFilter: Send + Sync {
     /// The pipeline folds every filter's declarations into a single
     /// metadata catalog so a binding `router` can resolve a matched
     /// cluster's opaque application protocol and provider without owning
-    /// endpoint state. Load-balancing filters override this; the declared
-    /// names must match [`load_balancer_clusters`]. Filters that declare no
-    /// clusters leave the default empty list.
+    /// endpoint state. Load-balancing filters override this and declare the
+    /// same names they report from [`load_balancer_clusters`]; a name declared
+    /// here but not served there would tag a binding nothing can dispatch.
+    /// Filters that declare no clusters leave the default empty list.
     ///
     /// [`load_balancer_clusters`]: HttpFilter::load_balancer_clusters
     #[cfg(feature = "upstream-binding")]
@@ -338,11 +339,11 @@ pub trait HttpFilter: Send + Sync {
     ///
     /// The bound-upstream request-body phase runs at most once per downstream
     /// request, at the barrier immediately after the `router` binds a logical
-    /// upstream (`BoundUpstream`) and before any gateway-owned request filters
+    /// upstream (`BoundUpstream`) and before any later request filters
     /// or IRR run. It is skipped when routing stops before a binding is
     /// published. It gives a filter a
     /// chance to inspect or rewrite the request body against the frozen
-    /// logical binding — before an endpoint is selected. Return
+    /// logical binding, before an endpoint is selected. Return
     /// [`BodyAccess::None`] (the default) to opt out,
     /// [`BodyAccess::ReadOnly`] to observe the body in
     /// [`on_bound_upstream_request_body`], or [`BodyAccess::ReadWrite`] to
@@ -530,7 +531,7 @@ pub trait HttpFilter: Send + Sync {
 
     /// Called at most once with the fully buffered request body at the
     /// bound-upstream barrier, immediately after the `router` binds a logical
-    /// upstream and before any gateway-owned request filters or IRR run. It is
+    /// upstream and before any later request filters or the IRR run. It is
     /// not called when routing stops before a binding is published.
     ///
     /// Requires the experimental `bound-upstream-request-body` build feature.

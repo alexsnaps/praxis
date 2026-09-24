@@ -130,14 +130,14 @@ pub(super) fn strip_iteration_extensions(mut extensions: RequestExtensions) -> R
 /// Drop any selected-cluster application metadata a prior step published, so a
 /// new step never inherits it through the threaded [`RequestExtensions`].
 ///
-/// Called at each iteration boundary — the top of the run loop and the top of a
-/// streaming resume (`IrrStreamingSession::open_next`) — before the
+/// Called at each iteration boundary (the top of the run loop and the top of a
+/// streaming resume in `IrrStreamingSession::open_next`), before the
 /// max-iteration and deadline guards can early-return the threaded extensions to
 /// the parent, and before the step's body hooks run (which precede its load
 /// balancer under a `StreamBuffer` pre-read). The step's load balancer
-/// republishes for the current step during `on_request`, so the terminal step's
-/// value survives while no early exit and no pre-selection hook observes a stale
-/// one.
+/// republishes for the current step during `on_request`, so no early exit and
+/// no pre-selection hook observes a stale value. The parent never sees any of
+/// them: every exit strips the selection again.
 pub(super) fn clear_selected_application(extensions: &mut RequestExtensions) {
     extensions.remove::<SelectedClusterApplication>();
 }
@@ -159,6 +159,11 @@ pub(super) fn clear_selected_application(extensions: &mut RequestExtensions) {
 /// Streaming steps remain pull-based. Header-safe failover rules run before
 /// any bytes are exposed; all other `on_result` rules run after clean EOF and
 /// may resume another step inside the same committed downstream response.
+///
+/// Steps inherit the request's logical upstream binding, so a step's
+/// `load_balancer` with `cluster_source: bound_upstream` dispatches to the
+/// cluster the parent's router bound, with no router of its own. See
+/// `docs/architecture/upstream-binding.md`.
 ///
 /// # YAML configuration
 ///

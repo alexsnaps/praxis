@@ -200,7 +200,7 @@ fn validate_condition_paths(
 ///
 /// A `bound_upstream: {}` with neither `application_protocol` nor
 /// `application_provider` imposes no constraint (vacuously true), which
-/// silently disables its filter under `unless` — the same accident class
+/// silently disables its filter under `unless`, the same accident class
 /// the empty-predicate check guards elsewhere. Each present value must be
 /// a canonical application identifier so it can name a valid cluster tag;
 /// an uppercase or otherwise malformed value could never match.
