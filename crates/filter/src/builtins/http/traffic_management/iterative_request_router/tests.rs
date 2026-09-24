@@ -943,6 +943,11 @@ struct StepErrorFilter;
 
 struct ReplaceChildBindingFilter;
 
+/// Records the bound cluster each time a step runs it.
+struct RecordBoundClusterFilter {
+    seen: std::sync::Arc<std::sync::Mutex<Vec<Option<String>>>>,
+}
+
 #[cfg(feature = "bound-upstream-request-body")]
 struct BoundBodyStepFilter;
 
@@ -959,6 +964,21 @@ impl crate::HttpFilter for StepErrorFilter {
         _ctx: &mut crate::HttpFilterContext<'_>,
     ) -> Result<crate::FilterAction, crate::FilterError> {
         Err("nested step failure".to_owned().into())
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::HttpFilter for RecordBoundClusterFilter {
+    fn name(&self) -> &'static str {
+        "test_record_bound_cluster"
+    }
+
+    async fn on_request(
+        &self,
+        ctx: &mut crate::HttpFilterContext<'_>,
+    ) -> Result<crate::FilterAction, crate::FilterError> {
+        self.seen.lock().unwrap().push(ctx.bound_cluster().map(str::to_owned));
+        Ok(crate::FilterAction::Continue)
     }
 }
 
@@ -1787,12 +1807,19 @@ async fn completion_error_restores_parent_request_extensions() {
             crate::FilterFactory::Http(std::sync::Arc::new(|_| Ok(Box::new(RemoveIterationStateFilter)))),
         )
         .unwrap();
+    registry
+        .register(
+            "test_replace_child_binding",
+            crate::FilterFactory::Http(std::sync::Arc::new(|_| Ok(Box::new(ReplaceChildBindingFilter)))),
+        )
+        .unwrap();
     let yaml: serde_yaml::Value = serde_yaml::from_str(&format!(
         r#"
 initial_step: completion_error
 steps:
   - name: completion_error
     filters:
+      - filter: test_replace_child_binding
       - filter: test_remove_iteration_state
       - filter: router
         routes:
@@ -1815,6 +1842,7 @@ steps:
     ctx.buffered_request_body = Some(bytes::Bytes::from_static(b"request"));
     ctx.subrequest_client = Some(&client);
     ctx.extensions.insert(ParentExtension("preserved"));
+    bind_frozen_parent(&mut ctx);
 
     let result = filter.on_request(&mut ctx).await;
 
@@ -1833,6 +1861,7 @@ steps:
         ctx.extensions.get::<crate::IterationState>().is_none(),
         "IRR-private iteration state must not escape into the parent context"
     );
+    assert_parent_binding(&ctx, "a completion conversion error");
 }
 
 #[tokio::test]
@@ -2633,6 +2662,56 @@ fn make_iteration_context<'a>(
     ctx
 }
 
+/// The test registry plus a filter recording the bound cluster into `seen`.
+fn recording_registry(seen: &std::sync::Arc<std::sync::Mutex<Vec<Option<String>>>>) -> crate::FilterRegistry {
+    let mut registry = test_registry();
+    let recorded = std::sync::Arc::clone(seen);
+    registry
+        .register(
+            "test_record_bound_cluster",
+            crate::FilterFactory::Http(std::sync::Arc::new(move |_| {
+                Ok(Box::new(RecordBoundClusterFilter {
+                    seen: std::sync::Arc::clone(&recorded),
+                }))
+            })),
+        )
+        .unwrap();
+    registry
+}
+
+/// Publish and freeze a parent binding with metadata a step never declares.
+fn bind_frozen_parent(ctx: &mut crate::HttpFilterContext<'_>) {
+    ctx.publish_bound_upstream(
+        std::sync::Arc::from("parent-cluster"),
+        Some(std::sync::Arc::from("parent_proto")),
+        Some(std::sync::Arc::from("parent_provider")),
+    )
+    .unwrap();
+    ctx.freeze_bound_upstream();
+}
+
+/// Assert the parent binding from [`bind_frozen_parent`] survived `exit`.
+fn assert_parent_binding(ctx: &crate::HttpFilterContext<'_>, exit: &str) {
+    assert_eq!(
+        ctx.bound_cluster(),
+        Some("parent-cluster"),
+        "the parent binding cluster must survive {exit}"
+    );
+    assert_eq!(
+        ctx.bound_application_protocol(),
+        Some("parent_proto"),
+        "the parent binding metadata must survive {exit}"
+    );
+    assert!(
+        ctx.bound_upstream_frozen(),
+        "the parent binding must stay frozen after {exit}"
+    );
+    assert!(
+        ctx.extensions.get::<crate::IterationState>().is_none(),
+        "IRR-private iteration state must not escape through {exit}"
+    );
+}
+
 /// Build an IRR filter from YAML using the builtin registry.
 fn irr_from_yaml(yaml: &str) -> Box<dyn crate::HttpFilter> {
     let value: serde_yaml::Value = serde_yaml::from_str(yaml).unwrap();
@@ -3015,6 +3094,220 @@ steps:
     assert!(
         ctx.extensions.get::<crate::IterationState>().is_none(),
         "IRR-private iteration state must not escape after the streaming handoff"
+    );
+}
+
+#[tokio::test]
+async fn max_iterations_exit_preserves_parent_binding() {
+    let (addr, backend) = spawn_raw_backend("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n").await;
+    let yaml = format!(
+        "
+initial_step: s
+max_iterations: 2
+steps:
+  - name: s
+    filters:
+      - filter: test_replace_child_binding
+{}
+    on_result:
+      - status: [200]
+        next: s
+      - default: true
+        done: true
+",
+        routed_step_yaml(addr)
+    );
+    let filter = irr_from_yaml_with_test_registry(&yaml).unwrap();
+    let client = make_client();
+    let req = crate::test_utils::make_request(http::Method::GET, "/loop");
+    let mut ctx = make_iteration_context(&req, &client, b"");
+    bind_frozen_parent(&mut ctx);
+
+    let action = filter.on_request(&mut ctx).await.unwrap();
+    backend.abort();
+
+    assert!(
+        matches!(&action, crate::FilterAction::Reject(rejection) if rejection.status == 508),
+        "exhausted iterations must reject with 508: {action:?}"
+    );
+    assert_parent_binding(&ctx, "the 508 exit");
+}
+
+#[tokio::test]
+async fn deadline_exit_preserves_parent_binding() {
+    let (addr, backend) = spawn_stalling_backend().await;
+    let yaml = format!(
+        "
+initial_step: s
+timeout_ms: 60
+max_iterations: 50
+steps:
+  - name: s
+    filters:
+      - filter: test_replace_child_binding
+{}
+    on_result:
+      - default: true
+        next: s
+",
+        routed_step_yaml(addr)
+    );
+    let filter = irr_from_yaml_with_test_registry(&yaml).unwrap();
+    let client = make_client();
+    let req = crate::test_utils::make_request(http::Method::GET, "/slow");
+    let mut ctx = make_iteration_context(&req, &client, b"");
+    bind_frozen_parent(&mut ctx);
+
+    let action = filter.on_request(&mut ctx).await.unwrap();
+    backend.abort();
+
+    assert!(
+        matches!(&action, crate::FilterAction::Reject(rejection) if rejection.status == 504),
+        "deadline exhaustion must reject with 504: {action:?}"
+    );
+    assert_parent_binding(&ctx, "the 504 exit");
+}
+
+#[tokio::test]
+async fn oversized_state_exit_preserves_parent_binding() {
+    let (addr, backend) = spawn_raw_backend(concat!(
+        "HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    ))
+    .await;
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let registry = recording_registry(&seen);
+    let yaml: serde_yaml::Value = serde_yaml::from_str(&format!(
+        "
+initial_step: s
+max_state_bytes: 64
+steps:
+  - name: s
+    filters:
+      - filter: test_record_bound_cluster
+      - filter: test_replace_child_binding
+{}
+    on_result:
+      - default: true
+        done: true
+",
+        routed_step_yaml(addr)
+    ))
+    .unwrap();
+    let filter = super::IterativeRequestRouterFilter::from_config_with_registry(&yaml, &registry).unwrap();
+    let client = make_client();
+    let req = crate::test_utils::make_request(http::Method::GET, "/x");
+    let mut ctx = make_iteration_context(&req, &client, b"");
+    bind_frozen_parent(&mut ctx);
+
+    let action = filter.on_request(&mut ctx).await.unwrap();
+    backend.abort();
+
+    assert!(
+        matches!(&action, crate::FilterAction::Reject(rejection) if rejection.status == 413),
+        "a response that pushes the retained state over max_state_bytes must reject with 413: {action:?}"
+    );
+    assert_eq!(
+        *seen.lock().unwrap(),
+        vec![Some("parent-cluster".to_owned())],
+        "the step must have run, so the 413 comes after it rebinds"
+    );
+    assert_parent_binding(&ctx, "the 413 exit");
+}
+
+#[tokio::test]
+async fn every_iteration_sees_the_parent_binding() {
+    let (addr, backend) = spawn_raw_backend("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n").await;
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let registry = recording_registry(&seen);
+    let yaml: serde_yaml::Value = serde_yaml::from_str(&format!(
+        "
+initial_step: first
+steps:
+  - name: first
+    filters:
+      - filter: test_record_bound_cluster
+      - filter: test_replace_child_binding
+{routed}
+    on_result:
+      - default: true
+        next: second
+  - name: second
+    filters:
+      - filter: test_record_bound_cluster
+      - filter: test_replace_child_binding
+{routed}
+    on_result:
+      - default: true
+        done: true
+",
+        routed = routed_step_yaml(addr)
+    ))
+    .unwrap();
+    let filter = super::IterativeRequestRouterFilter::from_config_with_registry(&yaml, &registry).unwrap();
+    let client = make_client();
+    let req = crate::test_utils::make_request(http::Method::GET, "/");
+    let mut ctx = make_iteration_context(&req, &client, b"");
+    bind_frozen_parent(&mut ctx);
+
+    drop(filter.on_request(&mut ctx).await.unwrap());
+    backend.abort();
+
+    assert_eq!(
+        *seen.lock().unwrap(),
+        vec![Some("parent-cluster".to_owned()), Some("parent-cluster".to_owned())],
+        "each iteration starts from the parent binding, not the previous step's replacement"
+    );
+    assert_parent_binding(&ctx, "a two-step completion");
+}
+
+#[test]
+fn agreeing_step_metadata_folds_without_conflict() {
+    let config: serde_yaml::Value = serde_yaml::from_str(
+        r#"
+initial_step: first
+steps:
+  - name: first
+    filters:
+      - filter: load_balancer
+        cluster_source: bound_upstream
+        clusters:
+          - name: shared
+            http: {application_provider: openai}
+            endpoints: ["127.0.0.1:9"]
+    on_result: [{default: true, next: second}]
+  - name: second
+    filters:
+      - filter: load_balancer
+        cluster_source: bound_upstream
+        clusters:
+          - name: shared
+            http: {application_provider: openai}
+            endpoints: ["127.0.0.1:10"]
+    on_result: [{default: true, done: true}]
+"#,
+    )
+    .unwrap();
+    let filter = super::IterativeRequestRouterFilter::from_config(&config).unwrap();
+
+    let declarations = filter.declared_cluster_metadata();
+    assert_eq!(
+        declarations.len(),
+        2,
+        "both steps' declarations must fold into the parent"
+    );
+    let (catalog, conflicts) = crate::pipeline::catalog::build_catalog(declarations);
+
+    assert!(
+        conflicts.is_empty(),
+        "agreeing step declarations must not conflict: {conflicts:?}"
+    );
+    assert_eq!(
+        catalog
+            .lookup("shared")
+            .and_then(crate::pipeline::catalog::ClusterApplicationMetadata::provider),
+        Some("openai"),
+        "the folded catalog resolves the agreed provider"
     );
 }
 
