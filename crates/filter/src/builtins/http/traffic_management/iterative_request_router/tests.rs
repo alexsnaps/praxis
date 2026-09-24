@@ -4387,7 +4387,7 @@ fn router_in_front_of_an_irr_whose_only_consumer_is_unreachable_is_rejected() {
     assert!(
         errors
             .iter()
-            .any(|error| error.contains("no reachable consumer uses the logical binding")),
+            .any(|error| error.contains("no load_balancer with cluster_source: bound_upstream runs after the router")),
         "an orphan step's bound LB cannot justify the router: {errors:?}"
     );
 }
@@ -4541,7 +4541,7 @@ fn router_and_irr_coexistence_matrix() {
         r#"{filter: router, routes: [{path_prefix: "/", cluster: b}]}, {filter: load_balancer, clusters: [{name: b, endpoints: ["127.0.0.1:10"]}]}"#,
         "next: t",
     );
-    let cases: [(&str, String, &[&str]); 6] = [
+    let cases: [(&str, String, &[&str]); 7] = [
         (
             "IRR in a branch, which never sees the request body",
             format!("[{router}, {}]", branch(&consuming_irr)),
@@ -4558,7 +4558,7 @@ fn router_and_irr_coexistence_matrix() {
         (
             "consumer on the branch of an IRR that fails closed, which never runs",
             format!("[{router}, {}]", answering_irr_with_fallback("closed")),
-            &["no reachable consumer uses the logical binding"],
+            &["no load_balancer with cluster_source: bound_upstream runs after the router"],
         ),
         (
             "consumer on the branch of an IRR that fails open, as its fallback",
@@ -4566,12 +4566,21 @@ fn router_and_irr_coexistence_matrix() {
             &[],
         ),
         (
+            "router whose binding only a condition reads",
+            format!(
+                "[{router}, {}, {}]",
+                r#"{filter: headers, conditions: [{unless: {bound_upstream: {application_provider: openai}}}], request_set: [{name: x-generic, value: "true"}]}"#,
+                irr("", &step("s", "{filter: static_response, status: 200}", "done: true"))
+            ),
+            &["or remove the router along with anything that reads its binding"],
+        ),
+        (
             "plain-router step with no consumer anywhere",
             format!(
                 "[{router}, {}]",
                 irr("", &plain_router_step.replace("next: t", "done: true"))
             ),
-            &["no reachable consumer uses the logical binding"],
+            &["no load_balancer with cluster_source: bound_upstream runs after the router"],
         ),
         (
             "plain-router step before an unrelated bound-LB step",

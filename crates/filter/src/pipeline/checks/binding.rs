@@ -265,9 +265,11 @@ pub(in crate::pipeline) fn check_irr_coexistence(filters: &[PipelineFilter], nam
     if names.contains(&"router") && !any_consumes_bound_upstream(filters) {
         errors.push(
             "iterative_request_router and a top-level router in the same chain, \
-             but no reachable consumer uses the logical binding: add a \
-             load_balancer with cluster_source: bound_upstream on the direct \
-             path or inside an IRR step, or remove the router"
+             but no load_balancer with cluster_source: bound_upstream runs after \
+             the router (an answering filter's branch_chains run only when it \
+             fails open): add one on the direct path or inside a reachable IRR \
+             step, or remove the router along with anything that reads its \
+             binding"
                 .to_owned(),
         );
     }
@@ -1358,7 +1360,7 @@ mod tests {
             "IRR + router with no reachable bound consumer conflicts and should error once: {errors:?}"
         );
         assert!(
-            errors[0].contains("router") && errors[0].contains("logical binding"),
+            errors[0].contains("no load_balancer with cluster_source: bound_upstream runs after the router"),
             "error should name the missing bound consumer: {}",
             errors[0]
         );
@@ -1429,7 +1431,7 @@ mod tests {
                 "a consumer {case} cannot justify the router: {errors:?}"
             );
             assert!(
-                errors[0].contains("no reachable consumer uses the logical binding"),
+                errors[0].contains("no load_balancer with cluster_source: bound_upstream runs after the router"),
                 "a consumer {case} leaves the router unconsumed: {errors:?}"
             );
         }
