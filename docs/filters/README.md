@@ -520,7 +520,9 @@ Use `path` for exact matching (e.g., health checks on `/`):
   body: "ok"
 ```
 
-Skipped on request = skipped on response and on body hooks.
+Skipped on request = skipped on response and on ordinary
+body hooks. The bound-upstream body hook is the exception
+described above: it is gated at the binding barrier.
 
 ### Selected-Upstream Conditions
 

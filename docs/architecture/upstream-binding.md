@@ -205,24 +205,29 @@ Source: `crates/filter/src/builtins/http/traffic_management/load_balancer/mod.rs
 
 Because a bound consumer depends on a binding that some
 *earlier* filter must have produced, Praxis validates
-the whole control-flow graph — including branches,
-`SkipTo`/`ReEnter` transitions, and nested chains — at
+the whole control-flow graph (branches, `SkipTo` and
+`ReEnter` transitions, and nested chains) at
 config-build time. The pipeline is rejected before it
 serves traffic if, among other rules:
 
-- a bound-consuming load balancer is not *guaranteed* to
-  have a binding on every path that reaches it (a
-  missing, merely conditional, or bypassed binding);
-- a router would rebind after the freeze barrier;
-- a binding-enabled router appears inside a branch, an IRR step, or a
-  `ReEnter` path that can execute it again;
+- a binding consumer (a `bound_upstream` condition, a
+  bound-consuming load balancer, a bound-body hook, or an
+  IRR whose reachable steps read the binding) can run on
+  a path that has not passed the binding router; the
+  error names the IRR steps that need it;
+- a second router publishes a binding, a binding-enabled
+  router appears inside a branch or an IRR step, or a
+  `ReEnter` path can run the router again;
+- a router shares a chain with an IRR but no bound
+  consumer the router reaches resolves its binding;
 - an ordinary pre-read body hook is combined with a
   bound condition (the body hook runs before any binding
   exists);
 - a bound-consuming load balancer names a cluster that
   is not declared on it;
 - a bindable cluster has no guaranteed endpoint consumer on its reachable
-  path, or a `when bound_upstream` matcher cannot match any declared cluster;
+  path, or a top-level or branch `when bound_upstream` matcher cannot match
+  any cluster the router can bind;
 - a bound-body hook appears inside a branch or IRR step, where that lifecycle
   is not executed;
 - a top-level `trace_context` uses a bound or selected-upstream condition even
@@ -234,9 +239,11 @@ serves traffic if, among other rules:
   binding. Ordinary router/load-balancer dispatch paths keep their local
   metadata ownership and do not need to agree with one another.
 
-These checks run in `FilterPipeline::ordering_errors`
-and the individual checks in
-`crates/filter/src/pipeline/checks.rs`.
+These checks run in `FilterPipeline::ordering_errors`,
+and the binding checks live in
+`crates/filter/src/pipeline/checks/binding.rs`. Unlike
+the older ordering checks, none of them can be turned
+off with `skip_pipeline_checks`.
 
 ## Example
 
