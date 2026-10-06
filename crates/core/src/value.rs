@@ -9,7 +9,7 @@
 /// that must not depend on any single serialization format (YAML, JSON, etc.).
 /// Each variant owns its data, so a `Value` is self-contained and can be moved
 /// or cloned across crate boundaries without borrowing from its source.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Value {
     /// A UTF-8 text value.
     String(String),
@@ -21,8 +21,8 @@ pub enum Value {
     Int(i64),
     /// An unsigned 64-bit integer.
     UInt(u64),
-    /// A double-precision (64-bit) floating-point value.
-    Double(f64),
+    // Double is intentionally absent: raw f64 breaks Eq (NaN != NaN).
+    // When float support is needed, ordered_float::NotNan<f64> is the path.
 }
 
 // -----------------------------------------------------------------------------
@@ -32,10 +32,10 @@ pub enum Value {
 // a distinct variant, so the impls are generated per type.
 //
 // `From` is reserved for conversions that cannot lose information: the source
-// widens losslessly through `i64::from`/`u64::from`/`f64::from`. Types whose
-// value may not fit the target variant (`i128`/`u128`, and the
-// platform-dependent `isize`/`usize`) get `TryFrom` instead, so the caller must
-// handle the out-of-range case.
+// widens losslessly through `i64::from`/`u64::from`. Types whose value may not
+// fit the target variant (`i128`/`u128`, and the platform-dependent
+// `isize`/`usize`) get `TryFrom` instead, so the caller must handle the
+// out-of-range case.
 // -----------------------------------------------------------------------------
 
 /// Generate `From<$src>` impls that widen losslessly into `$variant` via `$wide`.
@@ -43,8 +43,8 @@ macro_rules! impl_from_numeric {
     ($variant:ident, $wide:ty, $($src:ty),+ $(,)?) => {
         $(
             impl From<$src> for Value {
-                fn from(v: $src) -> Self {
-                    Self::$variant(<$wide>::from(v))
+                fn from(value: $src) -> Self {
+                    Self::$variant(<$wide>::from(value))
                 }
             }
         )+
@@ -53,7 +53,6 @@ macro_rules! impl_from_numeric {
 
 impl_from_numeric!(Int, i64, i8, i16, i32, i64);
 impl_from_numeric!(UInt, u64, u8, u16, u32, u64);
-impl_from_numeric!(Double, f64, f32, f64);
 
 /// Generate `TryFrom<$src>` impls that narrow into `$variant` via `$wide`,
 /// failing with [`std::num::TryFromIntError`] when the value is out of range.
@@ -63,8 +62,8 @@ macro_rules! impl_try_from_int {
             impl TryFrom<$src> for Value {
                 type Error = std::num::TryFromIntError;
 
-                fn try_from(v: $src) -> Result<Self, Self::Error> {
-                    <$wide>::try_from(v).map(Self::$variant)
+                fn try_from(value: $src) -> Result<Self, Self::Error> {
+                    <$wide>::try_from(value).map(Self::$variant)
                 }
             }
         )+
@@ -75,31 +74,31 @@ impl_try_from_int!(Int, i64, i128, isize);
 impl_try_from_int!(UInt, u64, u128, usize);
 
 impl From<bool> for Value {
-    fn from(v: bool) -> Self {
-        Self::Bool(v)
+    fn from(value: bool) -> Self {
+        Self::Bool(value)
     }
 }
 
 impl From<String> for Value {
-    fn from(s: String) -> Self {
-        Self::String(s)
+    fn from(string: String) -> Self {
+        Self::String(string)
     }
 }
 
 impl From<&str> for Value {
-    fn from(s: &str) -> Self {
-        Self::String(s.to_owned())
+    fn from(str: &str) -> Self {
+        Self::String(str.to_owned())
     }
 }
 
 impl From<Vec<u8>> for Value {
-    fn from(b: Vec<u8>) -> Self {
-        Self::Bytes(b)
+    fn from(bytes: Vec<u8>) -> Self {
+        Self::Bytes(bytes)
     }
 }
 
 impl From<&[u8]> for Value {
-    fn from(b: &[u8]) -> Self {
-        Self::Bytes(b.to_vec())
+    fn from(bytes: &[u8]) -> Self {
+        Self::Bytes(bytes.to_vec())
     }
 }

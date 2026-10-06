@@ -11,7 +11,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use bytes::Bytes;
-use praxis_core::{config::ABSOLUTE_MAX_BODY_BYTES, connectivity::Upstream, value::Value};
+use praxis_core::{config::ABSOLUTE_MAX_BODY_BYTES, connectivity::Upstream};
 use praxis_filter::{BodyBuffer, BodyMode, RequestExtensions};
 
 use crate::http::pingora::context::PingoraRequestCtx;
@@ -138,7 +138,7 @@ pub(super) struct BodyFilterOutput {
     /// Type-safe request-scoped extension container.
     pub(super) extensions: RequestExtensions,
     /// Durable per-request metadata that persists across phases.
-    pub(super) filter_metadata: HashMap<String, Value>,
+    pub(super) filter_metadata: HashMap<String, String>,
     /// Typed per-filter state keyed by stable filter invocation ID.
     pub(super) filter_state: HashMap<usize, Box<dyn std::any::Any + Send + Sync>>,
     /// Branch filters that ran `on_request`, indexed by filter id.

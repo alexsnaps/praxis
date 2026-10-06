@@ -161,7 +161,7 @@ mod tests {
         ctx.request_snapshot = Some(make_request_snapshot());
 
         // Pre-populate filter_metadata
-        ctx.filter_metadata.insert("before".to_owned(), "test".into());
+        ctx.filter_metadata.insert("before".to_owned(), "test".to_owned());
 
         let mut trailers = http::HeaderMap::new();
         let result = execute(&pipeline, &mut trailers, &mut ctx);
@@ -170,7 +170,7 @@ mod tests {
         // Metadata should be preserved through writeback
         assert_eq!(
             ctx.filter_metadata.get("before"),
-            Some(&praxis_core::value::Value::from("test")),
+            Some(&"test".to_owned()),
             "filter_metadata should survive writeback"
         );
     }
@@ -262,7 +262,7 @@ mod tests {
         let pipeline = make_test_pipeline();
         let mut ctx = make_test_context();
         ctx.request_snapshot = Some(make_request_snapshot());
-        ctx.filter_metadata.insert("test".to_owned(), "value".into());
+        ctx.filter_metadata.insert("test".to_owned(), "value".to_owned());
 
         let mut trailers1 = http::HeaderMap::new();
         trailers1.insert("test", "first".parse().unwrap());
